@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
+import { api } from '../api/client';
 import type { UserProfile } from '../api/types';
 
 const EMPTY_PROFILE: UserProfile = {
@@ -97,6 +98,7 @@ export function ProfilePage() {
     }
   });
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
 
   function setSingle(key: 'age_group' | 'mbti' | 'city', value: string) {
     setSaved(false);
@@ -116,10 +118,23 @@ export function ProfilePage() {
     });
   }
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     localStorage.setItem('userProfile', JSON.stringify(form));
-    setSaved(true);
+    setSaved(false);
+    setError('');
+
+    const userId = localStorage.getItem('currentUser');
+    if (!userId) {
+      setSaved(true);
+      return;
+    }
+    try {
+      await api.saveProfile(userId, form);
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   return (
@@ -225,7 +240,8 @@ export function ProfilePage() {
 
         <div className="survey-actions">
           <button type="submit">保存画像</button>
-          {saved && <span className="saved-hint">已保存到本地 ✓</span>}
+          {saved && <span className="saved-hint">已保存 ✓</span>}
+          {error && <span className="error">{error}</span>}
         </div>
       </form>
 

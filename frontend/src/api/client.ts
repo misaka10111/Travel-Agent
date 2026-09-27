@@ -4,6 +4,7 @@ import type {
   Destination,
   Trip,
   TripCreatePayload,
+  UserProfile,
 } from './types';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
@@ -42,10 +43,20 @@ export const api = {
   deleteTrip: (id: number) =>
     request<void>(`/trips/${id}`, { method: 'DELETE' }),
   listDestinations: () => request<Destination[]>('/destinations'),
+  saveProfile: (userId: string, profile: UserProfile) =>
+    request<UserProfile>('/profile', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, ...profile }),
+    }),
+  getProfile: (userId: string) => request<UserProfile>(`/profile/${userId}`),
+  reportBehavior: (userId: string, action: string, target = '', detail = '') =>
+    request<void>('/behavior-signals', {
+      method: 'POST',
+      body: JSON.stringify({ user_id: userId, action, target, detail }),
+    }),
   chat: (messages: ChatMessage[]) =>
     request<ChatResponse>('/agent/chat', {
       method: 'POST',
       body: JSON.stringify({ messages }),
     }),
 };
-

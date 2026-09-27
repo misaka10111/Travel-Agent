@@ -14,8 +14,11 @@
 """
 
 import json
+import os
 import subprocess
 import sys
+import urllib.parse
+import urllib.request
 from pathlib import Path
 from typing import TypedDict
 
@@ -34,6 +37,45 @@ VALIDATE_PY = ROOT / "ValidateAgent" / "validate.py"
 VALIDATE_PYTHON = ROOT / "ValidateAgent" / ".venv" / "bin" / "python"
 
 MAX_ITERATIONS = 2
+
+BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000/api")
+
+
+def _fetch_profile(user_id: str) -> dict:
+    """从后端拉取用户画像；失败时返回空画像。"""
+    url = f"{BACKEND_URL}/profile/{urllib.parse.quote(user_id)}"
+    try:
+        with urllib.request.urlopen(url, timeout=5) as resp:
+            profile = json.loads(resp.read().decode("utf-8"))
+        profile.pop("user_id", None)
+        profile.pop("created_at", None)
+        profile.pop("updated_at", None)
+        return profile
+    except Exception:
+        return {}
+
+
+def _save_trip_memory(user_id: str, plan: dict, data: dict) -> dict | None:
+    """把本次行程保存到后端情节记忆；失败返回 None。"""
+    payload = {
+        "user_id": user_id,
+        "destination": plan.get("destination") or data.get("destination") or "",
+        "start_date": plan.get("start_date") or data.get("start_date") or "",
+        "end_date": plan.get("end_date") or data.get("end_date") or "",
+        "final_plan": plan,
+    }
+    url = f"{BACKEND_URL}/trip-memory"
+    try:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except Exception:
+        return None
 
 
 class State(TypedDict, total=False):
@@ -167,14 +209,22 @@ def main() -> None:
 
     try:
         data = json.loads(raw)
+        if data.get("user_id") and not data.get("profile"):
+            data["profile"] = _fetch_profile(data["user_id"])
         graph = build_graph()
         result = graph.invoke(data, {"configurable": {"thread_id": "orchestrator"}})
+        saved_memory = None
+        if data.get("user_id"):
+            saved_memory = _save_trip_memory(
+                data["user_id"], result.get("plan") or {}, data
+            )
         output = {
             "search": result.get("search"),
             "questions": result.get("questions"),
             "plan": result.get("plan"),
             "passed": (result.get("audit") or {}).get("passed"),
             "history": result.get("history"),
+            "saved_memory": saved_memory,
         }
     except Exception as exc:  # noqa: BLE001
         output = {"error": str(exc)}

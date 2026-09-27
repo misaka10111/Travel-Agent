@@ -4,7 +4,15 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 
-from app.api.routes import agent, destinations, health, trips
+from app.api.routes import (
+    agent,
+    behavior_signal,
+    destinations,
+    health,
+    profile,
+    trip_memory,
+    trips,
+)
 from app.config import get_settings
 from app.db import Base, SessionLocal, engine
 from app.services.destination_service import seed_destinations
@@ -40,4 +48,6 @@ app.include_router(health.router, prefix=api_prefix)
 app.include_router(trips.router, prefix=api_prefix)
 app.include_router(destinations.router, prefix=api_prefix)
 app.include_router(agent.router, prefix=api_prefix)
-
+app.include_router(profile.router, prefix=api_prefix)
+app.include_router(trip_memory.router, prefix=api_prefix)
+app.include_router(behavior_signal.router, prefix=api_prefix)
