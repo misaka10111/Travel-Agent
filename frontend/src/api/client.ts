@@ -54,6 +54,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ user_id: userId, action, target, detail }),
     }),
+  plan: (payload: {
+    query?: string;
+    destination?: string;
+    start_date?: string;
+    end_date?: string;
+    profile?: unknown;
+    answers?: unknown[];
+  }) =>
+    request<Record<string, unknown>>('/plan', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
   chat: (messages: ChatMessage[]) =>
     request<ChatResponse>('/agent/chat', {
       method: 'POST',

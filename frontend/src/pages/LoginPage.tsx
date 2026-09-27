@@ -57,27 +57,44 @@ export function LoginPage() {
   }
 
   return (
-    <section className="login-page">
-      <div className="login-card">
-        <h1>TravelAgent</h1>
-        <p className="muted">手机号登录</p>
+    <div className="agent-page">
+      <header className="agent-hero">
+        <span className="agent-kicker">Welcome Back</span>
+        <h1>
+          你好，欢迎回到 <span>TravelAgent</span>
+        </h1>
+        <p>使用手机号验证码登录，继续规划你的下一段旅程。</p>
+      </header>
 
-        <form onSubmit={handleSubmit} className="login-form">
-          <label className="login-field">
-            <span>手机号</span>
+      <section className="agent-search-card login-card">
+        <form onSubmit={handleSubmit}>
+          <div className="agent-section-heading-row">
+            <div>
+              <span className="agent-section-label">登录</span>
+              <h2>手机号验证码登录</h2>
+            </div>
+            <span className="agent-status-badge ready">快速登录</span>
+          </div>
+
+          <div className="login-field">
+            <label htmlFor="phone">手机号</label>
             <input
+              id="phone"
+              className="login-input"
               inputMode="numeric"
               maxLength={11}
               value={phone}
               onChange={(e) => setPhone(e.target.value.replace(/\D/g, ''))}
-              placeholder="请输入手机号"
+              placeholder="请输入 11 位手机号"
             />
-          </label>
+          </div>
 
-          <label className="login-field">
-            <span>验证码</span>
-            <div className="code-row">
+          <div className="login-field">
+            <label htmlFor="code">验证码</label>
+            <div className="login-code-row">
               <input
+                id="code"
+                className="login-input"
                 inputMode="numeric"
                 maxLength={6}
                 value={code}
@@ -86,23 +103,23 @@ export function LoginPage() {
               />
               <button
                 type="button"
-                className="code-btn"
+                className="login-send-btn"
                 disabled={countdown > 0}
                 onClick={sendCode}
               >
                 {countdown > 0 ? `${countdown}s 后重发` : '发送验证码'}
               </button>
             </div>
-          </label>
+          </div>
 
-          {sentCode && <p className="dev-hint">开发模式验证码：{sentCode}</p>}
-          {error && <p className="error">{error}</p>}
+          {sentCode && <div className="login-hint">开发模式验证码：{sentCode}</div>}
+          {error && <div className="login-error">{error}</div>}
 
-          <button type="submit" className="login-submit">
+          <button type="submit" className="agent-primary-button login-submit">
             登录
           </button>
         </form>
-      </div>
-    </section>
+      </section>
+    </div>
   );
 }

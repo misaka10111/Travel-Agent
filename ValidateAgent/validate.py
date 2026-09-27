@@ -50,7 +50,7 @@ def validate_plan(
     if answers:
         context["answers"] = answers
 
-    for _ in range(3):
+    for _ in range(2):
         resp = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
             messages=[
@@ -58,6 +58,7 @@ def validate_plan(
                 {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
+            reasoning_effort="low",
             max_tokens=12000,
             timeout=120,
         )
@@ -72,7 +73,7 @@ def validate_plan(
             result = {}
         if isinstance(result.get("passed"), bool):
             return result
-    # 兜底：多次重试仍无有效结果时默认通过，避免编排卡死
+    # 兜底：重试仍无有效结果时默认通过，避免编排卡死
     return {"passed": True, "issues": [], "feedback": "（审核重试失败，默认通过）"}
 
 

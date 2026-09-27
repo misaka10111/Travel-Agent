@@ -36,7 +36,7 @@ PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
 VALIDATE_PY = ROOT / "ValidateAgent" / "validate.py"
 VALIDATE_PYTHON = ROOT / "ValidateAgent" / ".venv" / "bin" / "python"
 
-MAX_ITERATIONS = 2
+MAX_ITERATIONS = 1
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000/api")
 
@@ -84,6 +84,7 @@ class State(TypedDict, total=False):
     end_date: str
     profile: dict
     basic: dict
+    need_questionnaire: bool
     answers: list
     search: dict
     questions: dict
@@ -173,6 +174,14 @@ def validate_node(state: State) -> dict:
     }
 
 
+def should_questionnaire(state: State) -> str:
+    # 当前 /api/plan 是一次性生成计划，问卷交互尚未接入；
+    # 仅在显式请求问卷时才走 questionnaire，否则直接 plan，省一次 LLM 调用。
+    if state.get("need_questionnaire"):
+        return "questionnaire"
+    return "plan"
+
+
 def should_continue(state: State) -> str:
     if state.get("audit", {}).get("passed") or state.get("iteration", 0) >= MAX_ITERATIONS:
         return "end"
@@ -186,7 +195,11 @@ def build_graph():
     graph.add_node("plan", plan_node)
     graph.add_node("validate", validate_node)
     graph.add_edge(START, "search")
-    graph.add_edge("search", "questionnaire")
+    graph.add_conditional_edges(
+        "search",
+        should_questionnaire,
+        {"questionnaire": "questionnaire", "plan": "plan"},
+    )
     graph.add_edge("questionnaire", "plan")
     graph.add_edge("plan", "validate")
     graph.add_conditional_edges("validate", should_continue, {"plan": "plan", "end": END})

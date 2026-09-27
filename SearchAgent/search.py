@@ -10,6 +10,7 @@
 import json
 import os
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -21,11 +22,14 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 PARSE_SYSTEM_PROMPT = (
+    f"今天是 {date.today().strftime('%Y-%m-%d')}。"
     "从用户的旅行查询中抽取信息，输出 JSON，字段："
     "destination（目的地，字符串，必填）、"
     "start_date（开始日期，格式 YYYY-MM-DD，必填）、"
     "end_date（结束日期，格式 YYYY-MM-DD，可选）、"
-    "origin（出发地，可选）。如果日期没有年份，默认今年。"
+    "origin（出发地，可选）。"
+    f"如果用户只给了时长（如「玩3天」）而没有具体日期，则 start_date 默认为今天（{date.today().strftime('%Y-%m-%d')}），end_date 为 start_date 加上对应天数；"
+    "如果日期没有年份，默认今年。"
     "只输出 JSON 本身，不要任何多余文字或代码块。"
 )
 
@@ -37,12 +41,13 @@ def parse_nl(query: str) -> dict:
         kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
     client = OpenAI(**kwargs)
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-v4-pro"),
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
         messages=[
             {"role": "system", "content": PARSE_SYSTEM_PROMPT},
             {"role": "user", "content": query},
         ],
         response_format={"type": "json_object"},
+        reasoning_effort="low",
         timeout=60,
     )
     content = (resp.choices[0].message.content or "{}").strip()
@@ -51,10 +56,38 @@ def parse_nl(query: str) -> dict:
         content = content.strip("`")
         if content.startswith("json"):
             content = content[4:]
-    return json.loads(content)
+    result = json.loads(content)
+    today = date.today()
+
+    def is_valid_day(value: str | None) -> bool:
+        try:
+            return bool(value) and date.fromisoformat(value) >= today
+        except (ValueError, TypeError):
+            return False
+
+    # 兜底：日期缺失或为过去日期时，默认今天起 3 天
+    if not is_valid_day(result.get("start_date")):
+        result["start_date"] = today.isoformat()
+        result["end_date"] = (today + timedelta(days=2)).isoformat()
+    elif not result.get("end_date"):
+        result["end_date"] = result["start_date"]
+
+    return result
 
 
 def main() -> None:
+    if "--parse" in sys.argv:
+        query = (
+            sys.stdin.read().strip()
+            if not sys.stdin.isatty()
+            else " ".join(a for a in sys.argv[1:] if a != "--parse").strip()
+        )
+        try:
+            print(json.dumps(parse_nl(query), ensure_ascii=False, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return
+
     if not sys.stdin.isatty():
         raw = sys.stdin.read().strip()
     else:

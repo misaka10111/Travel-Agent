@@ -90,3 +90,7 @@ pytest
 编辑 `backend/app/agent/travel_agent.py`，在 `TravelAgent.chat()` 中接入你选择的模型
 （如 OpenAI、通义、DeepSeek 等），前端聊天页面无需改动即可生效。
 
+## 性能优化
+
+多 Agent 生成流水线的加速优化记录、关键配置参数与待实施方案见
+[OPTIMIZATION.md](./OPTIMIZATION.md)。

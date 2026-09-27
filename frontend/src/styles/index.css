@@ -46,7 +46,7 @@ a {
 }
 
 .app-main {
-  max-width: 960px;
+  max-width: 1280px;
   margin: 0 auto;
   padding: 32px 24px 64px;
 }
@@ -319,81 +319,176 @@ button:disabled {
   overflow-x: auto;
 }
 
-.login-page {
-  display: flex;
-  justify-content: center;
-  padding-top: 40px;
-}
-
+/* ===== 登录页（沿用 agent 设计语言） ===== */
 .login-card {
-  width: 100%;
-  max-width: 380px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  padding: 32px;
-  text-align: center;
+  max-width: 480px;
+  margin: 0 auto;
 }
 
-.login-card h1 {
-  margin: 0 0 4px;
-  font-size: 24px;
-}
-
-.login-form {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  margin-top: 24px;
-  text-align: left;
+.login-card h2 {
+  margin: 5px 0 0;
+  font-size: 20px;
+  color: var(--agent-ink);
 }
 
 .login-field {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 14px;
-}
-
-.login-field input {
-  min-width: 0;
-}
-
-.code-row {
-  display: flex;
   gap: 8px;
+  margin-top: 20px;
 }
 
-.code-row input {
-  flex: 1;
+.login-field label {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--agent-ink);
+}
+
+.login-input {
+  width: 100%;
   min-width: 0;
+  padding: 14px 16px;
+  border: 1px solid #dde2ee;
+  border-radius: 16px;
+  background: #fbfcff;
+  color: var(--agent-ink);
+  font: inherit;
+  font-size: 15px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
 }
 
-.code-btn {
+.login-input:focus {
+  border-color: rgba(82, 103, 255, 0.6);
+  background: #fff;
+  box-shadow: 0 0 0 4px rgba(82, 103, 255, 0.09);
+}
+
+.login-code-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.login-code-row .login-input {
+  flex: 1;
+}
+
+.login-send-btn {
+  padding: 14px 16px;
+  border: 1px solid #dde2ee;
+  border-radius: 14px;
+  background: #fff;
+  color: #5c6acb;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
   white-space: nowrap;
-  background: #eef2ff;
-  color: var(--primary);
+  transition: border-color 0.2s ease, background 0.2s ease;
 }
 
-.code-btn:disabled {
-  background: #f3f4f6;
-  color: var(--muted);
+.login-send-btn:hover:not(:disabled) {
+  border-color: rgba(82, 103, 255, 0.4);
+  background: #f7f8fc;
+}
+
+.login-send-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.login-hint {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #f0edff;
+  color: #6152cc;
+  font-size: 13px;
+  text-align: center;
+}
+
+.login-error {
+  margin-top: 12px;
+  color: #d34b4b;
+  font-size: 13px;
 }
 
 .login-submit {
   width: 100%;
-  padding: 12px;
-  font-size: 15px;
+  margin-top: 22px;
 }
 
-.dev-hint {
-  color: var(--muted);
+/* ===== 用户画像（沿用 agent 设计语言） ===== */
+.profile-card {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+.profile-card h2 {
+  margin: 5px 0 0;
+  font-size: 20px;
+  color: var(--agent-ink);
+}
+
+.profile-field {
+  margin-top: 24px;
+}
+
+.profile-field-label {
   font-size: 13px;
-  background: #fef9c3;
-  border: 1px solid #fde68a;
-  border-radius: 6px;
-  padding: 8px 10px;
-  text-align: center;
+  font-weight: 650;
+  color: var(--agent-ink);
+  margin-bottom: 10px;
+}
+
+.profile-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.profile-option {
+  padding: 10px 16px;
+  border: 1px solid #dde2ee;
+  border-radius: 999px;
+  background: #fff;
+  color: #4a5568;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s ease, color 0.18s ease,
+    background 0.18s ease, box-shadow 0.18s ease;
+}
+
+.profile-option:hover {
+  border-color: rgba(82, 103, 255, 0.5);
+  color: #5267ff;
+}
+
+.profile-option.active {
+  background: linear-gradient(115deg, var(--agent-blue), var(--agent-purple));
+  border-color: transparent;
+  color: #fff;
+  box-shadow: 0 8px 18px rgba(91, 83, 220, 0.2);
+}
+
+.profile-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 28px;
+}
+
+.trip-date-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.trip-date-arrow {
+  flex: 0 0 auto;
+  color: #a0a8c0;
+  font-size: 14px;
 }
 
 /* =========================
@@ -679,7 +774,7 @@ button:disabled {
 
 .agent-recommendation-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   margin-top: 20px;
 }
@@ -1323,3 +1418,160 @@ button:disabled {
   color: #ffffff;
   box-shadow: 0 4px 12px rgba(79, 109, 245, 0.16);
 }
+
+/* ===== Agent 左右分栏 ===== */
+.agent-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.agent-chat-panel,
+.agent-plan-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 600px;
+}
+
+.agent-chat-panel .agent-conversation-log {
+  flex: 1;
+  max-height: 68vh;
+  overflow-y: auto;
+}
+
+.agent-plan-panel {
+  max-height: 82vh;
+  overflow-y: auto;
+}
+
+.agent-plan-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  gap: 12px;
+  padding: 48px 24px;
+  color: var(--agent-muted);
+}
+
+.agent-plan-empty h3 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--agent-ink);
+}
+
+.agent-plan-empty p {
+  margin: 0;
+  font-size: 14px;
+  max-width: 320px;
+  line-height: 1.7;
+}
+
+@media (max-width: 900px) {
+  .agent-workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ===== 计划详情（分块展示） ===== */
+.agent-plan-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.agent-back-btn {
+  align-self: flex-start;
+  padding: 8px 14px;
+  border: 1px solid #dde2ee;
+  border-radius: 999px;
+  background: #fff;
+  color: #5c6acb;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.agent-back-btn:hover {
+  border-color: rgba(82, 103, 255, 0.4);
+  background: #f7f8fc;
+}
+
+.agent-block-day {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-block-day-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: #5c6acb;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.agent-block-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-block {
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid #e8ebf3;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.agent-block-left {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 96px;
+}
+
+.agent-block-time {
+  font-size: 12px;
+  color: var(--agent-muted);
+}
+
+.agent-block-type {
+  width: fit-content;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #eef2ff;
+  color: #5267ff;
+}
+
+.agent-block-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-block-body strong {
+  font-size: 14px;
+  color: var(--agent-ink);
+}
+
+.agent-block-body p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--agent-muted);
+  line-height: 1.6;
+}
+
+.agent-block-交通 .agent-block-type { background: #eef2ff; color: #5267ff; }
+.agent-block-美食 .agent-block-type { background: #fff1e8; color: #d97706; }
+.agent-block-景点 .agent-block-type { background: #e9f8f0; color: #18794e; }
+.agent-block-酒店 .agent-block-type { background: #f0edff; color: #6152cc; }
+.agent-block-活动 .agent-block-type { background: #ffeaf6; color: #c0265b; }

@@ -5,15 +5,10 @@ from pydantic import BaseModel, ConfigDict
 
 class UserProfileBase(BaseModel):
     age_group: str = ""
-    mbti: str = ""
+    gender: str = ""
+    identity: str = ""
     city: str = ""
-    companion: list[str] = []
-    pace: list[str] = []
-    budget: list[str] = []
-    accommodation: list[str] = []
-    transport: list[str] = []
-    interests: list[str] = []
-    dietary: list[str] = []
+    travel_style: list[str] = []
 
 
 class UserProfileCreate(UserProfileBase):
@@ -26,4 +21,3 @@ class UserProfileRead(UserProfileBase):
     user_id: str
     created_at: datetime
     updated_at: datetime
-

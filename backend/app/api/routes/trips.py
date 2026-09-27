@@ -33,10 +33,14 @@ def create_trip(payload: TripCreate, db: Session = Depends(get_db)) -> Trip:
     trip = Trip(
         title=payload.title,
         destination=payload.destination,
+        origin=payload.origin,
         start_date=payload.start_date,
         end_date=payload.end_date,
+        travelers=payload.travelers,
         status=payload.status,
         budget=payload.budget,
+        budget_tiers=payload.budget_tiers,
+        purposes=payload.purposes,
         notes=payload.notes,
     )
     for item in payload.items:
@@ -79,4 +83,3 @@ def delete_trip(trip_id: int, db: Session = Depends(get_db)) -> None:
     trip = _get_trip_or_404(db, trip_id)
     db.delete(trip)
     db.commit()
-

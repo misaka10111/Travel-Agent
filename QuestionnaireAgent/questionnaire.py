@@ -33,9 +33,9 @@ QUESTIONNAIRE_SYSTEM_PROMPT = (
     "2) 只问能影响 PlanAgent 决策的问题，不要重复画像里已经明确的偏好；"
     "3) 选项尽量来自 search 数据里的真实名称（景点、酒店、促销等），每道 2~5 个选项；"
     "4) 典型问题：最想去的景点（多选，选项取 search.poi 的景点名）、偏好的酒店（单选，取 search.hotels 的酒店名）、"
-    "想尝试的美食类型（多选，结合本地特色与画像 interests）、预算更倾向花在哪（单选：酒店/门票/美食/购物）、"
+    "想尝试的美食类型（多选，结合本地特色与画像 travel_style）、预算更倾向花在哪（单选：酒店/门票/美食/购物）、"
     "市内出行方式（单选：打车/地铁/公交/自驾）、更偏室内还是户外（结合天气）等；"
-    "5) 结合天气、预算、同行人做个性化（带孩子→问亲子偏好；预算有限→问预算侧重；天气有雨→问室内/户外偏好）；"
+    "5) 结合天气、旅行风格、年龄/身份做个性化（travel_style 含亲子乐园→问亲子偏好；含美食探店→问美食；天气有雨→问室内/户外偏好）；"
     "6) 只输出 JSON，不要任何多余文字或代码块。"
 )
 
@@ -57,12 +57,13 @@ def build_questionnaire(
         context["basic"] = basic
 
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-v4-pro"),
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
         messages=[
             {"role": "system", "content": QUESTIONNAIRE_SYSTEM_PROMPT},
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ],
         response_format={"type": "json_object"},
+        reasoning_effort="low",
         max_tokens=8000,
         timeout=120,
     )

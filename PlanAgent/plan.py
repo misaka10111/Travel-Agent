@@ -16,6 +16,8 @@
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -26,37 +28,128 @@ load_dotenv(BASE_DIR / ".env")
 
 PLAN_SYSTEM_PROMPT = (
     "你是一名专业的旅行规划师。根据输入中的结构化旅行数据（search 字段）和用户画像（user_profile 字段，可能没有），"
-    "生成两个不同风格的旅行计划，供用户选择。两个计划都必须符合用户画像的偏好（预算、同行人、节奏、兴趣、忌口等）。"
-    "两个风格固定为：1) 经典人气（热门必打卡）；2) 小众深度（小众深度体验）。"
+    "生成一个旅行方案。方案风格由用户消息中的 style 字段指定，必须鲜明体现该风格。"
     "输出必须是 JSON，结构如下："
-    '{"destination":"目的地","start_date":"开始日期","end_date":"结束日期","days":天数,"weather_summary":"天气摘要",'
-    '"plans":['
-    '{"style":"经典人气","summary":"一句话概述","itinerary":['
-    '{"day":1,"date":"日期","theme":"当天主题","schedule":['
-    '{"time":"09:00-11:30","type":"景点","name":"活动名","note":"说明（含与上一点的交通方式和耗时）"}'
-    '],"hotel":"推荐酒店","meals":[{"meal":"午餐","options":["饭店1","饭店2"]}],"tips":"当天提示"}'
-    '],"recommended_hotels":["..."],"recommended_promotions":["..."],"notes":"..."},'
-    '{"style":"小众深度","summary":"一句话概述","itinerary":[...],"recommended_hotels":[...],"recommended_promotions":[...],"notes":"..."}'
-    ']}。'
+    '{"style":"风格","summary":"一句话概述","itinerary":['
+    '{"day":1,"date":"日期","theme":"当天主题","hotel":"推荐酒店","schedule":['
+    '{"time":"09:00-11:00","type":"景点","name":"活动名","note":"交通/餐食/穿衣等简短说明"}'
+    ']}]}。'
     "如果输入中包含 user_profile（用户画像），其字段含义为："
-    "age_group=年龄段；mbti=MBTI人格；city=常住城市；companion=同行人（可多选：独自/伴侣/带孩子/带老人/朋友/同事）；"
-    "pace=旅行节奏（慢节奏深度游/适中/紧凑打卡）；budget=预算偏好（经济实惠/舒适型/豪华型/不设限）；"
-    "accommodation=住宿偏好（酒店/民宿/客栈）；transport=交通偏好（高铁/飞机/自驾）；"
-    "interests=兴趣（自然风光/人文历史/主题乐园/博物馆/美食购物/户外运动/温泉度假/摄影）；"
-    "dietary=饮食忌口（海鲜过敏/不吃辣/素食/清真）。"
+    "age_group=年龄段；gender=性别；identity=身份（学生/上班族/自由职业/创业者/退休/其他）；city=常驻城市；"
+    "travel_style=旅行风格（可多选：休闲度假/深度文化/自然风光/美食探店/亲子乐园/购物血拼/冒险户外/摄影旅拍）。"
     "如果输入中包含 answers（用户对问卷的作答，每项含 question 和 answer），请优先严格遵循用户的选择来规划"
     "（已选的景点、酒店、出行方式、预算侧重等），未作答的项再按画像和常识默认。"
     "如果输入中包含 feedback（上次审核的修改建议），必须据此修正计划中列出的问题。"
     "如果输入中包含 modify（含 block_id 和 instruction），按 instruction 修改对应那一个活动块，其余块尽量保持不变。"
     "个性化与规划规则："
-    "1) 时间点：每个活动给出精确起止时间（HH:MM-HH:MM），考虑景点开放时间与用餐时间，前后衔接合理；"
-    "2) 节奏：pace 含「紧凑打卡」→每天4~5个活动；「适中」→3~4个；「慢节奏深度游」→2~3个；"
-    "3) 美食：若 interests 含「美食/美食购物」，每餐提供2~3家饭店备选（写入 meals.options，并在 schedule 的餐食 note 里列出）；否则每餐1家即可；"
-    "4) 交通：相邻活动之间在 note 里注明交通方式与大致耗时（打车/地铁/步行/自驾），尽量地理就近、减少折返；"
-    "5) 忌口：dietary 的限制贯彻到每一餐；结合天气给穿衣/带伞建议；"
-    "6) 优先使用数据中真实存在的酒店和景点名称；两个方案风格差异明显；"
-    "7) schedule 每项必须带 type，取值：交通/美食/景点/酒店/活动；只输出 JSON，不要任何多余文字。"
+    "1) 每天固定 2 个景点/活动；"
+    "2) schedule 每天最多 4 项：2 个景点（type=景点）、午餐（type=美食）、晚餐（type=美食）；交通方式合并进景点 note，不再单独列交通项；"
+    "3) 景点优先匹配 travel_style（自然风光→自然景区；亲子乐园→主题乐园/动物园；深度文化→博物馆/古迹；购物血拼→商圈；摄影旅拍→出片景点；冒险户外→户外体验）；"
+    "4) 优先使用 search 数据里真实存在的景点和酒店名称；"
+    "5) 每个 note 控制在 15 字以内；"
+    "6) 只输出 JSON，不要任何多余文字或代码块。"
 )
+
+
+def _build_meta(search_result: dict) -> dict:
+    """从搜索结果本地提取行程元数据，省掉 LLM 生成外层字段。"""
+    destination = search_result.get("destination") or ""
+    start_date = search_result.get("start_date") or ""
+    end_date = search_result.get("end_date") or ""
+    days = 0
+    if start_date and end_date:
+        try:
+            days = (date.fromisoformat(end_date) - date.fromisoformat(start_date)).days + 1
+        except ValueError:
+            days = 0
+    weather = search_result.get("weather") or {}
+    weather_days = weather.get("days") or []
+    weather_summary = ""
+    if weather_days:
+        first = weather_days[0]
+        weather_summary = (
+            f"{weather.get('location', destination)} {start_date} 至 {end_date}，"
+            f"首日{first.get('weather', '')}，共 {len(weather_days)} 天"
+        )
+    return {
+        "destination": destination,
+        "start_date": start_date,
+        "end_date": end_date,
+        "days": days,
+        "weather_summary": weather_summary,
+    }
+
+
+def _trim_search(search: dict) -> dict:
+    """精简 search 结果：去掉长文本与无关字段，降低 PlanAgent 的 prompt 长度。"""
+    result: dict = {}
+    for key in ("destination", "start_date", "end_date"):
+        if search.get(key):
+            result[key] = search[key]
+
+    weather = search.get("weather")
+    if isinstance(weather, dict):
+        result["weather"] = {
+            "location": weather.get("location"),
+            "days": [
+                {k: d.get(k) for k in ("date", "weather", "temp_min", "temp_max", "humidity")}
+                for d in (weather.get("days") or [])
+            ],
+        }
+
+    if isinstance(search.get("poi"), list):
+        result["poi"] = [
+            {
+                "name": p.get("name"),
+                "category": p.get("category"),
+                "rank": p.get("rank"),
+                "free": p.get("free"),
+                "description": (p.get("description") or "")[:80],
+            }
+            for p in search["poi"]
+        ]
+
+    if isinstance(search.get("hotels"), list):
+        result["hotels"] = [
+            {"name": h.get("name"), "star": h.get("star"), "price": h.get("price"), "location": h.get("location")}
+            for h in search["hotels"]
+        ]
+
+    if isinstance(search.get("promotions"), list):
+        result["promotions"] = [
+            {"title": p.get("title"), "price": p.get("price")}
+            for p in search["promotions"]
+        ]
+
+    for key in ("events", "food"):
+        if isinstance(search.get(key), list):
+            result[key] = [
+                {"title": x.get("title"), "content": (x.get("content") or "")[:120]}
+                for x in search[key]
+            ]
+
+    return result
+
+
+def _build_one_plan(client: OpenAI, style: str, context: dict) -> dict:
+    ctx = dict(context)
+    ctx["style"] = style
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        messages=[
+            {"role": "system", "content": PLAN_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(ctx, ensure_ascii=False)},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=16000,
+        timeout=300,
+    )
+    content = (resp.choices[0].message.content or "{}").strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content)
 
 
 def build_plan(
@@ -71,7 +164,7 @@ def build_plan(
         kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
     client = OpenAI(**kwargs)
 
-    context: dict = {"search": search_result}
+    context: dict = {"search": _trim_search(search_result)}
     if profile:
         context["user_profile"] = profile
     if answers:
@@ -81,22 +174,13 @@ def build_plan(
     if modify:
         context["modify"] = modify
 
-    resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-v4-pro"),
-        messages=[
-            {"role": "system", "content": PLAN_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=16000,
-        timeout=300,
-    )
-    content = (resp.choices[0].message.content or "{}").strip()
-    if content.startswith("```"):
-        content = content.strip("`")
-        if content.startswith("json"):
-            content = content[4:]
-    return json.loads(content)
+    styles = ["经典人气", "小众深度"]
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        plans = list(executor.map(lambda s: _build_one_plan(client, s, context), styles))
+
+    result = _build_meta(search_result)
+    result["plans"] = plans
+    return result
 
 
 TYPE_KEYWORDS = (

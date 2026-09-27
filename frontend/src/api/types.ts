@@ -13,10 +13,14 @@ export interface Trip {
   id: number;
   title: string;
   destination: string;
+  origin: string;
   start_date: string;
   end_date: string;
+  travelers: string;
   status: string;
   budget: number | null;
+  budget_tiers: string[];
+  purposes: string[];
   notes: string;
   created_at: string;
   updated_at: string;
@@ -34,10 +38,14 @@ export interface Destination {
 export interface TripCreatePayload {
   title: string;
   destination: string;
+  origin?: string;
   start_date: string;
   end_date: string;
+  travelers?: string;
   status?: string;
   budget?: number | null;
+  budget_tiers?: string[];
+  purposes?: string[];
   notes?: string;
   items?: Array<{
     day: number;
@@ -58,15 +66,10 @@ export interface ChatResponse {
 
 export interface UserProfile {
   age_group: string;
-  mbti: string;
+  gender: string;
+  identity: string;
   city: string;
-  companion: string[];
-  pace: string[];
-  budget: string[];
-  accommodation: string[];
-  transport: string[];
-  interests: string[];
-  dietary: string[];
+  travel_style: string[];
 }
 
 export interface TripInfo {

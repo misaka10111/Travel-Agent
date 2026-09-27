@@ -1,12 +1,15 @@
 # SearchAgent - 数据检索 agent 模块
 
-一个「LangGraph agent + MCP 工具」示例，内置五个工具：
+一个「LangGraph agent + MCP 工具」示例，内置八个工具：
 
 - `get_weather`：查询某日期/日期段的逐日天气（Open-Meteo，无需 key）
 - `search_hotels`：搜索目的地酒店（飞猪 FlyAI）
 - `search_flights`：搜索机票（飞猪 FlyAI）
 - `search_poi`：搜索景点/风景名胜（飞猪 FlyAI）
 - `search_promotions`：检索飞猪促销活动/优惠商品（飞猪 FlyAI）
+- `search_web`：通用网页搜索（Tavily，需要 `TAVILY_API_KEY`）
+- `search_events`：搜索某地日期段内的热点活动（演唱会/比赛/节日等，Tavily）
+- `search_food`：搜索当地美食（大众点评/小红书/抖音等，Tavily）
 
 文件说明：
 
@@ -62,7 +65,7 @@ python search.py "宁波 10月1日到10月5日"
 ```
 
 `search.py` 统一入口：输入是 JSON 则直接调用 `run_search`，是自然语言则先解析成 JSON；
-输出为结构化 JSON，包含 `weather`、`hotels`、`poi`、`promotions` 四个字段（并行调用）。
+输出为结构化 JSON，包含 `weather`、`hotels`、`poi`、`promotions`、`events`、`food` 六个字段（并行调用）。
 
 ## 单独测试工具服务
 

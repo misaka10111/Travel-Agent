@@ -1,6 +1,17 @@
 from datetime import date, datetime, time
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, Text, Time, func
+from sqlalchemy import (
+    JSON,
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    Time,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -12,10 +23,14 @@ class Trip(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(200))
     destination: Mapped[str] = mapped_column(String(120), index=True)
+    origin: Mapped[str] = mapped_column(String(120), default="")
     start_date: Mapped[date] = mapped_column(Date)
     end_date: Mapped[date] = mapped_column(Date)
+    travelers: Mapped[str] = mapped_column(String(20), default="")
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    budget_tiers: Mapped[list] = mapped_column(JSON, default=list)
+    purposes: Mapped[list] = mapped_column(JSON, default=list)
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
@@ -46,4 +61,3 @@ class ItineraryItem(Base):
     end_time: Mapped[time | None] = mapped_column(Time, nullable=True)
 
     trip: Mapped[Trip] = relationship(back_populates="items")
-

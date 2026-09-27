@@ -8,6 +8,7 @@
 """
 
 import json
+import os
 import re
 import ssl
 import subprocess
@@ -20,13 +21,56 @@ from pathlib import Path
 from typing import Any
 
 import certifi
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from openai import OpenAI
+from tavily import TavilyClient
+
+BASE_DIR = Path(__file__).resolve().parent
+load_dotenv(BASE_DIR / ".env")
 
 server = FastMCP(
     "search-tools",
     instructions="SearchAgent 的工具集",
     log_level="ERROR",
 )
+
+_tavily_client: TavilyClient | None = None
+
+
+def _get_tavily() -> TavilyClient:
+    """懒加载 Tavily 客户端，避免 import 阶段就要求 API key。"""
+    global _tavily_client
+    if _tavily_client is None:
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+            raise ValueError("缺少 TAVILY_API_KEY，请在 SearchAgent/.env 中配置")
+        _tavily_client = TavilyClient(api_key=api_key)
+    return _tavily_client
+
+
+POI_FEATURE_PROMPT = (
+    "你是景点特征提取助手。为每个景点提取 3~6 个简短特征标签（逗号分隔，每个 2~4 字）。"
+    "标签应覆盖：类型与属性（文化/历史/自然/亲子/宗教/演出/购物/美食/运动/科技/湖景/园林等）、"
+    "环境（室内/户外）、适合人群（亲子/情侣/老人/学生等）。"
+    "输出 JSON：{\"features\":[\"文化,历史,室内\",\"自然,湖景,户外\",...]}，顺序与输入景点一致。"
+    "只输出 JSON，不要任何多余文字或代码块。"
+)
+
+EVENTS_FEATURE_PROMPT = (
+    "你是活动信息提炼助手。为每个活动提炼 3~6 个特征标签（逗号分隔，每个 2~4 字）。"
+    "标签覆盖：活动类型（演唱会/音乐节/比赛/展览/节日/体育等）、室内外、适合人群、时间季节。"
+    "输出 JSON：{\"features\":[\"音乐节,户外,10月\",...]}，顺序与输入一致。"
+    "只输出 JSON，不要任何多余文字或代码块。"
+)
+
+FOOD_FEATURE_PROMPT = (
+    "你是美食信息提炼助手。为每个美食提炼 3~6 个特征标签（逗号分隔，每个 2~4 字）。"
+    "标签覆盖：菜系、特色菜品、价位、环境、适合人群。"
+    "输出 JSON：{\"features\":[\"杭帮菜,人均100,必吃\",...]}，顺序与输入一致。"
+    "只输出 JSON，不要任何多余文字或代码块。"
+)
+
 
 FLYAI_BIN = Path(__file__).resolve().parent / "node_modules" / ".bin" / "flyai"
 
@@ -248,6 +292,89 @@ def _fetch_flights(
     return result
 
 
+def _extract_poi_features(pois: list[dict]) -> list[dict]:
+    """用 LLM 为每个景点提取简短特征标签，替换长 description；失败则回退截断。"""
+    if not pois:
+        return pois
+    try:
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL"),
+        )
+        brief = [
+            {
+                "name": p.get("name") or "",
+                "category": p.get("category") or "",
+                "description": (p.get("description") or "")[:200],
+            }
+            for p in pois
+        ]
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            messages=[
+                {"role": "system", "content": POI_FEATURE_PROMPT},
+                {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=6000,
+            timeout=60,
+        )
+        content = (resp.choices[0].message.content or "{}").strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            if content.startswith("json"):
+                content = content[4:]
+        features = json.loads(content).get("features") or []
+        for i, p in enumerate(pois):
+            p["description"] = features[i] if i < len(features) else ""
+        return pois
+    except Exception:
+        for p in pois:
+            p["description"] = (p.get("description") or "")[:80]
+        return pois
+
+
+def _extract_item_features(items: list[dict], prompt: str) -> list[dict]:
+    """用 LLM 为活动/美食提炼特征标签，替换长 content；失败则回退截断。"""
+    if not items:
+        return items
+    try:
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL"),
+        )
+        brief = [
+            {
+                "title": x.get("title") or "",
+                "content": (x.get("content") or "")[:200],
+            }
+            for x in items
+        ]
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            messages=[
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=6000,
+            timeout=60,
+        )
+        content = (resp.choices[0].message.content or "{}").strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            if content.startswith("json"):
+                content = content[4:]
+        features = json.loads(content).get("features") or []
+        for i, x in enumerate(items):
+            x["content"] = features[i] if i < len(features) else ""
+        return items
+    except Exception:
+        for x in items:
+            x["content"] = (x.get("content") or "")[:80]
+        return items
+
+
 def _fetch_poi(
     city_name: str,
     keyword: str | None = None,
@@ -266,7 +393,7 @@ def _fetch_poi(
     if data.get("status") not in (0, None):
         raise ValueError(data.get("message") or "查询出错")
     items = (data.get("data") or {}).get("itemList") or []
-    return [
+    pois = [
         {
             "name": item.get("name") or "",
             "category": item.get("category") or "",
@@ -277,6 +404,7 @@ def _fetch_poi(
         }
         for item in items
     ]
+    return _extract_poi_features(pois)
 
 
 def _fetch_promotions(keyword: str | None = None) -> list[dict]:
@@ -300,6 +428,56 @@ def _fetch_promotions(keyword: str | None = None) -> list[dict]:
             }
         )
     return result
+
+
+def _fetch_web_search(
+    query: str,
+    max_results: int = 10,
+    search_depth: str = "advanced",
+) -> list[dict]:
+    """通用网页搜索（Tavily），返回 LLM 优化的结果。"""
+    client = _get_tavily()
+    resp = client.search(
+        query=query,
+        max_results=max_results,
+        search_depth=search_depth,
+    )
+    return [
+        {
+            "title": r.get("title") or "",
+            "url": r.get("url") or "",
+            "content": (r.get("content") or "")[:600],
+            "score": r.get("score"),
+        }
+        for r in (resp.get("results") or [])
+    ]
+
+
+def _fetch_events(
+    destination: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    max_results: int = 10,
+) -> list[dict]:
+    """搜索某地在日期段内的热点活动（演唱会/比赛/节日等），复用 Tavily。"""
+    start = _normalize_date(start_date) if start_date else ""
+    end = _normalize_date(end_date) if end_date else ""
+    if start and end:
+        date_range = f"{start}到{end}"
+    elif start:
+        date_range = start
+    else:
+        date_range = "近期"
+    query = f"{destination} {date_range} 演唱会 音乐节 比赛 展览 节日 活动 热点"
+    items = _fetch_web_search(query, max_results=max_results)
+    return _extract_item_features(items, EVENTS_FEATURE_PROMPT)
+
+
+def _fetch_food(destination: str, max_results: int = 10) -> list[dict]:
+    """搜索当地美食（大众点评/小红书/抖音等平台），复用 Tavily。"""
+    query = f"{destination} 美食 必吃 餐厅 小吃 大众点评 小红书 抖音 探店"
+    items = _fetch_web_search(query, max_results=max_results)
+    return _extract_item_features(items, FOOD_FEATURE_PROMPT)
 
 
 # ================= 文本格式化（MCP 工具用） =================
@@ -385,6 +563,46 @@ def _format_promotions(items: list[dict], keyword: str) -> str:
     return "\n".join(lines)
 
 
+def _format_web_search(items: list[dict], query: str) -> str:
+    if not items:
+        return f"没有找到「{query}」相关的网页结果。"
+    lines = [f"「{query}」网页搜索结果（前 {min(len(items), 10)} 条）："]
+    for item in items[:10]:
+        lines.append(f" - {item['title']}")
+        if item.get("content"):
+            lines.append(f"   {item['content'][:180]}")
+        if item.get("url"):
+            lines.append(f"   {item['url']}")
+    return "\n".join(lines)
+
+
+def _format_events(items: list[dict], destination: str, start_date: str, end_date: str) -> str:
+    label = f"{_normalize_date(start_date)} 至 {_normalize_date(end_date)}"
+    if not items:
+        return f"没有找到「{destination} {label}」的热点活动。"
+    lines = [f"{destination} 热点活动（{label}，前 {min(len(items), 10)} 条）："]
+    for item in items[:10]:
+        lines.append(f" - {item['title']}")
+        if item.get("content"):
+            lines.append(f"   {item['content'][:180]}")
+        if item.get("url"):
+            lines.append(f"   {item['url']}")
+    return "\n".join(lines)
+
+
+def _format_food(items: list[dict], destination: str) -> str:
+    if not items:
+        return f"没有找到「{destination}」的美食推荐。"
+    lines = [f"{destination} 美食推荐（前 {min(len(items), 10)} 条）："]
+    for item in items[:10]:
+        lines.append(f" - {item['title']}")
+        if item.get("content"):
+            lines.append(f"   {item['content'][:180]}")
+        if item.get("url"):
+            lines.append(f"   {item['url']}")
+    return "\n".join(lines)
+
+
 # ================= MCP 工具（返回文本） =================
 
 
@@ -443,6 +661,30 @@ def search_promotions(keyword: str | None = None) -> str:
     return _format_promotions(_fetch_promotions(keyword), keyword or "促销活动")
 
 
+@server.tool(
+    description="通用网页搜索（Tavily），返回 LLM 优化的搜索结果摘要。query 必填，max_results 可选（默认 10）。"
+)
+def search_web(query: str, max_results: int = 10) -> str:
+    return _format_web_search(_fetch_web_search(query, max_results), query)
+
+
+@server.tool(
+    description="搜索某地在日期段内的热点活动（演唱会/音乐节/比赛/展览/节日等）。destination、start_date、end_date 必填（YYYY-MM-DD）。"
+)
+def search_events(destination: str, start_date: str, end_date: str, max_results: int = 10) -> str:
+    return _format_events(
+        _fetch_events(destination, start_date, end_date, max_results),
+        destination,
+        start_date,
+        end_date,
+    )
+
+
+@server.tool(description="搜索当地美食（大众点评/小红书/抖音等平台）。destination 必填。")
+def search_food(destination: str, max_results: int = 10) -> str:
+    return _format_food(_fetch_food(destination, max_results), destination)
+
+
 # ================= 确定性综合编排（JSON in / JSON out） =================
 
 
@@ -454,7 +696,7 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
 
 
 def run_search(input_data: dict) -> dict:
-    """输入 {destination, start_date, end_date?}，并行调用 4 个工具，返回结构化 JSON。"""
+    """输入 {destination, start_date, end_date?}，并行调用 6 个工具，返回结构化 JSON。"""
     destination = (input_data.get("destination") or "").strip()
     if not destination:
         raise ValueError("缺少 destination")
@@ -475,6 +717,8 @@ def run_search(input_data: dict) -> dict:
         "hotels": lambda: _fetch_hotels(destination, start, end),
         "poi": lambda: _fetch_poi(destination),
         "promotions": lambda: _fetch_promotions(f"{destination} 促销 特价"),
+        "events": lambda: _fetch_events(destination, start, end),
+        "food": lambda: _fetch_food(destination),
     }
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = {key: executor.submit(_run_safe, key, fn) for key, fn in tasks.items()}

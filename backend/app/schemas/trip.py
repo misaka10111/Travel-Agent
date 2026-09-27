@@ -26,10 +26,14 @@ class ItineraryItemRead(ItineraryItemBase):
 class TripBase(BaseModel):
     title: str
     destination: str
+    origin: str = ""
     start_date: date
     end_date: date
+    travelers: str = ""
     status: str = "draft"
     budget: float | None = None
+    budget_tiers: list[str] = []
+    purposes: list[str] = []
     notes: str = ""
 
 
@@ -40,10 +44,14 @@ class TripCreate(TripBase):
 class TripUpdate(BaseModel):
     title: str | None = None
     destination: str | None = None
+    origin: str | None = None
     start_date: date | None = None
     end_date: date | None = None
+    travelers: str | None = None
     status: str | None = None
     budget: float | None = None
+    budget_tiers: list[str] | None = None
+    purposes: list[str] | None = None
     notes: str | None = None
 
 
@@ -54,4 +62,3 @@ class TripRead(TripBase):
     created_at: datetime
     updated_at: datetime
     items: list[ItineraryItemRead] = []
-

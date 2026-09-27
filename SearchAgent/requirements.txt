@@ -5,3 +5,4 @@ langgraph>=1.0
 langchain>=1.0
 langchain-openai>=1.0
 langchain-mcp-adapters>=0.3
+tavily-python>=0.5
