@@ -163,13 +163,23 @@ def _backfill_links(plan: dict, search: dict) -> dict:
     """生成后按名称匹配回填链接，避免 url 进 prompt 导致 prompt 过长。"""
     entries: list[tuple[str, str]] = []
     for key in ("hotels", "poi", "food", "events", "promotions"):
-        for item in search.get(key) or []:
+        items = search.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
             name = item.get("name") or item.get("title") or ""
             url = item.get("url") or ""
             if name and url:
                 entries.append((name, url))
     for key in ("flights", "trains"):
-        for item in search.get(key) or []:
+        items = search.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict):
+                continue
             if key == "flights":
                 name = f"{item.get('airline') or ''}{item.get('flight_no') or ''}"
             else:
@@ -195,10 +205,16 @@ def _backfill_links(plan: dict, search: dict) -> dict:
         return best
 
     for p in plan.get("plans") or []:
+        if not isinstance(p, dict):
+            continue
         for it in p.get("itinerary") or []:
+            if not isinstance(it, dict):
+                continue
             hotel = it.get("hotel") or ""
             it["hotel_link"] = find_url(hotel)
             for s in it.get("schedule") or []:
+                if not isinstance(s, dict):
+                    continue
                 name = s.get("name") or ""
                 s["link"] = find_url(name)
     return plan
