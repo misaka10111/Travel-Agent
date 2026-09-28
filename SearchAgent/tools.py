@@ -8,6 +8,7 @@
 """
 
 import json
+import hashlib
 import os
 import re
 import ssl
@@ -24,10 +25,19 @@ import certifi
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from openai import OpenAI
+from pydantic import ValidationError
 from tavily import TavilyClient
+
+if __package__:
+    from .food import FoodSearchError, FoodSearchRequest, search_restaurants
+else:
+    from food import FoodSearchError, FoodSearchRequest, search_restaurants
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
+
+CACHE_DIR = BASE_DIR / "cache"
+CACHE_TTL = 3600  # 缓存有效期（秒），1 小时
 
 server = FastMCP(
     "search-tools",
@@ -63,14 +73,6 @@ EVENTS_FEATURE_PROMPT = (
     "输出 JSON：{\"features\":[\"音乐节,户外,10月\",...]}，顺序与输入一致。"
     "只输出 JSON，不要任何多余文字或代码块。"
 )
-
-FOOD_FEATURE_PROMPT = (
-    "你是美食信息提炼助手。为每个美食提炼 3~6 个特征标签（逗号分隔，每个 2~4 字）。"
-    "标签覆盖：菜系、特色菜品、价位、环境、适合人群。"
-    "输出 JSON：{\"features\":[\"杭帮菜,人均100,必吃\",...]}，顺序与输入一致。"
-    "只输出 JSON，不要任何多余文字或代码块。"
-)
-
 
 FLYAI_BIN = Path(__file__).resolve().parent / "node_modules" / ".bin" / "flyai"
 
@@ -541,11 +543,32 @@ def _fetch_events(
     return _extract_item_features(items, EVENTS_FEATURE_PROMPT)
 
 
-def _fetch_food(destination: str, max_results: int = 10) -> list[dict]:
-    """搜索当地美食（大众点评/小红书/抖音等平台），复用 Tavily。"""
-    query = f"{destination} 美食 必吃 餐厅 小吃 大众点评 小红书 抖音 探店"
-    items = _fetch_web_search(query, max_results=max_results)
-    return _extract_item_features(items, FOOD_FEATURE_PROMPT)
+def _food_request(
+    destination: str,
+    max_results: int | None = None,
+    food_options: dict | None = None,
+) -> FoodSearchRequest:
+    """统一餐饮参数；综合搜索目的地始终优先于 food_options.destination。"""
+    if food_options is not None and not isinstance(food_options, dict):
+        raise ValueError("food_options 必须是对象")
+    payload = dict(food_options or {})
+    payload["destination"] = destination
+    if max_results is not None:
+        payload.setdefault("limit", max_results)
+    try:
+        return FoodSearchRequest.model_validate(payload)
+    except ValidationError:
+        raise FoodSearchError("invalid_request", "餐饮查询参数不合法，请按请求 Schema 提供字段。", 422) from None
+
+
+def _fetch_food(
+    destination: str,
+    max_results: int = 10,
+    food_options: dict | None = None,
+) -> list[dict]:
+    """从高德检索餐厅，返回可直接传给 PlanAgent 的结构化餐厅列表。"""
+    response = search_restaurants(_food_request(destination, max_results, food_options))
+    return [restaurant.model_dump(mode="json") for restaurant in response.food]
 
 
 # ================= 文本格式化（MCP 工具用） =================
@@ -678,19 +701,6 @@ def _format_events(items: list[dict], destination: str, start_date: str, end_dat
     return "\n".join(lines)
 
 
-def _format_food(items: list[dict], destination: str) -> str:
-    if not items:
-        return f"没有找到「{destination}」的美食推荐。"
-    lines = [f"{destination} 美食推荐（前 {min(len(items), 10)} 条）："]
-    for item in items[:10]:
-        lines.append(f" - {item['title']}")
-        if item.get("content"):
-            lines.append(f"   {item['content'][:180]}")
-        if item.get("url"):
-            lines.append(f"   {item['url']}")
-    return "\n".join(lines)
-
-
 # ================= MCP 工具（返回文本） =================
 
 
@@ -782,9 +792,22 @@ def search_events(destination: str, start_date: str, end_date: str, max_results:
     )
 
 
-@server.tool(description="搜索当地美食（大众点评/小红书/抖音等平台）。destination 必填。")
-def search_food(destination: str, max_results: int = 10) -> str:
-    return _format_food(_fetch_food(destination, max_results), destination)
+@server.tool(
+    description="从高德搜索餐厅并返回完整 JSON。request 为对象，支持 destination、query、"
+    "location（longitude、latitude、coordinate_system=GCJ-02）、radius_m、cuisines、"
+    "keywords、max_price_per_person、min_rating、limit；价格和评分缺失保留 null。"
+)
+def search_food(request: dict) -> str:
+    try:
+        response = search_restaurants(FoodSearchRequest.model_validate(request))
+        return response.model_dump_json()
+    except ValidationError:
+        error = {"code": "invalid_request", "message": "餐饮查询参数不合法，请按请求 Schema 提供字段。"}
+    except FoodSearchError as exc:
+        error = {"code": exc.code, "message": exc.message}
+    except Exception:
+        error = {"code": "internal_error", "message": "餐饮检索服务内部错误。"}
+    return json.dumps({"error": error}, ensure_ascii=False)
 
 
 # ================= 确定性综合编排（JSON in / JSON out） =================
@@ -797,8 +820,54 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
         return key, {"error": str(exc)}
 
 
+def _cache_key(
+    destination: str,
+    start: str,
+    end: str,
+    origin: str,
+    food_options: dict | None = None,
+) -> str:
+    # 升级版本避开旧 Tavily 餐饮缓存；完整查询条件避免不同预算/坐标串用结果。
+    raw = json.dumps(
+        {
+            "version": "food-amap-v1",
+            "destination": destination,
+            "start": start,
+            "end": end,
+            "origin": origin,
+            "food_options": food_options or {},
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def _read_cache(key: str) -> dict | None:
+    path = CACHE_DIR / f"{key}.json"
+    if not path.exists():
+        return None
+    try:
+        if time.time() - path.stat().st_mtime > CACHE_TTL:
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_cache(key: str, result: dict) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (CACHE_DIR / f"{key}.json").write_text(
+            json.dumps(result, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def run_search(input_data: dict) -> dict:
-    """输入 {destination, start_date, end_date?, origin?}，并行调用 6~8 个工具，返回结构化 JSON。"""
+    """输入 {destination, start_date, end_date?, origin?, food_options?}，返回结构化 JSON。"""
     destination = (input_data.get("destination") or "").strip()
     if not destination:
         raise ValueError("缺少 destination")
@@ -808,6 +877,22 @@ def run_search(input_data: dict) -> dict:
     start = _normalize_date(start_date)
     end = _normalize_date(input_data["end_date"]) if input_data.get("end_date") else start
     origin = (input_data.get("origin") or "").strip()
+    food_request = _food_request(destination, food_options=input_data.get("food_options"))
+
+    # 餐饮参数在查询前验证并计入缓存键。
+    cache_key = _cache_key(
+        destination,
+        start,
+        end,
+        origin,
+        {
+            "request": food_request.model_dump(mode="json"),
+            "explicit_fields": sorted(food_request.model_fields_set),
+        },
+    )
+    cached = _read_cache(cache_key)
+    if cached is not None:
+        return cached
 
     result: dict[str, Any] = {
         "destination": destination,
@@ -823,7 +908,7 @@ def run_search(input_data: dict) -> dict:
         "poi": lambda: _fetch_poi(destination),
         "promotions": lambda: _fetch_promotions(f"{destination} 促销 特价"),
         "events": lambda: _fetch_events(destination, start, end),
-        "food": lambda: _fetch_food(destination),
+        "food": lambda: search_restaurants(food_request).model_dump(mode="json"),
     }
     if origin:
         tasks["flights"] = lambda: _fetch_round_trip(_fetch_flights, origin, destination, start, end)
@@ -834,6 +919,17 @@ def run_search(input_data: dict) -> dict:
             result_key, value = future.result()
             result[result_key] = value
 
+    food_response = result["food"]
+    food_succeeded = isinstance(food_response, dict) and isinstance(food_response.get("food"), list)
+    if food_succeeded:
+        result["food"] = food_response["food"]
+        result["food_meta"] = {
+            field: food_response[field]
+            for field in ("warnings", "resolved_query", "fetched_at", "source", "coordinate_system")
+            if field in food_response
+        }
+        _write_cache(cache_key, result)
+    # 餐饮上游失败时不缓存，下一次调用可恢复；其他工具已查到的数据照常返回。
     return result
 
 

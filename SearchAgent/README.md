@@ -9,13 +9,14 @@
 - `search_promotions`：检索飞猪促销活动/优惠商品（飞猪 FlyAI）
 - `search_web`：通用网页搜索（Tavily，需要 `TAVILY_API_KEY`）
 - `search_events`：搜索某地日期段内的热点活动（演唱会/比赛/节日等，Tavily）
-- `search_food`：搜索当地美食（大众点评/小红书/抖音等，Tavily）
+- `search_food`：从高德检索餐厅，返回位置、人均价格、评分、菜系及链接；自然语言条件用千问 `qwen-max` 提取
 
 文件说明：
 
 - `tools.py`：MCP **服务端**，暴露上述工具
 - `agent.py`：LangGraph **ReAct agent**，通过 `langchain-mcp-adapters` 把 MCP 工具桥接成
   LangChain 工具，用 DeepSeek（`deepseek-v4-pro`）做数据检索，并把结果返回给其他 agent 处理
+- 餐饮独立服务、请求 JSON、前端 TypeScript 示例和 PlanAgent 对接说明见 [FOOD_API.md](FOOD_API.md)。只开发餐饮可安装 `requirements-food.txt`，无需飞猪或 Tavily。
 
 ## 安装
 
@@ -35,6 +36,10 @@ cp .env.example .env
 
 然后编辑 `.env`，填入你的 `OPENAI_API_KEY`（默认走 DeepSeek，`OPENAI_BASE_URL` 和
 `OPENAI_MODEL` 可改，兼容任何 OpenAI 风格接口）。
+
+餐饮模块另外使用 `DASHSCOPE_API_KEY`、`QWEN_MODEL=qwen-max` 和 `AMAP_API_KEY`。
+高德需要 Web 服务类型的 key；真实 key 只保存于后端 `.env`。这组配置独立于其他模块的
+`OPENAI_*` 配置。配置和运行步骤见 [餐饮接口文档](FOOD_API.md)。
 
 酒店/机票工具默认即可**免 key 试用**（价格会被模糊显示）。如需更完整的数据和更稳定的
 调用，去飞猪控制台获取 API Key 后配置：

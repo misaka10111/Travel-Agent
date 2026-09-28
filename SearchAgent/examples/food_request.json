@@ -1,0 +1,17 @@
+{
+  "destination": "杭州",
+  "query": "西湖附近的杭帮菜，两个人吃饭，每人人均不超过100元",
+  "location": {
+    "longitude": 120.1488,
+    "latitude": 30.2424,
+    "coordinate_system": "GCJ-02"
+  },
+  "radius_m": 3000,
+  "cuisines": ["杭帮菜"],
+  "keywords": [],
+  "max_price_per_person": 100,
+  "min_rating": null,
+  "limit": 10,
+  "include_unknown_price": false,
+  "include_unknown_rating": false
+}

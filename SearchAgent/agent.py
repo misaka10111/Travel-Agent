@@ -32,6 +32,8 @@ SYSTEM_PROMPT = (
     "因此你不要总结、不要推荐、不要面向最终用户润色。"
     "可用工具及对应意图：get_weather=天气；search_hotels=酒店/住宿/住哪里；"
     "search_flights=机票/航班/怎么去；search_poi=景点/风景名胜/玩什么；"
+    "search_food=高德餐厅/餐饮/美食（传 request 对象，支持 destination、query、"
+    "location、radius_m、cuisines、keywords、max_price_per_person、min_rating、limit）；"
     "search_promotions=飞猪促销活动/优惠/特价；"
     "search_trip=综合搜索某目的地（同时查天气+酒店+景点）。"
     "当用户只给出目的地和日期、且没有明确单一意图时，调用 search_trip 做综合搜索。"

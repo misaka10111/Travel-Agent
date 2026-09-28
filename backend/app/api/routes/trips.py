@@ -32,8 +32,24 @@ def list_trips(
     return list(db.scalars(stmt))
 
 
-@router.post("", response_model=TripRead, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=TripRead)
 def create_trip(payload: TripCreate, db: Session = Depends(get_db)) -> Trip:
+    # 同用户同目的地同日期则更新，否则新增（避免重复行程）
+    existing = db.scalar(
+        select(Trip).where(
+            Trip.user_id == payload.user_id,
+            Trip.destination == payload.destination,
+            Trip.start_date == payload.start_date,
+            Trip.end_date == payload.end_date,
+        )
+    )
+    if existing:
+        for field, value in payload.model_dump(exclude={"items"}).items():
+            setattr(existing, field, value)
+        db.commit()
+        db.refresh(existing)
+        return existing
+
     trip = Trip(
         user_id=payload.user_id,
         title=payload.title,
