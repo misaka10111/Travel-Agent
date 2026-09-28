@@ -10,7 +10,18 @@ import validate
 BASE_DIR = Path(__file__).resolve().parent
 ROOT = BASE_DIR.parent
 PLAN_PY = ROOT / "PlanAgent" / "plan.py"
-PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
+PLAN_VENV = ROOT / "PlanAgent" / ".venv"
+PLAN_PYTHON = next(
+    (
+        path
+        for path in (
+            PLAN_VENV / "bin" / "python",
+            PLAN_VENV / "Scripts" / "python.exe",
+        )
+        if path.is_file()
+    ),
+    Path(sys.executable),
+)
 
 
 def generate_plan(context: dict, feedback: str | None = None) -> dict:

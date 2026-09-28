@@ -1,5 +1,6 @@
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -7,9 +8,18 @@ from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[4]
 ORCHESTRATOR_PY = ROOT / "Orchestrator" / "orchestrator.py"
-ORCHESTRATOR_PYTHON = ROOT / "Orchestrator" / ".venv" / "bin" / "python"
 SEARCH_PY = ROOT / "SearchAgent" / "search.py"
-SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
+
+
+def _python_for(component: str) -> Path:
+    """Use the component venv when present, otherwise reuse the API's interpreter."""
+    venv = ROOT / component / ".venv"
+    candidates = (venv / "bin" / "python", venv / "Scripts" / "python.exe")
+    return next((path for path in candidates if path.is_file()), Path(sys.executable))
+
+
+ORCHESTRATOR_PYTHON = _python_for("Orchestrator")
+SEARCH_PYTHON = _python_for("SearchAgent")
 
 router = APIRouter(prefix="/plan", tags=["plan"])
 
