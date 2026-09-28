@@ -196,5 +196,6 @@ flowchart TB
 - 前端 `AgentPage` 的生成按钮调用 `/api/plan`，不是 `/api/agent/chat`。聊天接口当前只返回占位文字。
 - `QuestionnaireAgent` 已实现独立问卷生成，但当前 Orchestrator 图和 `/api/plan` 路由都没有调用它。
 - `docker-compose.yml` 只定义 frontend 和 backend。Agent 脚本不是独立容器；后端计划路由以仓库根目录为基准查找 Orchestrator 和各 Agent，并要求对应 Python 环境存在。因此容器部署需要额外提供这些目录和解释器环境。
-- Orchestrator 和后端计划路由写死了 `.venv/bin/python` 路径；这适用于类 Unix 环境，Windows 本地运行需要调整解释器路径或兼容逻辑。
+- 后端计划路由、Orchestrator 和独立审核循环会优先使用各组件虚拟环境里的解释器，并兼容 Unix 与 Windows 路径；组件环境缺失时会回退到当前 Python 解释器。
+- Windows 上 FlyAI CLI 通过 Node 直接运行 bundle。已观察到 CLI 偶尔在成功输出 JSON 后触发 libuv 退出断言；包装器保留 `status: 0` 的有效响应，服务端限流或无效输出仍按失败处理。
 - 可选的 user profile 与 trip memory 流程通过 `BACKEND_URL` 回调 FastAPI；普通计划请求不带 `user_id` 时不会读取或保存这部分数据。
