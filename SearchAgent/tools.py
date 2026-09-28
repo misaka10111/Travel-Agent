@@ -10,6 +10,7 @@
 import json
 import os
 import re
+import shutil
 import ssl
 import subprocess
 import time
@@ -73,6 +74,14 @@ FOOD_FEATURE_PROMPT = (
 
 
 FLYAI_BIN = Path(__file__).resolve().parent / "node_modules" / ".bin" / "flyai"
+FLYAI_WINDOWS_ENTRY = (
+    Path(__file__).resolve().parent
+    / "node_modules"
+    / "@fly-ai"
+    / "flyai-cli"
+    / "dist"
+    / "flyai-bundle.cjs"
+)
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -111,7 +120,13 @@ def _http_get_json(url: str) -> dict:
 
 
 def _run_flyai(args: list[str]) -> dict:
-    cmd = [str(FLYAI_BIN), *args]
+    if os.name == "nt":
+        node = shutil.which("node")
+        if not node or not FLYAI_WINDOWS_ENTRY.is_file():
+            raise RuntimeError("未找到 Node.js 或 FlyAI CLI，请在 SearchAgent 目录运行 npm ci")
+        cmd = [node, str(FLYAI_WINDOWS_ENTRY), *args]
+    else:
+        cmd = [str(FLYAI_BIN), *args]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
