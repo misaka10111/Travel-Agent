@@ -2,10 +2,13 @@ import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { api } from '../api/client';
+import { findRestaurantForBlock, getFoodRestaurants, mergeSearchData } from '../api/food';
+import type { FoodSearchMeta, FoodSearchRequest, Restaurant } from '../api/types';
 
 type RealBlock = {
   id: string;
   day: number;
+  date: string;
   type: string;
   time: string;
   name: string;
@@ -34,6 +37,30 @@ function makeId() {
   return `${Date.now()}-${Math.random()}`;
 }
 
+function responseError(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && 'message' in value && typeof value.message === 'string') {
+    return value.message;
+  }
+  return '请求未成功，请重试。';
+}
+
+function checkedFoodQuery(query: string): string {
+  const trimmed = query.trim();
+  if (Array.from(trimmed).length > 2000) {
+    throw new Error('餐饮需求及修改历史超过 2000 字，请缩短输入，或重新生成行程后再修改。');
+  }
+  return trimmed;
+}
+
+const RATINGS = [
+  { label: '很满意', value: 5 },
+  { label: '满意', value: 4 },
+  { label: '一般', value: 3 },
+  { label: '不满意', value: 1 },
+];
+
 const FIELD_QUESTIONS: Record<string, string> = {
   origin: '您准备从哪里出发？',
   travelers: '几个人一起出行？',
@@ -45,6 +72,14 @@ const FIELD_QUESTIONS: Record<string, string> = {
 
 function hasDateMention(query: string): boolean {
   return /\d+\s*[天日月号]|\d{1,2}月|\d{4}[-/.]\d{1,2}/.test(query);
+}
+
+function detectModifyScope(query: string): string | null {
+  if (query.includes('酒店') || query.includes('住宿')) return '酒店';
+  if (query.includes('景点') || query.includes('活动')) return '景点';
+  if (query.includes('美食') || query.includes('餐厅') || query.includes('饭店') || query.includes('餐')) return '美食';
+  if (query.includes('交通') || query.includes('机票') || query.includes('高铁')) return '交通';
+  return null;
 }
 
 function getMissingFields(
@@ -81,7 +116,19 @@ function extractDestination(query: string): string {
   return '北京';
 }
 
-function PlanCard({ plan, onSelect }: { plan: RealPlan; onSelect: () => void }) {
+function PlanCard({
+  plan,
+  onSelect,
+  confirming,
+  onConfirm,
+  onRate,
+}: {
+  plan: RealPlan;
+  onSelect: () => void;
+  confirming: boolean;
+  onConfirm: (plan: RealPlan) => void;
+  onRate: (plan: RealPlan, rating: number) => void;
+}) {
   return (
     <article
       className="agent-recommendation-card agent-clickable-card"
@@ -98,6 +145,30 @@ function PlanCard({ plan, onSelect }: { plan: RealPlan; onSelect: () => void }) 
         <span>点击查看完整行程</span>
         <span aria-hidden="true">→</span>
       </div>
+      <button
+        type="button"
+        className="agent-confirm-btn"
+        onClick={(e) => {
+          e.stopPropagation();
+          onConfirm(plan);
+        }}
+      >
+        {confirming ? '请选择评价' : '确认此方案'}
+      </button>
+      {confirming && (
+        <div className="agent-rating" onClick={(e) => e.stopPropagation()}>
+          {RATINGS.map((r) => (
+            <button
+              key={r.value}
+              type="button"
+              className="agent-rating-btn"
+              onClick={() => onRate(plan, r.value)}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      )}
     </article>
   );
 }
@@ -106,14 +177,30 @@ function PlanDetail({
   plan,
   destination,
   dates,
+  selectedBlocks,
+  onToggleBlock,
+  searchData,
   onBack,
 }: {
   plan: RealPlan;
   destination: string;
   dates: string;
+  selectedBlocks: Set<string>;
+  onToggleBlock: (id: string) => void;
+  searchData: Record<string, unknown> | null;
   onBack: () => void;
 }) {
   const days = Array.from(new Set(plan.blocks.map((block) => block.day)));
+  const restaurants: Restaurant[] = getFoodRestaurants(searchData);
+  const foodMeta = searchData?.food_meta as FoodSearchMeta | undefined;
+  const foodResult = searchData?.food;
+  const foodError = foodResult && typeof foodResult === 'object' && 'error' in foodResult
+    ? responseError(foodResult.error)
+    : null;
+  const foodWarnings = Array.isArray(foodMeta?.warnings)
+    ? foodMeta.warnings.filter((warning) => typeof warning === 'string' && warning.trim())
+    : [];
+  const foodNotices = Array.from(new Set([foodError, ...foodWarnings].filter(Boolean)));
 
   return (
     <div className="agent-plan-detail">
@@ -134,26 +221,73 @@ function PlanDetail({
         </div>
       </div>
 
-      {days.map((day) => (
+      {foodNotices.length > 0 && (
+        <p className="agent-card-reason" role="status">餐饮提示：{foodNotices.join('；')}</p>
+      )}
+
+      {days.map((day) => {
+        const dayBlocks = plan.blocks.filter((block) => block.day === day);
+        const dayDate = dayBlocks[0]?.date ?? '';
+        const weatherDays = (searchData?.weather as { days?: Array<Record<string, unknown>> } | undefined)?.days ?? [];
+        const weather = weatherDays.find((d) => d.date === dayDate);
+        const events = (searchData?.events ?? []) as Array<{ title?: string }>;
+        return (
         <div key={day} className="agent-block-day">
           <div className="agent-block-day-label">Day {day}</div>
           <div className="agent-block-list">
-            {plan.blocks
-              .filter((block) => block.day === day)
-              .map((block) => (
-                <div key={block.id} className={`agent-block agent-block-${block.type}`}>
+            {weather && (
+              <div className="agent-block agent-block-weather">
+                <div className="agent-block-left">
+                  <span className="agent-block-time">天气</span>
+                  <span className="agent-block-type">天气</span>
+                </div>
+                <div className="agent-block-body">
+                  <strong>{String(weather.weather ?? '')} {String(weather.temp_min ?? '')}~{String(weather.temp_max ?? '')}°C</strong>
+                  <p>湿度 {String(weather.humidity ?? '')}%</p>
+                </div>
+              </div>
+            )}
+            {events.length > 0 && (
+              <div className="agent-block agent-block-event">
+                <div className="agent-block-left">
+                  <span className="agent-block-time">活动</span>
+                  <span className="agent-block-type">活动</span>
+                </div>
+                <div className="agent-block-body">
+                  <strong>热点活动</strong>
+                  <p>{events.slice(0, 2).map((e) => e.title).filter(Boolean).join('；')}</p>
+                </div>
+              </div>
+            )}
+            {dayBlocks
+              .map((block) => {
+                const restaurant = block.type === '美食'
+                  ? findRestaurantForBlock(block.name, restaurants)
+                  : undefined;
+                const restaurantLink = restaurant?.url || block.link;
+                return (
+                <div
+                  key={block.id}
+                  className={`agent-block agent-block-${block.type}${
+                    selectedBlocks.has(block.id) ? ' agent-block-selected' : ''
+                  }`}
+                  onClick={() => onToggleBlock(block.id)}
+                  role="button"
+                  tabIndex={0}
+                >
                   <div className="agent-block-left">
                     <span className="agent-block-time">{block.time}</span>
                     <span className="agent-block-type">{block.type}</span>
                   </div>
                   <div className="agent-block-body">
-                    {block.link ? (
+                    {restaurantLink ? (
                       <strong>
                         <a
-                          href={block.link}
+                          href={restaurantLink}
                           target="_blank"
                           rel="noopener noreferrer"
                           className="agent-block-link"
+                          onClick={(e) => e.stopPropagation()}
                         >
                           {block.name}
                         </a>
@@ -162,12 +296,36 @@ function PlanDetail({
                       <strong>{block.name}</strong>
                     )}
                     <p>{block.note}</p>
+                    {restaurant && (
+                      <>
+                        <p>
+                          菜系：{restaurant.cuisine || '未知'} · 人均：
+                          {restaurant.price_per_person == null ? '未知' : `¥${restaurant.price_per_person}/人/餐`}
+                          {' · '}评分：
+                          {restaurant.rating == null ? '未知' : `${restaurant.rating}/${restaurant.rating_scale}分`}
+                        </p>
+                        <p>地址：{restaurant.address || '未知'}</p>
+                      </>
+                    )}
+                    {block.type === '美食' && restaurantLink && (
+                      <a
+                        href={restaurantLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="agent-block-link"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        查看餐厅详情
+                      </a>
+                    )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
           </div>
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -185,8 +343,12 @@ export function AgentPage() {
   const [pendingQuery, setPendingQuery] = useState<string | null>(null);
   const [pendingFields, setPendingFields] = useState<string[]>([]);
   const [collected, setCollected] = useState<Record<string, string>>({});
+  const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
+  const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
+  const [searchData, setSearchData] = useState<Record<string, unknown> | null>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const autoStartedRef = useRef(false);
+  const foodQueryRef = useRef('');
 
   useEffect(() => {
     const textarea = composerRef.current;
@@ -195,13 +357,69 @@ export function AgentPage() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
   }, [draft]);
 
+  function toggleBlock(id: string) {
+    setSelectedBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function confirmPlan(plan: RealPlan) {
+    setConfirmingPlanId((prev) => (prev === plan.style ? null : plan.style));
+  }
+
+  async function ratePlan(plan: RealPlan, rating: number) {
+    const userId = localStorage.getItem('currentUser') || '';
+    const [start, end] = dates.includes(' ~ ') ? dates.split(' ~ ') : ['', ''];
+    try {
+      await api.saveTripMemory({
+        user_id: userId,
+        destination,
+        start_date: start,
+        end_date: end,
+        chosen_plan_style: plan.style,
+        final_plan: plan,
+        rating,
+      });
+      setConfirmingPlanId(null);
+      setMessages((current) => [
+        ...current,
+        {
+          id: makeId(),
+          role: 'assistant',
+          text: '已确认方案并记录你的评价，感谢反馈！',
+        },
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   async function generate(
     query: string,
     profile: unknown,
     basic: Record<string, unknown> | undefined,
+    modify?: unknown,
+    destination?: string,
+    start_date?: string,
+    end_date?: string,
+    foodQuery = query,
   ) {
     try {
-      const raw = await api.plan({ query, profile, basic });
+      const foodOptions: FoodSearchRequest = { query: checkedFoodQuery(foodQuery) };
+      const raw = await api.plan({
+        query, profile, basic, modify, destination, start_date, end_date,
+        food_options: foodOptions,
+      });
+      const failure = responseError(raw.error);
+      if (failure) throw new Error(failure);
+      setSearchData((raw.search ?? null) as Record<string, unknown> | null);
+      foodQueryRef.current = foodQuery.trim();
       const planData = (raw.plan ?? {}) as {
         destination?: string;
         start_date?: string;
@@ -240,6 +458,63 @@ export function AgentPage() {
     }
   }
 
+  async function localModify(
+    blockList: RealBlock[],
+    instruction: string,
+    profile: unknown,
+    basic: Record<string, unknown> | undefined,
+  ) {
+    try {
+      if (blockList.length === 0) return;
+
+      const [start, end] = dates.includes(' ~ ') ? dates.split(' ~ ') : ['', ''];
+      const foodOptions: FoodSearchRequest = {
+        query: checkedFoodQuery([
+          `原始旅行/餐饮需求及历史修改：\n${foodQueryRef.current || destination}`,
+          `最新修改（优先）：\n${instruction.trim()}`,
+          '保留未被最新修改明确改变的餐饮需求；旅行总预算不是每人每餐预算。',
+        ].join('\n')),
+      };
+      const raw = await api.plan({
+        destination,
+        start_date: start,
+        end_date: end,
+        profile,
+        basic,
+        modify: { blocks: blockList, instruction },
+        food_options: foodOptions,
+      });
+      const failure = responseError(raw.error);
+      if (failure) throw new Error(failure);
+      const modified = (raw as { blocks?: RealBlock[] }).blocks ?? [];
+      const byId = new Map(modified.map((b) => [b.id, b]));
+      setSearchData((previous) => mergeSearchData(
+        previous,
+        (raw.search ?? null) as Record<string, unknown> | null,
+      ));
+      foodQueryRef.current = `${foodQueryRef.current || destination}\n修改：${instruction.trim()}`;
+
+      setPlans((prev) =>
+        prev.map((p) => ({
+          ...p,
+          blocks: p.blocks.map((b) => byId.get(b.id) ?? b),
+        })),
+      );
+      setSelectedPlan((prev) =>
+        prev ? { ...prev, blocks: prev.blocks.map((b) => byId.get(b.id) ?? b) } : prev,
+      );
+      setSelectedBlocks(new Set());
+      setMessages((current) => [
+        ...current,
+        { id: makeId(), role: 'assistant', text: '已根据你的意见修改选中块。' },
+      ]);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   async function runPlan(query: string) {
     setMessages((current) => [...current, { id: makeId(), role: 'user', text: query }]);
     setDraft('');
@@ -266,6 +541,48 @@ export function AgentPage() {
       basic = undefined;
     }
 
+    // 修改流程：已选中 block，用户输入视为修改意见
+    if (selectedBlocks.size > 0) {
+      const selectedBlockList: RealBlock[] = [];
+      for (const p of plans) {
+        for (const b of p.blocks) {
+          if (selectedBlocks.has(b.id)) selectedBlockList.push(b);
+        }
+      }
+      await localModify(selectedBlockList, query.trim(), profile, basic);
+      return;
+    }
+
+    // 修改流程：没选块，但输入是修改指令（含「修改/改」），按类型范围收集块
+    if (query.includes('修改') || query.includes('改')) {
+      if (plans.length === 0) {
+        setLoading(false);
+        setMessages((current) => [
+          ...current,
+          {
+            id: makeId(),
+            role: 'assistant',
+            text: '还没有可修改的方案，请先告诉我想去哪里，生成方案后再修改。',
+          },
+        ]);
+        return;
+      }
+      const scope = detectModifyScope(query);
+      const blockList = plans
+        .flatMap((p) => p.blocks)
+        .filter((b) => !scope || b.type === scope);
+      if (blockList.length === 0) {
+        setLoading(false);
+        setMessages((current) => [
+          ...current,
+          { id: makeId(), role: 'assistant', text: '没有找到与你说的内容对应的块。' },
+        ]);
+        return;
+      }
+      await localModify(blockList, query.trim(), profile, basic);
+      return;
+    }
+
     // 正在追问中：这轮是回答上一题
     if (pendingFields.length > 0) {
       const answeredField = pendingFields[0];
@@ -286,8 +603,9 @@ export function AgentPage() {
       setPendingFields([]);
       const supplement = buildSupplement(nextCollected);
       const finalQuery = pendingQuery ? `${pendingQuery}，${supplement}` : query;
+      const foodQuery = pendingQuery ?? query;
       setPendingQuery(null);
-      await generate(finalQuery, profile, basic);
+      await generate(finalQuery, profile, basic, undefined, undefined, undefined, undefined, foodQuery);
       return;
     }
 
@@ -449,12 +767,22 @@ export function AgentPage() {
               plan={selectedPlan}
               destination={destination}
               dates={dates}
+              selectedBlocks={selectedBlocks}
+              onToggleBlock={toggleBlock}
+              searchData={searchData}
               onBack={() => setSelectedPlan(null)}
             />
           ) : plans.length > 0 ? (
             <div className="agent-recommendation-grid">
               {plans.map((plan) => (
-                <PlanCard key={plan.style} plan={plan} onSelect={() => setSelectedPlan(plan)} />
+                <PlanCard
+                  key={plan.style}
+                  plan={plan}
+                  onSelect={() => setSelectedPlan(plan)}
+                  confirming={confirmingPlanId === plan.style}
+                  onConfirm={confirmPlan}
+                  onRate={ratePlan}
+                />
               ))}
             </div>
           ) : (

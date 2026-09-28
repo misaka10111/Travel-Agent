@@ -15,7 +15,9 @@
 
 import json
 import os
+import re
 import sys
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
@@ -52,8 +54,23 @@ PLAN_SYSTEM_PROMPT = (
     "（name 取 flights/trains 的 outbound 里的一项，note 写「出发地→目的地 出发时间 价格」），"
     "最后一天结尾加一个 type=交通 的回程项（name 取 flights/trains 的 inbound 里的一项，反向）；"
     "9) schedule 每天 4~6 项（景点+午晚餐+必要交通），每项 note ≤20 字；优先用 search 里的真实景点/酒店/饭店名称；"
-    "10) 有 answers 时严格遵循；有 feedback 时修正；有 modify 时只改对应块；"
+    "餐饮活动的 name 使用 search.food 中餐厅的完整 name，保留分店名，餐次写在 time 或 note；"
+    "餐厅价格、评分和地址只能使用检索数据，null 表示未知；没有可用餐厅候选时说明数据不足，不编造饭店；"
+    "10) 有 answers 时严格遵循；有 feedback 时修正；若输入含 modify（block_ids 数组 + instruction 文本），"
+    "只按 instruction 修改 block_ids 对应的那些活动块，其余块保持不变，并返回完整计划；"
     "11) 只输出 JSON，不要任何多余文字或代码块。"
+)
+
+
+MODIFY_PROMPT = (
+    "你是旅行计划修改助手。根据 instruction 修改给定的 blocks（活动块）。"
+    "保持每个 block 的字段结构不变（id/day/date/type/time/name/note/link），只修改 instruction 要求的字段。"
+    "若 instruction 涉及酒店档次、景点类型等，可参考 search 数据里的真实名称替换；"
+    "替换餐厅时使用 search.food 中的真实候选，name 保留完整名称及分店名，候选不足时在 note 说明；"
+    "餐厅价格、评分和地址只使用检索数据，null 表示未知。"
+    "instruction 未涉及的 block 保持原样。"
+    "输出 JSON：{\"blocks\":[修改后的 block...]}，顺序与输入一致。"
+    "只输出 JSON，不要任何多余文字或代码块。"
 )
 
 
@@ -127,12 +144,24 @@ def _trim_search(search: dict) -> dict:
             for p in search["promotions"]
         ]
 
-    for key in ("events", "food"):
-        if isinstance(search.get(key), list):
-            result[key] = [
-                {"title": x.get("title"), "content": (x.get("content") or "")[:120]}
-                for x in search[key]
-            ]
+    if isinstance(search.get("events"), list):
+        result["events"] = [
+            {"title": x.get("title"), "content": (x.get("content") or "")[:120]}
+            for x in search["events"]
+        ]
+
+    if isinstance(search.get("food"), list):
+        food_fields = (
+            "id", "name", "title", "address", "location", "price_per_person", "currency",
+            "price_unit", "rating", "rating_scale", "cuisine", "cuisine_source", "category",
+            "typecode", "tags", "distance_m", "distance_kind", "missing_fields", "source", "fetched_at",
+        )
+        result["food"] = [
+            {**{field: item.get(field) for field in food_fields}, "content": (item.get("content") or "")[:120]}
+            for item in search["food"]
+        ]
+    if isinstance(search.get("food_meta"), dict):
+        result["food_meta"] = dict(search["food_meta"])
 
     for key in ("flights", "trains"):
         if isinstance(search.get(key), list):
@@ -162,14 +191,35 @@ def _trim_search(search: dict) -> dict:
 def _backfill_links(plan: dict, search: dict) -> dict:
     """生成后按名称匹配回填链接，避免 url 进 prompt 导致 prompt 过长。"""
     entries: list[tuple[str, str]] = []
-    for key in ("hotels", "poi", "food", "events", "promotions"):
-        for item in search.get(key) or []:
+    for key in ("hotels", "poi", "events", "promotions"):
+        items = search.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
             name = item.get("name") or item.get("title") or ""
             url = item.get("url") or ""
             if name and url:
                 entries.append((name, url))
+
+    # 餐厅分店不能靠名称前缀推断；同名多个 POI 也无法仅凭名称确定详情页。
+    def normalize_food_name(name: str) -> str:
+        return "".join(unicodedata.normalize("NFKC", name).split()).lower()
+
+    food_urls: dict[str, list[str]] = {}
+    food_items = search.get("food")
+    for item in food_items if isinstance(food_items, list) else []:
+        name = item.get("name") or item.get("title") or ""
+        if name:
+            food_urls.setdefault(normalize_food_name(name), []).append(item.get("url") or "")
+    meal_suffix = re.compile(
+        r"(?:\((?:早餐|午餐|晚餐|早饭|午饭|晚饭|下午茶|夜宵|宵夜|用餐|就餐)\)|"
+        r"[-—·:](?:早餐|午餐|晚餐|早饭|午饭|晚饭|下午茶|夜宵|宵夜|用餐|就餐))$"
+    )
     for key in ("flights", "trains"):
-        for item in search.get(key) or []:
+        items = search.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
             if key == "flights":
                 name = f"{item.get('airline') or ''}{item.get('flight_no') or ''}"
             else:
@@ -184,6 +234,12 @@ def _backfill_links(plan: dict, search: dict) -> dict:
         for name, url in entries:
             if name == target:
                 return url
+        normalized_target = normalize_food_name(target)
+        food_matches = food_urls.get(normalized_target)
+        if food_matches is None:
+            food_matches = food_urls.get(meal_suffix.sub("", normalized_target))
+        if food_matches is not None:
+            return food_matches[0] if len(food_matches) == 1 else ""
         # 前缀/包含匹配：取最长的匹配名，避免「酒店名 + 房型后缀」匹配不上
         best = ""
         best_len = 0
@@ -265,6 +321,56 @@ def build_plan(
     result = _build_meta(search_result)
     result["plans"] = plans
     return _backfill_links(result, search_result)
+
+
+def modify_blocks(
+    blocks: list[dict],
+    instruction: str,
+    search_result: dict | None = None,
+    profile: dict | None = None,
+    basic: dict | None = None,
+) -> dict:
+    """局部修改：只修改选中的 block，输出改完后的 blocks 列表。"""
+    kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
+    if os.getenv("OPENAI_BASE_URL"):
+        kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
+    client = OpenAI(**kwargs)
+
+    context: dict = {"blocks": blocks, "instruction": instruction}
+    if search_result:
+        context["search"] = _trim_search(search_result)
+    if profile:
+        context["user_profile"] = profile
+    if basic:
+        context["basic"] = basic
+
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        messages=[
+            {"role": "system", "content": MODIFY_PROMPT},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=3000,
+        timeout=120,
+    )
+    content = (resp.choices[0].message.content or "{}").strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    result = json.loads(content)
+    if isinstance(result, dict) and isinstance(result.get("blocks"), list):
+        modified_blocks = result["blocks"]
+        # 局部修改也使用检索来源回填链接，改了名称后不沿用旧店或模型猜测的网址。
+        link_plan = {"plans": [{"itinerary": [{"schedule": modified_blocks}]}]}
+        _backfill_links(link_plan, search_result or {})
+        originals = {block.get("id"): block for block in blocks if block.get("id")}
+        for block in modified_blocks:
+            original = originals.get(block.get("id"))
+            if original and original.get("link") and block.get("name") == original.get("name"):
+                block["link"] = original["link"]
+    return result
 
 
 TYPE_KEYWORDS = (
@@ -364,27 +470,37 @@ def main() -> None:
 
     try:
         data = json.loads(raw)
-        if isinstance(data, dict) and any(k in data for k in ("search", "profile", "basic", "answers", "feedback", "modify")):
-            search_result = data.get("search") or {}
-            profile = data.get("profile")
-            basic = data.get("basic")
-            answers = data.get("answers")
-            feedback = data.get("feedback")
-            modify = data.get("modify")
+        # 局部修改模式：输入含 blocks + instruction，只改选中块
+        if isinstance(data, dict) and data.get("blocks") is not None and data.get("instruction"):
+            result = modify_blocks(
+                data.get("blocks") or [],
+                data.get("instruction") or "",
+                data.get("search"),
+                data.get("profile"),
+                data.get("basic"),
+            )
         else:
-            search_result = data
-            profile = None
-            basic = None
-            answers = None
-            feedback = None
-            modify = None
-        plan = build_plan(search_result, profile, basic, answers, feedback, modify)
-        if isinstance(plan, dict) and "error" not in plan:
-            plan["blocks"] = blockify(plan)
+            if isinstance(data, dict) and any(k in data for k in ("search", "profile", "basic", "answers", "feedback", "modify")):
+                search_result = data.get("search") or {}
+                profile = data.get("profile")
+                basic = data.get("basic")
+                answers = data.get("answers")
+                feedback = data.get("feedback")
+                modify = data.get("modify")
+            else:
+                search_result = data
+                profile = None
+                basic = None
+                answers = None
+                feedback = None
+                modify = None
+            result = build_plan(search_result, profile, basic, answers, feedback, modify)
+            if isinstance(result, dict) and "error" not in result:
+                result["blocks"] = blockify(result)
     except Exception as exc:  # noqa: BLE001
-        plan = {"error": str(exc)}
+        result = {"error": str(exc)}
 
-    print(json.dumps(plan, ensure_ascii=False, indent=2))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":

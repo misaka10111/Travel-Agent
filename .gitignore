@@ -8,6 +8,7 @@ venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+SearchAgent/cache/
 *.db
 *.sqlite3
 .env
@@ -32,4 +33,3 @@ pnpm-debug.log*
 htmlcov/
 .coverage
 coverage.xml
-

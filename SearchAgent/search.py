@@ -29,7 +29,7 @@ PARSE_SYSTEM_PROMPT = (
     "end_date（结束日期，格式 YYYY-MM-DD，可选）、"
     "origin（出发地，可选）、"
     "travelers（出行人数，字符串，可选，如 2人）、"
-    "budget（预算金额，数字，可选，如 5000）、"
+    "budget（整段旅行的总预算金额，数字，可选，如 5000；餐饮人均或每餐预算不填入此字段）、"
     "purposes（旅行目的，字符串数组，可选，如 [\"美食\",\"文化\"]）。"
     f"如果用户只给了时长（如「玩3天」）而没有具体日期，则 start_date 默认为今天（{date.today().strftime('%Y-%m-%d')}），end_date 为 start_date 加上对应天数；"
     "如果日期没有年份，默认今年。"
@@ -73,7 +73,10 @@ def parse_nl(query: str) -> dict:
         result["start_date"] = today.isoformat()
         result["end_date"] = (today + timedelta(days=2)).isoformat()
     elif not result.get("end_date"):
-        result["end_date"] = result["start_date"]
+        # end_date 缺失时，默认 3 天行程（start + 2 天），避免只 1 天导致酒店入离校验失败
+        result["end_date"] = (
+            date.fromisoformat(result["start_date"]) + timedelta(days=2)
+        ).isoformat()
 
     return result
 

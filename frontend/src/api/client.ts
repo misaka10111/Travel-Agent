@@ -2,6 +2,7 @@ import type {
   ChatMessage,
   ChatResponse,
   Destination,
+  FoodSearchRequest,
   Trip,
   TripCreatePayload,
   UserProfile,
@@ -63,6 +64,8 @@ export const api = {
     profile?: unknown;
     basic?: unknown;
     answers?: unknown[];
+    food_options?: FoodSearchRequest;
+    modify?: unknown;
   }) =>
     request<Record<string, unknown>>('/plan', {
       method: 'POST',
@@ -83,4 +86,15 @@ export const api = {
       '/auth/login',
       { method: 'POST', body: JSON.stringify({ phone, code }) },
     ),
+  saveTripMemory: (payload: {
+    user_id: string;
+    destination: string;
+    start_date: string;
+    end_date: string;
+    chosen_plan_style?: string;
+    final_plan?: unknown;
+    rating?: number;
+    feedback?: string;
+  }) =>
+    request('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
 };
