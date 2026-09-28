@@ -8,6 +8,7 @@
 """
 
 import json
+import hashlib
 import os
 import re
 import ssl
@@ -28,6 +29,9 @@ from tavily import TavilyClient
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
+
+CACHE_DIR = BASE_DIR / "cache"
+CACHE_TTL = 3600  # 缓存有效期（秒），1 小时
 
 server = FastMCP(
     "search-tools",
@@ -797,6 +801,33 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
         return key, {"error": str(exc)}
 
 
+def _cache_key(destination: str, start: str, end: str, origin: str) -> str:
+    raw = "|".join([destination, start, end, origin])
+    return hashlib.md5(raw.encode("utf-8")).hexdigest()
+
+
+def _read_cache(key: str) -> dict | None:
+    path = CACHE_DIR / f"{key}.json"
+    if not path.exists():
+        return None
+    try:
+        if time.time() - path.stat().st_mtime > CACHE_TTL:
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _write_cache(key: str, result: dict) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (CACHE_DIR / f"{key}.json").write_text(
+            json.dumps(result, ensure_ascii=False), encoding="utf-8"
+        )
+    except Exception:
+        pass
+
+
 def run_search(input_data: dict) -> dict:
     """输入 {destination, start_date, end_date?, origin?}，并行调用 6~8 个工具，返回结构化 JSON。"""
     destination = (input_data.get("destination") or "").strip()
@@ -808,6 +839,12 @@ def run_search(input_data: dict) -> dict:
     start = _normalize_date(start_date)
     end = _normalize_date(input_data["end_date"]) if input_data.get("end_date") else start
     origin = (input_data.get("origin") or "").strip()
+
+    # 缓存：同一目的地/日期/出发地的结果直接复用，避免反复调用飞猪/Tavily/天气
+    cache_key = _cache_key(destination, start, end, origin)
+    cached = _read_cache(cache_key)
+    if cached is not None:
+        return cached
 
     result: dict[str, Any] = {
         "destination": destination,
@@ -834,6 +871,7 @@ def run_search(input_data: dict) -> dict:
             result_key, value = future.result()
             result[result_key] = value
 
+    _write_cache(cache_key, result)
     return result
 
 

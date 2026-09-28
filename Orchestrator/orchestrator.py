@@ -83,6 +83,7 @@ class State(TypedDict, total=False):
     profile: dict
     basic: dict
     answers: list
+    modify: dict
     search: dict
     plan: dict
     audit: dict
@@ -127,6 +128,8 @@ def plan_node(state: State) -> dict:
     }
     if state.get("feedback"):
         payload["feedback"] = state["feedback"]
+    if state.get("modify"):
+        payload["modify"] = state["modify"]
     result = _call(PLAN_PYTHON, PLAN_PY, payload)
     return {"plan": result, "iteration": state.get("iteration", 0) + 1}
 
@@ -164,6 +167,13 @@ def should_continue(state: State) -> str:
     return "plan"
 
 
+def should_validate(state: State) -> str:
+    # modify 流程跳过 validate，直接返回修改后的计划
+    if state.get("modify"):
+        return "end"
+    return "validate"
+
+
 def build_graph():
     graph = StateGraph(State)
     graph.add_node("search", search_node)
@@ -171,7 +181,7 @@ def build_graph():
     graph.add_node("validate", validate_node)
     graph.add_edge(START, "search")
     graph.add_edge("search", "plan")
-    graph.add_edge("plan", "validate")
+    graph.add_conditional_edges("plan", should_validate, {"validate": "validate", "end": END})
     graph.add_conditional_edges("validate", should_continue, {"plan": "plan", "end": END})
     return graph.compile(checkpointer=MemorySaver())
 

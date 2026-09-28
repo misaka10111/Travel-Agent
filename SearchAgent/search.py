@@ -73,7 +73,10 @@ def parse_nl(query: str) -> dict:
         result["start_date"] = today.isoformat()
         result["end_date"] = (today + timedelta(days=2)).isoformat()
     elif not result.get("end_date"):
-        result["end_date"] = result["start_date"]
+        # end_date 缺失时，默认 3 天行程（start + 2 天），避免只 1 天导致酒店入离校验失败
+        result["end_date"] = (
+            date.fromisoformat(result["start_date"]) + timedelta(days=2)
+        ).isoformat()
 
     return result
 

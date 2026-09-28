@@ -1420,6 +1420,52 @@ button:disabled {
   font-weight: 700;
 }
 
+.agent-confirm-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 12px;
+  padding: 8px 14px;
+  border: 1px solid #dde2ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #5267ff;
+  font-size: 13px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.agent-confirm-btn:hover {
+  border-color: rgba(82, 103, 255, 0.4);
+  background: #f7f8fc;
+}
+
+.agent-rating {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.agent-rating-btn {
+  padding: 6px 12px;
+  border: 1px solid #dde2ee;
+  border-radius: 999px;
+  background: #fff;
+  color: #4a5568;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.agent-rating-btn:hover {
+  border-color: rgba(82, 103, 255, 0.5);
+  color: #5267ff;
+  background: #f0edff;
+}
+
 .agent-chat-composer-v3 {
   position: sticky;
   bottom: 12px;
@@ -1611,6 +1657,18 @@ button:disabled {
   border: 1px solid #e8ebf3;
   border-radius: 16px;
   background: #fff;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.agent-block:hover {
+  border-color: rgba(82, 103, 255, 0.35);
+}
+
+.agent-block-selected {
+  border-color: var(--agent-blue);
+  background: #f5f7ff;
+  box-shadow: 0 0 0 2px rgba(82, 103, 255, 0.2);
 }
 
 .agent-block-left {
@@ -1669,4 +1727,6 @@ button:disabled {
 .agent-block-美食 .agent-block-type { background: #fff1e8; color: #d97706; }
 .agent-block-景点 .agent-block-type { background: #e9f8f0; color: #18794e; }
 .agent-block-酒店 .agent-block-type { background: #f0edff; color: #6152cc; }
+.agent-block-weather .agent-block-type { background: #e0f2fe; color: #0284c7; }
+.agent-block-event .agent-block-type { background: #fef3c7; color: #d97706; }
 .agent-block-活动 .agent-block-type { background: #ffeaf6; color: #c0265b; }
