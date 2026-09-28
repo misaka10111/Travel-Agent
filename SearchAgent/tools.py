@@ -130,10 +130,18 @@ def _run_flyai(args: list[str]) -> dict:
     result = subprocess.run(
         cmd, capture_output=True, text=True, encoding="utf-8", timeout=90
     )
-    if result.returncode != 0:
+    try:
+        data = json.loads(result.stdout.strip())
+    except json.JSONDecodeError as exc:
         detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"flyai 调用失败：{detail}") from exc
+
+    # On Windows the CLI can emit a successful JSON response, then assert while
+    # libuv closes handles and exit nonzero. Keep a complete successful result.
+    if result.returncode != 0 and data.get("status") not in (0, None):
+        detail = data.get("message") or (result.stderr or "").strip()
         raise RuntimeError(f"flyai 调用失败：{detail}")
-    return json.loads(result.stdout.strip())
+    return data
 
 
 def _normalize_date(value: str) -> str:
