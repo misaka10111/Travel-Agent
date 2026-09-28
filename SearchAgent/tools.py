@@ -127,7 +127,9 @@ def _run_flyai(args: list[str]) -> dict:
         cmd = [node, str(FLYAI_WINDOWS_ENTRY), *args]
     else:
         cmd = [str(FLYAI_BIN), *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, encoding="utf-8", timeout=90
+    )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"flyai 调用失败：{detail}")

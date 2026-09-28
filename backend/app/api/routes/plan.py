@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -41,6 +42,8 @@ def _parse_query(query: str) -> dict:
             input=query,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             timeout=120,
         )
         return json.loads(proc.stdout)
@@ -93,6 +96,8 @@ def create_plan(payload: PlanRequest) -> dict:
             input=json.dumps(data, ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
             timeout=600,
         )
         return json.loads(proc.stdout)

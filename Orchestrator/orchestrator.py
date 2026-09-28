@@ -106,6 +106,8 @@ def _call(python: Path, script: Path, payload: dict) -> dict:
         input=json.dumps(payload, ensure_ascii=False),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         timeout=600,
     )
     try:

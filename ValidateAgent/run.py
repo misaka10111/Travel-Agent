@@ -1,6 +1,7 @@
 """ValidateAgent 审核循环：PlanAgent 生成 → 审核 → 不过则退回修改，直到通过或达到最大轮数。"""
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -33,6 +34,8 @@ def generate_plan(context: dict, feedback: str | None = None) -> dict:
         input=json.dumps(payload, ensure_ascii=False),
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
         timeout=300,
     )
     try:
