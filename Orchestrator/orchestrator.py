@@ -1,7 +1,7 @@
-"""Orchestrator：用 LangGraph 编排 SearchAgent → QuestionnaireAgent → PlanAgent ⇄ ValidateAgent。
+"""Orchestrator：用 LangGraph 编排 SearchAgent → PlanAgent ⇄ ValidateAgent。
 
 图结构：
-  START → search → questionnaire → plan → validate
+  START → search → plan → validate
             validate --通过/达到最大轮数--> END
             validate --不通过--> plan（携带 feedback 重新生成）
 
@@ -29,8 +29,6 @@ ROOT = Path(__file__).resolve().parent.parent
 
 SEARCH_PY = ROOT / "SearchAgent" / "search.py"
 SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
-QUESTIONNAIRE_PY = ROOT / "QuestionnaireAgent" / "questionnaire.py"
-QUESTIONNAIRE_PYTHON = ROOT / "QuestionnaireAgent" / ".venv" / "bin" / "python"
 PLAN_PY = ROOT / "PlanAgent" / "plan.py"
 PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
 VALIDATE_PY = ROOT / "ValidateAgent" / "validate.py"
@@ -84,10 +82,8 @@ class State(TypedDict, total=False):
     end_date: str
     profile: dict
     basic: dict
-    need_questionnaire: bool
     answers: list
     search: dict
-    questions: dict
     plan: dict
     audit: dict
     feedback: str
@@ -110,35 +106,23 @@ def _call(python: Path, script: Path, payload: dict) -> dict:
 
 
 def search_node(state: State) -> dict:
-    result = _call(
-        SEARCH_PYTHON,
-        SEARCH_PY,
-        {
-            "destination": state["destination"],
-            "start_date": state["start_date"],
-            "end_date": state.get("end_date"),
-        },
-    )
+    basic = state.get("basic") or {}
+    payload = {
+        "destination": state["destination"],
+        "start_date": state["start_date"],
+        "end_date": state.get("end_date"),
+    }
+    if basic.get("origin"):
+        payload["origin"] = basic["origin"]
+    result = _call(SEARCH_PYTHON, SEARCH_PY, payload)
     return {"search": result}
-
-
-def questionnaire_node(state: State) -> dict:
-    result = _call(
-        QUESTIONNAIRE_PYTHON,
-        QUESTIONNAIRE_PY,
-        {
-            "profile": state.get("profile"),
-            "search": state.get("search"),
-            "basic": state.get("basic"),
-        },
-    )
-    return {"questions": result}
 
 
 def plan_node(state: State) -> dict:
     payload = {
         "profile": state.get("profile"),
         "search": state.get("search"),
+        "basic": state.get("basic"),
         "answers": state.get("answers"),
     }
     if state.get("feedback"):
@@ -174,14 +158,6 @@ def validate_node(state: State) -> dict:
     }
 
 
-def should_questionnaire(state: State) -> str:
-    # 当前 /api/plan 是一次性生成计划，问卷交互尚未接入；
-    # 仅在显式请求问卷时才走 questionnaire，否则直接 plan，省一次 LLM 调用。
-    if state.get("need_questionnaire"):
-        return "questionnaire"
-    return "plan"
-
-
 def should_continue(state: State) -> str:
     if state.get("audit", {}).get("passed") or state.get("iteration", 0) >= MAX_ITERATIONS:
         return "end"
@@ -191,16 +167,10 @@ def should_continue(state: State) -> str:
 def build_graph():
     graph = StateGraph(State)
     graph.add_node("search", search_node)
-    graph.add_node("questionnaire", questionnaire_node)
     graph.add_node("plan", plan_node)
     graph.add_node("validate", validate_node)
     graph.add_edge(START, "search")
-    graph.add_conditional_edges(
-        "search",
-        should_questionnaire,
-        {"questionnaire": "questionnaire", "plan": "plan"},
-    )
-    graph.add_edge("questionnaire", "plan")
+    graph.add_edge("search", "plan")
     graph.add_edge("plan", "validate")
     graph.add_conditional_edges("validate", should_continue, {"plan": "plan", "end": END})
     return graph.compile(checkpointer=MemorySaver())
@@ -233,7 +203,6 @@ def main() -> None:
             )
         output = {
             "search": result.get("search"),
-            "questions": result.get("questions"),
             "plan": result.get("plan"),
             "passed": (result.get("audit") or {}).get("passed"),
             "history": result.get("history"),

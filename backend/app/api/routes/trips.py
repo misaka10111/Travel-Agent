@@ -19,18 +19,23 @@ def _get_trip_or_404(db: Session, trip_id: int) -> Trip:
 
 
 @router.get("", response_model=list[TripRead])
-def list_trips(db: Session = Depends(get_db)) -> list[Trip]:
+def list_trips(
+    user_id: str | None = None, db: Session = Depends(get_db)
+) -> list[Trip]:
     stmt = (
         select(Trip)
         .options(selectinload(Trip.items))
-        .order_by(Trip.created_at.desc())
     )
+    if user_id:
+        stmt = stmt.where(Trip.user_id == user_id)
+    stmt = stmt.order_by(Trip.created_at.desc())
     return list(db.scalars(stmt))
 
 
 @router.post("", response_model=TripRead, status_code=status.HTTP_201_CREATED)
 def create_trip(payload: TripCreate, db: Session = Depends(get_db)) -> Trip:
     trip = Trip(
+        user_id=payload.user_id,
         title=payload.title,
         destination=payload.destination,
         origin=payload.origin,

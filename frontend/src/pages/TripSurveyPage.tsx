@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { TripCreatePayload, TripInfo } from '../api/types';
 
@@ -57,6 +58,7 @@ function toTripPayload(form: TripInfo): TripCreatePayload {
       : `${form.destination}之旅`
     : '未命名行程';
   return {
+    user_id: localStorage.getItem('currentUser') || '',
     title,
     destination: form.destination,
     origin: form.origin,
@@ -70,6 +72,7 @@ function toTripPayload(form: TripInfo): TripCreatePayload {
 }
 
 export function TripSurveyPage() {
+  const navigate = useNavigate();
   const [form, setForm] = useState<TripInfo>(() => {
     try {
       const raw = localStorage.getItem('tripInfo');
@@ -108,6 +111,7 @@ export function TripSurveyPage() {
     try {
       await api.createTrip(toTripPayload(form));
       setSaved(true);
+      navigate('/agent', { state: { autostart: true } });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -231,6 +235,13 @@ export function TripSurveyPage() {
           <div className="profile-actions">
             <button type="submit" className="agent-primary-button">
               保存
+            </button>
+            <button
+              type="button"
+              className="agent-secondary-button"
+              onClick={() => navigate('/agent')}
+            >
+              跳过
             </button>
             {saved && <span className="agent-status-badge complete">已保存 ✓</span>}
             {error && <span className="login-error">{error}</span>}

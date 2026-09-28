@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.api.routes import (
     agent,
+    auth,
     behavior_signal,
     destinations,
     health,
@@ -46,6 +47,7 @@ app.add_middleware(
 
 api_prefix = settings.api_prefix
 app.include_router(health.router, prefix=api_prefix)
+app.include_router(auth.router, prefix=api_prefix)
 app.include_router(trips.router, prefix=api_prefix)
 app.include_router(destinations.router, prefix=api_prefix)
 app.include_router(agent.router, prefix=api_prefix)

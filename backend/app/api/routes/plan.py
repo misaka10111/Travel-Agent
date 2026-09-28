@@ -20,6 +20,7 @@ class PlanRequest(BaseModel):
     start_date: str | None = None
     end_date: str | None = None
     profile: dict | None = None
+    basic: dict | None = None
     answers: list | None = None
 
 
@@ -42,6 +43,7 @@ def create_plan(payload: PlanRequest) -> dict:
     destination = payload.destination
     start_date = payload.start_date
     end_date = payload.end_date
+    parsed: dict = {}
 
     if payload.query and not destination:
         parsed = _parse_query(payload.query)
@@ -57,8 +59,21 @@ def create_plan(payload: PlanRequest) -> dict:
         "start_date": start_date,
         "end_date": end_date,
     }
+    # 把 query 里解析出的出发地/人数/预算/目的合并进 basic（优先保留已填的 tripInfo）
+    basic = dict(payload.basic or {})
+    if parsed:
+        if parsed.get("origin") and not basic.get("origin"):
+            basic["origin"] = parsed["origin"]
+        if parsed.get("travelers") and not basic.get("travelers"):
+            basic["travelers"] = parsed["travelers"]
+        if parsed.get("budget") and not basic.get("total_budget"):
+            basic["total_budget"] = str(parsed["budget"])
+        if parsed.get("purposes") and not basic.get("purposes"):
+            basic["purposes"] = parsed["purposes"]
     if payload.profile:
         data["profile"] = payload.profile
+    if basic:
+        data["basic"] = basic
     if payload.answers:
         data["answers"] = payload.answers
 

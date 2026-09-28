@@ -11,6 +11,7 @@ export interface ItineraryItem {
 
 export interface Trip {
   id: number;
+  user_id: string;
   title: string;
   destination: string;
   origin: string;
@@ -36,6 +37,7 @@ export interface Destination {
 }
 
 export interface TripCreatePayload {
+  user_id?: string;
   title: string;
   destination: string;
   origin?: string;

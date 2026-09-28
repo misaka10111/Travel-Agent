@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent, KeyboardEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import { api } from '../api/client';
 
 type RealBlock = {
@@ -9,6 +10,7 @@ type RealBlock = {
   time: string;
   name: string;
   note: string;
+  link: string;
 };
 
 type RealPlan = {
@@ -30,6 +32,46 @@ const KNOWN_CITIES = [
 
 function makeId() {
   return `${Date.now()}-${Math.random()}`;
+}
+
+const FIELD_QUESTIONS: Record<string, string> = {
+  origin: '您准备从哪里出发？',
+  travelers: '几个人一起出行？',
+  total_budget: '这次预算大概多少元？',
+  purposes: '这次主要想做什么？比如美食、文化、自然风光。',
+  start_date: '计划哪天出发？',
+  end_date: '哪天返程？',
+};
+
+function hasDateMention(query: string): boolean {
+  return /\d+\s*[天日月号]|\d{1,2}月|\d{4}[-/.]\d{1,2}/.test(query);
+}
+
+function getMissingFields(
+  basic: Record<string, unknown> | undefined,
+  query: string,
+): string[] {
+  const missing: string[] = [];
+  if (!basic?.origin) missing.push('origin');
+  if (!basic?.travelers) missing.push('travelers');
+  if (!basic?.total_budget) missing.push('total_budget');
+  if (!basic?.purposes || (basic.purposes as unknown[]).length === 0) missing.push('purposes');
+  if (!basic?.start_date && !hasDateMention(query)) missing.push('start_date');
+  if (!basic?.end_date && !hasDateMention(query)) missing.push('end_date');
+  return missing;
+}
+
+function buildSupplement(collected: Record<string, string>): string {
+  const parts: string[] = [];
+  if (collected.origin) parts.push(`从${collected.origin}出发`);
+  if (collected.travelers) {
+    parts.push(collected.travelers.includes('人') ? collected.travelers : `${collected.travelers}人`);
+  }
+  if (collected.total_budget) parts.push(`预算${collected.total_budget}元`);
+  if (collected.purposes) parts.push(`主要想做${collected.purposes}`);
+  if (collected.start_date) parts.push(`${collected.start_date}出发`);
+  if (collected.end_date) parts.push(`${collected.end_date}返程`);
+  return parts.join('，');
 }
 
 function extractDestination(query: string): string {
@@ -105,7 +147,20 @@ function PlanDetail({
                     <span className="agent-block-type">{block.type}</span>
                   </div>
                   <div className="agent-block-body">
-                    <strong>{block.name}</strong>
+                    {block.link ? (
+                      <strong>
+                        <a
+                          href={block.link}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="agent-block-link"
+                        >
+                          {block.name}
+                        </a>
+                      </strong>
+                    ) : (
+                      <strong>{block.name}</strong>
+                    )}
                     <p>{block.note}</p>
                   </div>
                 </div>
@@ -118,6 +173,7 @@ function PlanDetail({
 }
 
 export function AgentPage() {
+  const location = useLocation();
   const [draft, setDraft] = useState('');
   const [messages, setMessages] = useState<MessageItem[]>([]);
   const [plans, setPlans] = useState<RealPlan[]>([]);
@@ -126,7 +182,11 @@ export function AgentPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedPlan, setSelectedPlan] = useState<RealPlan | null>(null);
+  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
+  const [pendingFields, setPendingFields] = useState<string[]>([]);
+  const [collected, setCollected] = useState<Record<string, string>>({});
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const autoStartedRef = useRef(false);
 
   useEffect(() => {
     const textarea = composerRef.current;
@@ -135,26 +195,13 @@ export function AgentPage() {
     textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
   }, [draft]);
 
-  async function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    const query = draft.trim();
-    if (!query || loading) return;
-
-    setMessages((current) => [...current, { id: makeId(), role: 'user', text: query }]);
-    setDraft('');
-    setLoading(true);
-    setError('');
-    setSelectedPlan(null);
-
+  async function generate(
+    query: string,
+    profile: unknown,
+    basic: Record<string, unknown> | undefined,
+  ) {
     try {
-      let profile: unknown = undefined;
-      try {
-        profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
-      } catch {
-        profile = undefined;
-      }
-
-      const raw = await api.plan({ query, profile });
+      const raw = await api.plan({ query, profile, basic });
       const planData = (raw.plan ?? {}) as {
         destination?: string;
         start_date?: string;
@@ -192,6 +239,112 @@ export function AgentPage() {
       setLoading(false);
     }
   }
+
+  async function runPlan(query: string) {
+    setMessages((current) => [...current, { id: makeId(), role: 'user', text: query }]);
+    setDraft('');
+    setLoading(true);
+    setError('');
+    setSelectedPlan(null);
+
+    let profile: unknown = undefined;
+    try {
+      profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
+    } catch {
+      profile = undefined;
+    }
+
+    let basic: Record<string, unknown> | undefined = undefined;
+    try {
+      basic = JSON.parse(localStorage.getItem('tripInfo') || '{}');
+    } catch {
+      basic = undefined;
+    }
+
+    // 关键：若 tripInfo 的目的地与当前 query 说的目的地不一致，视为新旅行，忽略旧 tripInfo
+    if (basic?.destination && !query.includes(String(basic.destination))) {
+      basic = undefined;
+    }
+
+    // 正在追问中：这轮是回答上一题
+    if (pendingFields.length > 0) {
+      const answeredField = pendingFields[0];
+      const nextCollected = { ...collected, [answeredField]: query.trim() };
+      const remaining = pendingFields.slice(1);
+      setCollected(nextCollected);
+
+      if (remaining.length > 0) {
+        setPendingFields(remaining);
+        setLoading(false);
+        setMessages((current) => [
+          ...current,
+          { id: makeId(), role: 'assistant', text: FIELD_QUESTIONS[remaining[0]] },
+        ]);
+        return;
+      }
+
+      setPendingFields([]);
+      const supplement = buildSupplement(nextCollected);
+      const finalQuery = pendingQuery ? `${pendingQuery}，${supplement}` : query;
+      setPendingQuery(null);
+      await generate(finalQuery, profile, basic);
+      return;
+    }
+
+    // 第一次输入：检测缺失字段，逐个追问
+    const missing = getMissingFields(basic, query);
+    if (missing.length > 0) {
+      setPendingQuery(query);
+      setPendingFields(missing);
+      setCollected({});
+      setLoading(false);
+      setMessages((current) => [
+        ...current,
+        { id: makeId(), role: 'assistant', text: FIELD_QUESTIONS[missing[0]] },
+      ]);
+      return;
+    }
+
+    await generate(query, profile, basic);
+  }
+
+  function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const query = draft.trim();
+    if (!query || loading) return;
+    runPlan(query);
+  }
+
+  useEffect(() => {
+    const state = location.state as { autostart?: boolean } | null;
+    if (!state?.autostart || autoStartedRef.current) return;
+    autoStartedRef.current = true;
+
+    let tripInfo: { destination?: string; start_date?: string; end_date?: string } = {};
+    try {
+      tripInfo = JSON.parse(localStorage.getItem('tripInfo') || '{}');
+    } catch {
+      tripInfo = {};
+    }
+    const dest = tripInfo.destination?.trim();
+    const start = tripInfo.start_date;
+    const end = tripInfo.end_date;
+    if (dest && start) {
+      const query = end ? `${dest} ${start} 到 ${end}` : `${dest} ${start}`;
+      setDraft(query);
+      runPlan(query);
+    } else {
+      setMessages((current) => [
+        ...current,
+        {
+          id: makeId(),
+          role: 'assistant',
+          text: '还没有填写目的地和日期，请在下方输入框补充。',
+        },
+      ]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {

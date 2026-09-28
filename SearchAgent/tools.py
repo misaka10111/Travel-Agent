@@ -275,6 +275,9 @@ def _fetch_flights(
     for item in items:
         journeys = item.get("journeys") or []
         segment = (journeys[0].get("segments") or [{}])[0] if journeys else {}
+        arr_city = segment.get("arrCityName") or ""
+        if destination and arr_city and destination not in arr_city:
+            continue
         result.append(
             {
                 "airline": segment.get("marketingTransportName") or "",
@@ -290,6 +293,71 @@ def _fetch_flights(
             }
         )
     return result
+
+
+def _fetch_trains(
+    origin: str,
+    destination: str | None = None,
+    dep_date: str | None = None,
+    journey_type: str | None = None,
+    sort_type: str | None = None,
+) -> list[dict]:
+    """搜索高铁/火车票（飞猪 search-train）。"""
+    args = ["search-train", "--origin", origin]
+    if destination:
+        args += ["--destination", destination]
+    if dep_date:
+        args += ["--dep-date", _normalize_date(dep_date)]
+    if journey_type:
+        args += ["--journey-type", journey_type]
+    if sort_type:
+        args += ["--sort-type", sort_type]
+
+    data = _run_flyai(args)
+    if data.get("status") not in (0, None):
+        raise ValueError(data.get("message") or "查询出错")
+    items = (data.get("data") or {}).get("itemList") or []
+    result = []
+    for item in items:
+        journeys = item.get("journeys") or []
+        segment = (journeys[0].get("segments") or [{}])[0] if journeys else {}
+        arr_city = segment.get("arrCityName") or ""
+        if destination and arr_city and destination not in arr_city:
+            continue
+        result.append(
+            {
+                "transport": segment.get("marketingTransportName") or "火车",
+                "train_no": segment.get("marketingTransportNo") or "",
+                "dep_station": segment.get("depStationName") or "",
+                "arr_station": segment.get("arrStationName") or "",
+                "dep_time": segment.get("depDateTime") or "",
+                "arr_time": segment.get("arrDateTime") or "",
+                "seat": segment.get("seatClassName") or "",
+                "duration": item.get("totalDuration") or "",
+                "price": item.get("price") or "",
+                "url": item.get("jumpUrl") or "",
+            }
+        )
+    return result
+
+
+def _fetch_round_trip(
+    fetcher,
+    origin: str,
+    destination: str,
+    start: str,
+    end: str,
+) -> list[dict]:
+    """查去程（origin→destination，start 出发）+ 回程（反向，end 出发），每条带 direction。"""
+    outbound = fetcher(origin, destination, start, journey_type="1")
+    for x in outbound:
+        x["direction"] = "去"
+    inbound = []
+    if end != start:
+        inbound = fetcher(destination, origin, end, journey_type="1")
+        for x in inbound:
+            x["direction"] = "回"
+    return outbound + inbound
 
 
 def _extract_poi_features(pois: list[dict]) -> list[dict]:
@@ -527,6 +595,26 @@ def _format_flights(items: list[dict], origin: str, destination: str | None) -> 
     return "\n".join(lines)
 
 
+def _format_trains(items: list[dict], origin: str, destination: str | None) -> str:
+    label = f"{origin} → {destination or '目的地'}"
+    if not items:
+        return f"没有找到 {label} 的高铁/火车票。"
+    lines = [f"{label} 高铁/火车票（前 {min(len(items), 5)} 班）："]
+    for item in items[:5]:
+        core = f"{item['transport']}{item['train_no']} | {item['dep_station']}→{item['arr_station']} | {item['dep_time']} → {item['arr_time']}"
+        parts = [core]
+        if item.get("seat"):
+            parts.append(item["seat"])
+        if item.get("duration"):
+            parts.append(f"{item['duration']}分钟")
+        if item.get("price"):
+            parts.append(f"¥{item['price']}")
+        lines.append(" - " + " | ".join(parts))
+        if item.get("url"):
+            lines.append(f"   预订: {item['url']}")
+    return "\n".join(lines)
+
+
 def _format_poi(items: list[dict], city_name: str) -> str:
     if not items:
         return f"没有找到「{city_name}」的景点。"
@@ -646,6 +734,20 @@ def search_flights(
     )
 
 
+@server.tool(description="搜索高铁/火车票。origin 必填，其余可选。")
+def search_trains(
+    origin: str,
+    destination: str | None = None,
+    dep_date: str | None = None,
+    sort_type: str | None = None,
+) -> str:
+    return _format_trains(
+        _fetch_trains(origin, destination, dep_date, sort_type),
+        origin,
+        destination,
+    )
+
+
 @server.tool(description="搜索景点/风景名胜。city_name 必填，其余可选。")
 def search_poi(
     city_name: str,
@@ -696,7 +798,7 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
 
 
 def run_search(input_data: dict) -> dict:
-    """输入 {destination, start_date, end_date?}，并行调用 6 个工具，返回结构化 JSON。"""
+    """输入 {destination, start_date, end_date?, origin?}，并行调用 6~8 个工具，返回结构化 JSON。"""
     destination = (input_data.get("destination") or "").strip()
     if not destination:
         raise ValueError("缺少 destination")
@@ -705,12 +807,15 @@ def run_search(input_data: dict) -> dict:
         raise ValueError("缺少 start_date")
     start = _normalize_date(start_date)
     end = _normalize_date(input_data["end_date"]) if input_data.get("end_date") else start
+    origin = (input_data.get("origin") or "").strip()
 
     result: dict[str, Any] = {
         "destination": destination,
         "start_date": start,
         "end_date": end,
     }
+    if origin:
+        result["origin"] = origin
 
     tasks = {
         "weather": lambda: _fetch_weather(destination, start, end),
@@ -720,6 +825,9 @@ def run_search(input_data: dict) -> dict:
         "events": lambda: _fetch_events(destination, start, end),
         "food": lambda: _fetch_food(destination),
     }
+    if origin:
+        tasks["flights"] = lambda: _fetch_round_trip(_fetch_flights, origin, destination, start, end)
+        tasks["trains"] = lambda: _fetch_round_trip(_fetch_trains, origin, destination, start, end)
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
         futures = {key: executor.submit(_run_safe, key, fn) for key, fn in tasks.items()}
         for key, future in futures.items():

@@ -42,7 +42,46 @@ a {
 
 .app-header nav {
   display: flex;
+  align-items: center;
   gap: 20px;
+}
+
+.nav-user {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: #f0edff;
+  color: #6152cc;
+  transition: background 0.18s ease, color 0.18s ease;
+}
+
+.nav-user:hover {
+  background: #e4ddff;
+  color: #4f41b8;
+}
+
+.nav-user-phone {
+  font-size: 14px;
+  font-weight: 600;
+  color: #4a5568;
+}
+
+.nav-logout {
+  border: none;
+  background: transparent;
+  padding: 0;
+  color: #697386;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.nav-logout:hover {
+  color: #d34b4b;
 }
 
 .app-main {
@@ -507,6 +546,28 @@ button:disabled {
   padding-bottom: 32px;
 }
 
+.home-page {
+  min-height: calc(100vh - 60px);
+  justify-content: center;
+  align-items: center;
+  padding-bottom: 0;
+}
+
+.home-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 36px;
+}
+
+.home-start-button {
+  min-width: 220px;
+  padding: 16px 30px;
+  font-size: 16px;
+  border-radius: 999px;
+}
+
 .agent-hero {
   text-align: center;
   padding: 48px 12px 12px;
@@ -649,6 +710,28 @@ button:disabled {
 .agent-primary-button:hover:not(:disabled) {
   transform: translateY(-1px);
   box-shadow: 0 14px 28px rgba(91, 83, 220, 0.28);
+}
+
+.agent-secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: 96px;
+  padding: 12px 18px;
+  border: 1px solid #dde2ee;
+  border-radius: 14px;
+  background: #fff;
+  color: #5c6acb;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: border-color 0.18s ease, background 0.18s ease;
+}
+
+.agent-secondary-button:hover {
+  border-color: rgba(82, 103, 255, 0.4);
+  background: #f7f8fc;
 }
 
 .agent-thinking {
@@ -1568,6 +1651,18 @@ button:disabled {
   font-size: 13px;
   color: var(--agent-muted);
   line-height: 1.6;
+}
+
+.agent-block-link {
+  color: var(--agent-blue);
+  text-decoration: none;
+  border-bottom: 1px dashed rgba(82, 103, 255, 0.4);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.agent-block-link:hover {
+  color: var(--agent-purple);
+  border-bottom-color: var(--agent-purple);
 }
 
 .agent-block-交通 .agent-block-type { background: #eef2ff; color: #5267ff; }

@@ -28,26 +28,32 @@ load_dotenv(BASE_DIR / ".env")
 
 PLAN_SYSTEM_PROMPT = (
     "你是一名专业的旅行规划师。根据输入中的结构化旅行数据（search 字段）和用户画像（user_profile 字段，可能没有），"
-    "生成一个旅行方案。方案风格由用户消息中的 style 字段指定，必须鲜明体现该风格。"
+    "以及本次旅行基本信息（basic 字段，可能没有），生成一个旅行方案。方案风格由用户消息中的 style 字段指定，必须鲜明体现。"
     "输出必须是 JSON，结构如下："
     '{"style":"风格","summary":"一句话概述","itinerary":['
     '{"day":1,"date":"日期","theme":"当天主题","hotel":"推荐酒店","schedule":['
     '{"time":"09:00-11:00","type":"景点","name":"活动名","note":"交通/餐食/穿衣等简短说明"}'
     ']}]}。'
     "如果输入中包含 user_profile（用户画像），其字段含义为："
-    "age_group=年龄段；gender=性别；identity=身份（学生/上班族/自由职业/创业者/退休/其他）；city=常驻城市；"
+    "age_group=年龄段；gender=性别；identity=身份；city=常驻城市；"
     "travel_style=旅行风格（可多选：休闲度假/深度文化/自然风光/美食探店/亲子乐园/购物血拼/冒险户外/摄影旅拍）。"
-    "如果输入中包含 answers（用户对问卷的作答，每项含 question 和 answer），请优先严格遵循用户的选择来规划"
-    "（已选的景点、酒店、出行方式、预算侧重等），未作答的项再按画像和常识默认。"
-    "如果输入中包含 feedback（上次审核的修改建议），必须据此修正计划中列出的问题。"
-    "如果输入中包含 modify（含 block_id 和 instruction），按 instruction 修改对应那一个活动块，其余块尽量保持不变。"
-    "个性化与规划规则："
-    "1) 每天固定 2 个景点/活动；"
-    "2) schedule 每天最多 4 项：2 个景点（type=景点）、午餐（type=美食）、晚餐（type=美食）；交通方式合并进景点 note，不再单独列交通项；"
-    "3) 景点优先匹配 travel_style（自然风光→自然景区；亲子乐园→主题乐园/动物园；深度文化→博物馆/古迹；购物血拼→商圈；摄影旅拍→出片景点；冒险户外→户外体验）；"
-    "4) 优先使用 search 数据里真实存在的景点和酒店名称；"
-    "5) 每个 note 控制在 15 字以内；"
-    "6) 只输出 JSON，不要任何多余文字或代码块。"
+    "如果输入中包含 basic（本次旅行基本信息），其字段含义为："
+    "origin=出发地；travelers=出行人数；budget_tiers=预算档位；total_budget=总预算金额；purposes=旅行目的（可多选）。"
+    "根据画像和旅行信息动态规划每日节奏与内容："
+    "1) 景点数量：休闲度假/带老人→每天2个；深度文化/冒险户外/年轻单人→每天3个；其余2~3个；"
+    "2) 景点形式按 travel_style 匹配：美食→餐饮街/老字号；亲子→乐园/动物园/海洋馆；文化→博物馆/古迹/艺术馆；"
+    "自然→山水园林/湖景；购物→商圈；摄影→出片打卡点；冒险→徒步/户外体验；"
+    "3) 美食：travel_style 含「美食探店」或 purposes 含「美食之旅」时，午晚餐各给具体饭店名；否则每餐1家即可；"
+    "4) 预算：经济档优先免费景点+公共交通，豪华档可付费体验+打车；总花费不超 total_budget；"
+    "5) 人数与身份：带老人/孩子减少步行、安排休息点；学生控预算；退休轻松节奏；"
+    "6) 交通：相邻景点在 note 里标注交通方式+大致耗时（打车/地铁/步行），尽量地理就近、少折返；"
+    "7) 天气：雨天优先室内景点（博物馆/乐园室内馆），晴天可户外；"
+    "8) 去程/回程：若 search 含 flights/trains，第一天 schedule 开头加一个 type=交通 的去程项"
+    "（name 取 flights/trains 的 outbound 里的一项，note 写「出发地→目的地 出发时间 价格」），"
+    "最后一天结尾加一个 type=交通 的回程项（name 取 flights/trains 的 inbound 里的一项，反向）；"
+    "9) schedule 每天 4~6 项（景点+午晚餐+必要交通），每项 note ≤20 字；优先用 search 里的真实景点/酒店/饭店名称；"
+    "10) 有 answers 时严格遵循；有 feedback 时修正；有 modify 时只改对应块；"
+    "11) 只输出 JSON，不要任何多余文字或代码块。"
 )
 
 
@@ -128,33 +134,109 @@ def _trim_search(search: dict) -> dict:
                 for x in search[key]
             ]
 
+    for key in ("flights", "trains"):
+        if isinstance(search.get(key), list):
+            outbound = []
+            inbound = []
+            for x in search[key]:
+                if key == "flights":
+                    name = f"{x.get('airline') or ''}{x.get('flight_no') or ''}"
+                else:
+                    name = f"{x.get('transport') or ''}{x.get('train_no') or ''}"
+                item = {
+                    "name": name,
+                    "from": x.get("dep_station") or "",
+                    "to": x.get("arr_station") or "",
+                    "time": x.get("dep_time") or "",
+                    "price": x.get("price") or "",
+                }
+                if x.get("direction") == "回":
+                    inbound.append(item)
+                else:
+                    outbound.append(item)
+            result[key] = {"outbound": outbound[:3], "inbound": inbound[:3]}
+
     return result
+
+
+def _backfill_links(plan: dict, search: dict) -> dict:
+    """生成后按名称匹配回填链接，避免 url 进 prompt 导致 prompt 过长。"""
+    entries: list[tuple[str, str]] = []
+    for key in ("hotels", "poi", "food", "events", "promotions"):
+        for item in search.get(key) or []:
+            name = item.get("name") or item.get("title") or ""
+            url = item.get("url") or ""
+            if name and url:
+                entries.append((name, url))
+    for key in ("flights", "trains"):
+        for item in search.get(key) or []:
+            if key == "flights":
+                name = f"{item.get('airline') or ''}{item.get('flight_no') or ''}"
+            else:
+                name = f"{item.get('transport') or ''}{item.get('train_no') or ''}"
+            url = item.get("url") or ""
+            if name and url:
+                entries.append((name, url))
+
+    def find_url(target: str) -> str:
+        if not target:
+            return ""
+        for name, url in entries:
+            if name == target:
+                return url
+        # 前缀/包含匹配：取最长的匹配名，避免「酒店名 + 房型后缀」匹配不上
+        best = ""
+        best_len = 0
+        for name, url in entries:
+            if target.startswith(name) or name.startswith(target):
+                if len(name) > best_len:
+                    best = url
+                    best_len = len(name)
+        return best
+
+    for p in plan.get("plans") or []:
+        for it in p.get("itinerary") or []:
+            hotel = it.get("hotel") or ""
+            it["hotel_link"] = find_url(hotel)
+            for s in it.get("schedule") or []:
+                name = s.get("name") or ""
+                s["link"] = find_url(name)
+    return plan
 
 
 def _build_one_plan(client: OpenAI, style: str, context: dict) -> dict:
     ctx = dict(context)
     ctx["style"] = style
-    resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
-        messages=[
-            {"role": "system", "content": PLAN_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(ctx, ensure_ascii=False)},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=16000,
-        timeout=300,
-    )
-    content = (resp.choices[0].message.content or "{}").strip()
-    if content.startswith("```"):
-        content = content.strip("`")
-        if content.startswith("json"):
-            content = content[4:]
-    return json.loads(content)
+    last: dict = {}
+    for _ in range(2):
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            messages=[
+                {"role": "system", "content": PLAN_SYSTEM_PROMPT},
+                {"role": "user", "content": json.dumps(ctx, ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=16000,
+            timeout=300,
+        )
+        content = (resp.choices[0].message.content or "{}").strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            if content.startswith("json"):
+                content = content[4:]
+        try:
+            last = json.loads(content)
+        except json.JSONDecodeError:
+            last = {}
+        if isinstance(last, dict) and last.get("itinerary"):
+            return last
+    return last
 
 
 def build_plan(
     search_result: dict,
     profile: dict | None = None,
+    basic: dict | None = None,
     answers: list | None = None,
     feedback: str | None = None,
     modify: dict | None = None,
@@ -167,6 +249,8 @@ def build_plan(
     context: dict = {"search": _trim_search(search_result)}
     if profile:
         context["user_profile"] = profile
+    if basic:
+        context["basic"] = basic
     if answers:
         context["answers"] = answers
     if feedback:
@@ -180,7 +264,7 @@ def build_plan(
 
     result = _build_meta(search_result)
     result["plans"] = plans
-    return result
+    return _backfill_links(result, search_result)
 
 
 TYPE_KEYWORDS = (
@@ -226,6 +310,7 @@ def blockify(plan: dict) -> list[dict]:
                         "time": item.get("time") or "",
                         "name": name,
                         "note": note,
+                        "link": item.get("link") or "",
                     }
                 )
             for meal in it.get("meals") or []:
@@ -257,6 +342,7 @@ def blockify(plan: dict) -> list[dict]:
                         "time": "住宿",
                         "name": hotel,
                         "note": "推荐住宿",
+                        "link": it.get("hotel_link") or "",
                     }
                 )
     return blocks
@@ -278,19 +364,21 @@ def main() -> None:
 
     try:
         data = json.loads(raw)
-        if isinstance(data, dict) and any(k in data for k in ("search", "profile", "answers", "feedback", "modify")):
+        if isinstance(data, dict) and any(k in data for k in ("search", "profile", "basic", "answers", "feedback", "modify")):
             search_result = data.get("search") or {}
             profile = data.get("profile")
+            basic = data.get("basic")
             answers = data.get("answers")
             feedback = data.get("feedback")
             modify = data.get("modify")
         else:
             search_result = data
             profile = None
+            basic = None
             answers = None
             feedback = None
             modify = None
-        plan = build_plan(search_result, profile, answers, feedback, modify)
+        plan = build_plan(search_result, profile, basic, answers, feedback, modify)
         if isinstance(plan, dict) and "error" not in plan:
             plan["blocks"] = blockify(plan)
     except Exception as exc:  # noqa: BLE001

@@ -3,6 +3,7 @@ from app.models.destination import Destination
 from app.models.profile import UserProfile
 from app.models.trip_memory import TripMemory
 from app.models.trip import ItineraryItem, Trip
+from app.models.user import User
 
 __all__ = [
     "BehaviorSignal",
@@ -10,5 +11,6 @@ __all__ = [
     "ItineraryItem",
     "Trip",
     "TripMemory",
+    "User",
     "UserProfile",
 ]

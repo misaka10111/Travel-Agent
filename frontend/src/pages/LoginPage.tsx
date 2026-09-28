@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { api } from '../api/client';
 
 const PHONE_RE = /^1[3-9]\d{9}$/;
 
@@ -18,42 +19,35 @@ export function LoginPage() {
     return () => clearTimeout(timer);
   }, [countdown]);
 
-  function sendCode() {
+  async function sendCode() {
     if (!PHONE_RE.test(phone)) {
       setError('请输入正确的手机号');
       return;
     }
     setError('');
-    // 开发模式：直接生成并展示验证码；真实环境这里应调用后端短信接口
-    const c = String(Math.floor(100000 + Math.random() * 900000));
-    setSentCode(c);
-    setCountdown(60);
+    try {
+      const res = await api.sendCode(phone);
+      setSentCode(res.code);
+      setCountdown(60);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!sentCode) {
       setError('请先获取验证码');
       return;
     }
-    if (code !== sentCode) {
-      setError('验证码错误');
-      return;
-    }
-
-    let users: string[] = [];
+    setError('');
     try {
-      users = JSON.parse(localStorage.getItem('registeredUsers') || '[]');
-    } catch {
-      users = [];
+      const res = await api.login(phone, code);
+      localStorage.setItem('currentUser', res.phone);
+      navigate(res.is_new ? '/profile' : '/trip-survey');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
-    const isNew = !users.includes(phone);
-    if (isNew) {
-      users.push(phone);
-      localStorage.setItem('registeredUsers', JSON.stringify(users));
-    }
-    localStorage.setItem('currentUser', phone);
-    navigate(isNew ? '/profile' : '/trip-survey');
   }
 
   return (

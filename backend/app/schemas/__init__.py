@@ -10,6 +10,7 @@ from app.schemas.trip import (
     TripRead,
     TripUpdate,
 )
+from app.schemas.user import LoginRequest, LoginResponse, SendCodeRequest, UserRead
 
 __all__ = [
     "BehaviorSignalCreate",
@@ -21,11 +22,15 @@ __all__ = [
     "DestinationRead",
     "ItineraryItemCreate",
     "ItineraryItemRead",
+    "LoginRequest",
+    "LoginResponse",
+    "SendCodeRequest",
     "TripCreate",
     "TripRead",
     "TripMemoryCreate",
     "TripMemoryRead",
     "TripUpdate",
+    "UserRead",
     "UserProfileCreate",
     "UserProfileRead",
 ]

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { api } from '../api/client';
 import type { UserProfile } from '../api/types';
 
@@ -29,6 +30,7 @@ function ProfileField({ label, children }: { label: string; children: ReactNode 
 }
 
 export function ProfilePage() {
+  const navigate = useNavigate();
   const [form, setForm] = useState<UserProfile>(() => {
     try {
       const raw = localStorage.getItem('userProfile');
@@ -65,12 +67,13 @@ export function ProfilePage() {
 
     const userId = localStorage.getItem('currentUser');
     if (!userId) {
-      setSaved(true);
+      navigate('/trip-survey');
       return;
     }
     try {
       await api.saveProfile(userId, form);
       setSaved(true);
+      navigate('/trip-survey');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

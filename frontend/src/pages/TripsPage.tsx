@@ -12,7 +12,8 @@ const emptyForm = {
 };
 
 export function TripsPage() {
-  const { data: trips, loading, error, refetch } = useApi(api.listTrips);
+  const userId = localStorage.getItem('currentUser') || '';
+  const { data: trips, loading, error, refetch } = useApi(() => api.listTrips(userId));
   const [form, setForm] = useState(emptyForm);
   const [submitting, setSubmitting] = useState(false);
 
@@ -24,7 +25,7 @@ export function TripsPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      await api.createTrip(form);
+      await api.createTrip({ ...form, user_id: userId });
       setForm(emptyForm);
       refetch();
     } finally {
@@ -80,4 +81,3 @@ export function TripsPage() {
     </section>
   );
 }
-

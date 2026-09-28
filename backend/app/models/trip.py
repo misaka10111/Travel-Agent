@@ -21,6 +21,7 @@ class Trip(Base):
     __tablename__ = "trips"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), default="", index=True)
     title: Mapped[str] = mapped_column(String(200))
     destination: Mapped[str] = mapped_column(String(120), index=True)
     origin: Mapped[str] = mapped_column(String(120), default="")

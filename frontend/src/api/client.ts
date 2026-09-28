@@ -31,7 +31,8 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 }
 
 export const api = {
-  listTrips: () => request<Trip[]>('/trips'),
+  listTrips: (userId?: string) =>
+    request<Trip[]>(`/trips${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`),
   getTrip: (id: number) => request<Trip>(`/trips/${id}`),
   createTrip: (payload: TripCreatePayload) =>
     request<Trip>('/trips', { method: 'POST', body: JSON.stringify(payload) }),
@@ -60,6 +61,7 @@ export const api = {
     start_date?: string;
     end_date?: string;
     profile?: unknown;
+    basic?: unknown;
     answers?: unknown[];
   }) =>
     request<Record<string, unknown>>('/plan', {
@@ -71,4 +73,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ messages }),
     }),
+  sendCode: (phone: string) =>
+    request<{ phone: string; code: string; dev: boolean }>('/auth/send-code', {
+      method: 'POST',
+      body: JSON.stringify({ phone }),
+    }),
+  login: (phone: string, code: string) =>
+    request<{ user_id: string; phone: string; nickname: string; is_new: boolean }>(
+      '/auth/login',
+      { method: 'POST', body: JSON.stringify({ phone, code }) },
+    ),
 };

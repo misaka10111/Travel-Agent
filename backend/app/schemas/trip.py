@@ -24,6 +24,7 @@ class ItineraryItemRead(ItineraryItemBase):
 
 
 class TripBase(BaseModel):
+    user_id: str = ""
     title: str
     destination: str
     origin: str = ""
@@ -42,6 +43,7 @@ class TripCreate(TripBase):
 
 
 class TripUpdate(BaseModel):
+    user_id: str | None = None
     title: str | None = None
     destination: str | None = None
     origin: str | None = None

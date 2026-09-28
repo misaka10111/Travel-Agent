@@ -1,25 +1,29 @@
-import { api } from '../api/client';
-import { useApi } from '../hooks/useApi';
+import { useNavigate } from 'react-router-dom';
 
 export function HomePage() {
-  const { data: destinations, loading, error } = useApi(api.listDestinations);
+  const navigate = useNavigate();
 
   return (
-    <section>
-      <h1>探索目的地</h1>
-      {loading && <p>加载中…</p>}
-      {error && <p className="error">{error}</p>}
-      <div className="card-grid">
-        {destinations?.map((d) => (
-          <article key={d.id} className="card">
-            <h2>{d.name}</h2>
-            <p className="muted">{d.country}</p>
-            <p>{d.description}</p>
-            <p className="tags">{d.tags}</p>
-          </article>
-        ))}
+    <div className="agent-page home-page">
+      <div className="home-center">
+        <header className="agent-hero">
+          <span className="agent-kicker">✦ TravelAgent · 你的 AI 旅行规划师</span>
+          <h1>
+            准备好开始
+            <br />
+            下一次旅行了吗？
+          </h1>
+          <p>从一次对话开始，为你生成专属的旅行方案。</p>
+        </header>
+        <button
+          type="button"
+          className="agent-primary-button home-start-button"
+          onClick={() => navigate('/trip-survey')}
+        >
+          开始本次旅行
+          <span aria-hidden="true">→</span>
+        </button>
       </div>
-    </section>
+    </div>
   );
 }
-
