@@ -1,6 +1,6 @@
 # Travel Agent：P0–P3 实施跟进与 P0 修改计划
 
-更新：2026-09-29。当前阶段：P0.1 字段盘点与契约草案已完成；下一步 P0.2 可运行 schema；业务实现尚未开始。
+更新：2026-09-29。当前阶段：P0.2 数据契约已实现，23 项离线测试通过；P0.3 地图适配与探测进行中。
 架构基线：docs/architecture-plan-led.md（Plan Agent 决策，Runtime 执行，确定性工具计算）。
 本文件为后续执行与交接入口；仓库版本为主，桌面副本供查看，阶段结束同步副本。
 
@@ -55,6 +55,7 @@
 地点同名不自动合并；供应商 ID 不充当跨供应商统一 ID；片区与内部景点有关联但不等价。
 动作类型先定义 ask_user、search_candidates、get_place_details、compute_itinerary、rank_nearby、edit_plan、validate_plan、finish；P0 不接通 Agent 循环。
 合成样例明确标为 fixture，不在产品页面显示成真实结果。
+当前结果：五份 schema 与 common.py 已新增；test_p0_contracts.py 的 23 项测试通过。Windows 时区数据库通过 tzdata 依赖提供。模型尚未接入旧生成入口；P1/P2 继续集成。
 
 ### P0.3 地图最小适配与探测
 
@@ -105,5 +106,6 @@ P0 保存协议与允许保存的摘要，不长期归档全部供应商原始�
 | 2026-09-29 | 规划 | 创建 P0–P3 跟进文档；核对现有模型与目录 | 仅文档检查；未运行业务测试 | 38ddee3 | 未推送 | 下一步 P0.1 |
 | 2026-09-29 | P0 准备 | 确认上海/新加坡；本地保存高德 Web 服务配置 | 确认环境文件被 Git 忽略；未调用地图 API | 见本文件 Git 历史 | 未推送 | 海外权限待补；不阻塞契约设计与国内适配 |
 | 2026-09-29 | P0.1 完成 | 字段去向表、五份 schema 草案、行动契约、兼容策略、边界样例 | 静态代码核对与 diff 格式检查；纯文档未运行业务测试 | 见本文件 Git 历史 | 未推送 | 下一步 P0.2 实现契约；海外权限仍待补 |
+| 2026-09-29 | P0.2 完成 | 五份模型、公共单位/来源契约、合成样例、tzdata | PYTHONPATH=backend；.venv/Scripts/python.exe -m pytest backend/tests/test_p0_contracts.py -q：23 passed | 见 Git 历史 | 未推送 | P0.3 供应商最小适配与真实探测 |
 
 后续代理开始工作：先读本文件与 architecture-plan-led.md → 检查 git status/diff → 读取所修改文件 → 执行当前阶段有界任务 → 记录验证与提交 → 同步桌面副本。

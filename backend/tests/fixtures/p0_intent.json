@@ -1,0 +1,14 @@
+{
+  "schema_version": "1.0",
+  "intent_id": "fixture-shanghai-five-days",
+  "destination": {"label": "上海", "country_code": "CN", "timezone": "Asia/Shanghai", "identity_status": "confirmed"},
+  "dates": {"duration_days": 5, "timezone": "Asia/Shanghai"},
+  "party": {"count_min": 6, "count_status": "lower_bound", "raw": "6 人及以上"},
+  "budget": {"raw": "5000 元", "unknown_reason": "币种和总额/人均口径待确认"},
+  "preferences": {"interests": ["园林"], "travel_modes": ["walking", "transit"]},
+  "field_evidence": {
+    "preferences.interests": {"source": "message", "source_ref": "fixture-message-1", "confirmation": "explicit", "updated_at": "2026-09-29T10:00:00+08:00"}
+  },
+  "message_refs": ["fixture-message-1"],
+  "notes": "合成离线样例，日期未知；不代表真实供应商结果。"
+}
