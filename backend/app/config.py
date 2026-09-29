@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -21,6 +22,10 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
     ]
+    amap_web_service_key: SecretStr | None = None
+    google_maps_api_key: SecretStr | None = None
+    map_request_timeout_seconds: float = Field(default=15, gt=0, le=60)
+    map_probe_max_calls: int = Field(default=12, ge=1, le=30)
 
 
 @lru_cache

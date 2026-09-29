@@ -1,0 +1,69 @@
+{
+  "probe_version": "1.0",
+  "provider": "amap",
+  "city": "shanghai",
+  "started_at": "2026-09-29T07:30:47.532824+00:00",
+  "requested_departure_at": "2026-09-30T10:00:00+08:00",
+  "max_calls": 12,
+  "policy": {
+    "provider": "amap",
+    "render_on": "amap",
+    "attribution": "高德地图",
+    "persist_raw_response": false,
+    "persist_geometry": false,
+    "cache_enabled": false,
+    "persist_provider_place_id": false,
+    "policy_url": "https://lbs.amap.com/home/terms/",
+    "note": "Conservative project policy: no raw/geometry persistence or cache until applicable storage/display rights are confirmed."
+  },
+  "checks": [
+    {
+      "kind": "search",
+      "label": "豫园",
+      "status": "passed",
+      "candidate_count": 5,
+      "has_identity_and_coordinates": true,
+      "latency_ms": 185
+    },
+    {
+      "kind": "identity",
+      "label": "豫园",
+      "status": "failed",
+      "reason": "exact_sample_match_missing_or_ambiguous",
+      "match_count": 0
+    },
+    {
+      "kind": "search",
+      "label": "上海城隍庙",
+      "status": "passed",
+      "candidate_count": 5,
+      "has_identity_and_coordinates": true,
+      "latency_ms": 190
+    },
+    {
+      "kind": "identity",
+      "label": "上海城隍庙",
+      "status": "failed",
+      "reason": "exact_sample_match_missing_or_ambiguous",
+      "match_count": 2
+    },
+    {
+      "kind": "search",
+      "label": "外滩",
+      "status": "passed",
+      "candidate_count": 5,
+      "has_identity_and_coordinates": true,
+      "latency_ms": 208
+    },
+    {
+      "kind": "identity",
+      "label": "外滩",
+      "status": "failed",
+      "reason": "exact_sample_match_missing_or_ambiguous",
+      "match_count": 2
+    }
+  ],
+  "status": "partial",
+  "calls_used": 3,
+  "finished_at": "2026-09-29T07:30:48.115342+00:00"
+}

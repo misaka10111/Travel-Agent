@@ -1,0 +1,42 @@
+{
+  "probe_version": "1.0",
+  "provider": "google",
+  "city": "singapore",
+  "started_at": "2026-09-29T07:33:51.650771+00:00",
+  "requested_departure_at": "2026-09-30T10:00:00+08:00",
+  "max_calls": 12,
+  "success_criteria": "Valid outcomes including explicit no_route; at least one ok route per mode, with geometry for each ok route.",
+  "policy": {
+    "provider": "google",
+    "render_on": "google",
+    "attribution": "Google Maps",
+    "persist_raw_response": false,
+    "persist_geometry": false,
+    "cache_enabled": false,
+    "persist_provider_place_id": true,
+    "policy_url": "https://developers.google.com/maps/documentation/routes/policies",
+    "note": "Route results displayed on a map require a Google map; P0 keeps content in memory only. Confirm applicable account terms before production."
+  },
+  "checks": [
+    {
+      "kind": "search",
+      "label": "Merlion Park",
+      "status": "blocked",
+      "error": {
+        "code": "missing_credentials",
+        "message": "GOOGLE_MAPS_API_KEY is not configured.",
+        "retryable": false,
+        "provider_code": null
+      },
+      "latency_ms": 0
+    }
+  ],
+  "status": "blocked",
+  "mode_coverage": {
+    "walking": false,
+    "transit": false,
+    "driving": false
+  },
+  "calls_used": 0,
+  "finished_at": "2026-09-29T07:33:51.650771+00:00"
+}

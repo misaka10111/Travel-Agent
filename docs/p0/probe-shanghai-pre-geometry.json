@@ -1,0 +1,151 @@
+{
+  "probe_version": "1.0",
+  "provider": "amap",
+  "city": "shanghai",
+  "started_at": "2026-09-29T07:31:34.501974+00:00",
+  "requested_departure_at": "2026-09-30T10:00:00+08:00",
+  "max_calls": 12,
+  "policy": {
+    "provider": "amap",
+    "render_on": "amap",
+    "attribution": "高德地图",
+    "persist_raw_response": false,
+    "persist_geometry": false,
+    "cache_enabled": false,
+    "persist_provider_place_id": false,
+    "policy_url": "https://lbs.amap.com/home/terms/",
+    "note": "Conservative project policy: no raw/geometry persistence or cache until applicable storage/display rights are confirmed."
+  },
+  "checks": [
+    {
+      "kind": "search",
+      "label": "豫园",
+      "status": "passed",
+      "candidate_count": 5,
+      "has_identity_and_coordinates": true,
+      "latency_ms": 255
+    },
+    {
+      "kind": "search",
+      "label": "上海城隍庙",
+      "status": "passed",
+      "candidate_count": 5,
+      "has_identity_and_coordinates": true,
+      "latency_ms": 181
+    },
+    {
+      "kind": "search",
+      "label": "外滩",
+      "status": "passed",
+      "candidate_count": 5,
+      "has_identity_and_coordinates": true,
+      "latency_ms": 173
+    },
+    {
+      "kind": "detail",
+      "label": "first_sample",
+      "status": "passed",
+      "same_identity": true,
+      "has_coordinates": true,
+      "latency_ms": 104
+    },
+    {
+      "kind": "nearby",
+      "label": "restaurants_near_first_sample",
+      "status": "passed",
+      "candidate_count": 5,
+      "latency_ms": 159
+    },
+    {
+      "kind": "route",
+      "label": "leg_1_walking",
+      "status": "passed",
+      "route_status": "ok",
+      "duration_present": true,
+      "distance_present": true,
+      "geometry_present": true,
+      "departure_time_applied": false,
+      "warnings": [
+        "departure_time_not_supported_by_this_endpoint; estimate_is_not_a_future_traffic_forecast"
+      ],
+      "unknown_reason": null,
+      "latency_ms": 78
+    },
+    {
+      "kind": "route",
+      "label": "leg_1_transit",
+      "status": "failed",
+      "route_status": "no_route",
+      "duration_present": false,
+      "distance_present": false,
+      "geometry_present": false,
+      "departure_time_applied": false,
+      "warnings": [],
+      "unknown_reason": "provider_returned_no_route",
+      "latency_ms": 147
+    },
+    {
+      "kind": "route",
+      "label": "leg_1_driving",
+      "status": "passed",
+      "route_status": "ok",
+      "duration_present": true,
+      "distance_present": true,
+      "geometry_present": true,
+      "departure_time_applied": false,
+      "warnings": [
+        "departure_time_not_supported_by_this_endpoint; estimate_is_not_a_future_traffic_forecast"
+      ],
+      "unknown_reason": null,
+      "latency_ms": 103
+    },
+    {
+      "kind": "route",
+      "label": "leg_2_walking",
+      "status": "passed",
+      "route_status": "ok",
+      "duration_present": true,
+      "distance_present": true,
+      "geometry_present": true,
+      "departure_time_applied": false,
+      "warnings": [
+        "departure_time_not_supported_by_this_endpoint; estimate_is_not_a_future_traffic_forecast"
+      ],
+      "unknown_reason": null,
+      "latency_ms": 82
+    },
+    {
+      "kind": "route",
+      "label": "leg_2_transit",
+      "status": "passed",
+      "route_status": "ok",
+      "duration_present": true,
+      "distance_present": true,
+      "geometry_present": false,
+      "departure_time_applied": true,
+      "warnings": [
+        "provider_missing_geometry"
+      ],
+      "unknown_reason": null,
+      "latency_ms": 199
+    },
+    {
+      "kind": "route",
+      "label": "leg_2_driving",
+      "status": "passed",
+      "route_status": "ok",
+      "duration_present": true,
+      "distance_present": true,
+      "geometry_present": true,
+      "departure_time_applied": false,
+      "warnings": [
+        "departure_time_not_supported_by_this_endpoint; estimate_is_not_a_future_traffic_forecast"
+      ],
+      "unknown_reason": null,
+      "latency_ms": 120
+    }
+  ],
+  "status": "partial",
+  "calls_used": 11,
+  "finished_at": "2026-09-29T07:31:36.103114+00:00"
+}
