@@ -25,7 +25,7 @@ class ActionBase(ContractModel):
 
 class AskUserAction(ActionBase):
     kind: Literal["ask_user"]
-    gap_ids: list[Identifier] = Field(min_length=1)
+    gap_ids: list[Literal["destination", "origin", "dates", "party", "budget", "preferences", "constraints", "notes"]] = Field(min_length=1, max_length=3)
     question_goal: Identifier
 
 
@@ -110,9 +110,14 @@ class FinishAction(ActionBase):
     plan_ref: PlanRef
 
 
+class PauseAction(ActionBase):
+    kind: Literal["pause"]
+    reason: Identifier
+
+
 AgentAction = Annotated[
     AskUserAction | SearchCandidatesAction | PlaceDetailsAction | ComputeItineraryAction |
-    RankNearbyAction | EditPlanAction | ValidatePlanAction | FinishAction,
+    RankNearbyAction | EditPlanAction | ValidatePlanAction | FinishAction | PauseAction,
     Field(discriminator="kind"),
 ]
 AGENT_ACTION_ADAPTER = TypeAdapter(AgentAction)

@@ -89,6 +89,10 @@ class SessionState(ContractModel):
     state_version: int = Field(ge=0)
     intent_snapshot: TripIntent
     candidates: list[Place] = Field(default_factory=list)
+    candidate_ids: list[Identifier] = Field(default_factory=list)
+    candidates_need_refresh: bool = False
+    attention_reason: str | None = None
+    agent_message: str | None = None
     selections: list[Selection] = Field(default_factory=list)
     current_plan_ref: PlanRef | None = None
     pending_questions: list[Question] = Field(default_factory=list)

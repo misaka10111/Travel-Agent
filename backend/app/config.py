@@ -26,6 +26,14 @@ class Settings(BaseSettings):
     google_maps_api_key: SecretStr | None = None
     map_request_timeout_seconds: float = Field(default=15, gt=0, le=60)
     map_probe_max_calls: int = Field(default=12, ge=1, le=30)
+    planning_api_key: SecretStr | None = None
+    planning_base_url: str = "https://api.deepseek.com"
+    planning_model: str = "deepseek-flash"
+    planning_model_timeout_seconds: float = Field(default=45, gt=0, le=90)
+    planning_model_call_limit: int = Field(default=20, ge=1, le=50)
+    planning_map_call_limit: int = Field(default=12, ge=1, le=30)
+    planning_step_limit: int = Field(default=12, ge=1, le=30)
+    planning_run_timeout_seconds: float = Field(default=180, ge=1, le=600)
 
 
 @lru_cache
