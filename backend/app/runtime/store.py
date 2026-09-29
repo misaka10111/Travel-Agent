@@ -14,6 +14,7 @@ from app.models.planning import PlanningCommand, PlanningEvent, PlanningSession
 from app.runtime.guards import AVAILABLE_ACTIONS, PlanningError
 from app.schemas.planning_api import ProfileSnapshot, SessionView
 from app.schemas.session import CallBudget, SessionState
+from app.schemas.intent import TripIntent
 from app.services.intent_service import with_profile
 
 
@@ -42,18 +43,23 @@ class SessionStore:
         data = state.model_dump(mode="json")
         data["candidates"] = []
         data["agent_message"] = None  # Model summaries can repeat supplier content; keep them volatile too.
+        data["current_plan"] = None
+        data["plan_needs_refresh"] = bool(data["current_plan_ref"])
         data["candidates_need_refresh"] = bool(data["candidate_ids"])
         return data
 
     def create(self, body):
         session_id, token = str(uuid4()), secrets.token_urlsafe(32)
+        intent = body.intent or TripIntent(intent_id=str(uuid4()),
+            destination={"label": "待确认", "identity_status": "unresolved"})
         state = SessionState(session_id=session_id, owner_ref="capability:" + session_id,
-            state_version=0, intent_snapshot=with_profile(body.intent, body.profile),
+            state_version=0, intent_snapshot=with_profile(intent, body.profile), task_scope=body.task_scope,
             budget_usage=CallBudget(limit=self.settings.planning_model_call_limit + self.settings.planning_map_call_limit))
         with self.factory() as db:
             db.add(PlanningSession(session_id=session_id, token_hash=hashlib.sha256(token.encode()).hexdigest(),
                 state_json=self._durable(state), profile_json=body.profile.model_dump(mode="json"),
-                messages_json=[{"kind": "user", "text": body.message}] if body.message else [],
+                messages_json=[{"kind": "user" if body.intent else "intake", "text": body.message,
+                    "message_id": str(uuid4()), "processed": body.intent is not None}] if body.message else [],
                 model_limit=self.settings.planning_model_call_limit, map_limit=self.settings.planning_map_call_limit,
                 step_limit=self.settings.planning_step_limit))
             db.add(PlanningEvent(session_id=session_id, state_version=0, kind="created", data={}))
@@ -80,6 +86,9 @@ class SessionStore:
                 data["agent_message"] = memory[2]
                 data["candidates"] = [p.model_dump(mode="json") for p in memory[1] if p.place_id in data["candidate_ids"]]
                 data["candidates_need_refresh"] = len(data["candidates"]) != len(data["candidate_ids"])
+                if len(memory) > 3:
+                    data["current_plan"] = memory[3].model_dump(mode="json") if memory[3] else None
+                    data["plan_needs_refresh"] = bool(data["current_plan_ref"] and not memory[3])
             state = SessionState.model_validate(data)
             return Snapshot(state, ProfileSnapshot.model_validate(row.profile_json), list(row.messages_json),
                 {"model_calls": row.model_calls, "map_calls": row.map_calls, "steps": row.steps,
@@ -135,7 +144,7 @@ class SessionStore:
                 kind=kind, data=event_data or {}))
             db.commit()
         # Only publish supplier objects following a successful version check.
-        self._places[state.session_id] = (expected + 1, next_state.candidates, next_state.agent_message)
+        self._places[state.session_id] = (expected + 1, next_state.candidates, next_state.agent_message, next_state.current_plan)
         return next_state
 
     def reserve(self, session_id, counter, *, lease_id=None, version=None):

@@ -9,6 +9,18 @@ from app.schemas.common import ContractModel, FieldEvidence, Identifier, TimeWin
 from app.schemas.intent import TripIntent
 from app.schemas.place import Place
 from app.schemas.plan import PlanRef
+from app.schemas.itinerary import ItineraryDraft, PlanManifest
+
+
+class SearchRecipe(ContractModel):
+    queries: list[str]
+    categories: list[str]
+    limit: int
+
+
+class IntakeState(ContractModel):
+    unknown_fields: list[str] = Field(default_factory=list)
+    declined_fields: list[str] = Field(default_factory=list)
 
 
 class QuestionOption(ContractModel):
@@ -95,6 +107,14 @@ class SessionState(ContractModel):
     agent_message: str | None = None
     selections: list[Selection] = Field(default_factory=list)
     current_plan_ref: PlanRef | None = None
+    current_plan: ItineraryDraft | None = None
+    plan_needs_refresh: bool = False
+    plan_history: list[PlanManifest] = Field(default_factory=list)
+    task_scope: Literal["candidates", "itinerary"] = "candidates"
+    coverage: dict[str, int] = Field(default_factory=dict)
+    search_recipes: list[SearchRecipe] = Field(default_factory=list)
+    candidates_stale: bool = False
+    intake_state: IntakeState = Field(default_factory=IntakeState)
     pending_questions: list[Question] = Field(default_factory=list)
     budget_usage: CallBudget = Field(default_factory=CallBudget)
     status: Literal["draft", "running", "waiting_user", "needs_attention", "completed", "cancelled", "failed"] = "draft"

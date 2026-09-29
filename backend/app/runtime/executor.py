@@ -6,7 +6,8 @@ from pydantic import ValidationError
 
 from app.providers.maps.base import MapError
 from app.runtime.guards import PlanningError, check_action
-from app.services.intent_service import apply_patch
+from app.runtime.store import fingerprint
+from app.services.intent_service import apply_patch, invalidate
 
 
 class PlanningRuntime:
@@ -40,6 +41,7 @@ class PlanningRuntime:
     async def _loop(self, session_id, lease_id):
         observation = None
         repairs_left = 1
+        repeated_errors = {}
         while True:
             snapshot = self.store.load(session_id)
             if snapshot.lease_id != lease_id or snapshot.state.status != "running":
@@ -47,13 +49,37 @@ class PlanningRuntime:
             reserve_model = lambda: self.store.reserve(session_id, "model_calls", lease_id=lease_id)
             reserve_map = lambda: self.store.reserve(session_id, "map_calls", lease_id=lease_id)
             # Answers are durable commands before interpretation, so retrying HTTP cannot double-submit.
-            queued = next((m for m in snapshot.messages if m.get("kind") == "answer" and not m.get("processed")), None)
+            queued = next((m for m in snapshot.messages if m.get("kind") in {"answer", "intake"} and not m.get("processed")), None)
             if queued:
-                reserve_model()
-                patch = await self.registry.question_agent.interpret(queued, snapshot.state.intent_snapshot)
+                repair = None
+                for attempt in range(2):
+                    reserve_model()
+                    try:
+                        if queued["kind"] == "intake":
+                            result = await self.registry.intake_agent.interpret(queued["text"], snapshot.state.intent_snapshot, repair)
+                            patch = result.patch
+                            source_ref = queued["message_id"]
+                            allowed = None
+                        else:
+                            patch = await self.registry.question_agent.interpret(queued, snapshot.state.intent_snapshot, repair)
+                            source_ref = queued["answer"]["request_id"]
+                            allowed = queued["question"]["gap_ids"]
+                        updated = apply_patch(snapshot.state.intent_snapshot, patch, source="message" if queued["kind"] == "intake" else "answer",
+                            source_ref=source_ref, allowed=allowed)
+                        break
+                    except (ValidationError, PlanningError) as exc:
+                        if attempt or not self._repairable(exc):
+                            raise
+                        repair = self._error_observation(exc)
+                        self.store.diagnostic(session_id, lease_id, {**repair, "stage": queued["kind"]})
                 state = snapshot.state
-                state.intent_snapshot = apply_patch(state.intent_snapshot, patch, source="answer",
-                    source_ref=queued["answer"]["request_id"], allowed=queued["question"]["gap_ids"])
+                previous = state.intent_snapshot
+                state.intent_snapshot = updated
+                invalidate(state, previous)
+                if queued["kind"] == "intake":
+                    valid = {"dates", "budget", "party", "origin", "destination", "preferences", "constraints"}
+                    state.intake_state.unknown_fields = list(dict.fromkeys(state.intake_state.unknown_fields + [f for f in result.unknown_fields if f in valid]))
+                    state.intake_state.declined_fields = list(dict.fromkeys(state.intake_state.declined_fields + [f for f in result.declined_fields if f in valid]))
                 queued["processed"] = True
                 self.store.save(state, expected=state.state_version, lease_id=lease_id,
                     kind="answer_interpreted", messages=snapshot.messages)
@@ -63,10 +89,20 @@ class PlanningRuntime:
             try:
                 action = await self.plan.decide(snapshot, observation)
                 check_action(action, snapshot.state)
+                signature = fingerprint(action.kind, action.model_dump(mode="json", exclude={"action_id", "base_state_version", "purpose"}))
+                if signature in repeated_errors:
+                    raise PlanningError(repeated_errors[signature])
                 state, observation = await self.registry.execute(action, snapshot, reserve_model, reserve_map)
+            except MapError as exc:
+                signature = fingerprint(action.kind, action.model_dump(mode="json", exclude={"action_id", "base_state_version", "purpose"}))
+                if signature in repeated_errors or exc.code in {"permission_denied", "missing_credentials"}:
+                    raise
+                repeated_errors[signature] = exc.code
+                observation = {"status": "error", "code": exc.code, "retryable": exc.retryable, "action_kind": action.kind}
+                self.store.diagnostic(session_id, lease_id, observation)
+                continue
             except (ValidationError, PlanningError) as exc:
-                repairable = isinstance(exc, ValidationError) or exc.code in {
-                    "model_invalid_json", "model_empty_content", "model_output_truncated"}
+                repairable = self._repairable(exc)
                 if not repairable:
                     raise
                 if not repairs_left:
@@ -74,11 +110,7 @@ class PlanningRuntime:
                 repairs_left -= 1
                 # Give Plan one bounded repair opportunity, with paths/types only.
                 # No supplier payload, raw model output or private reasoning is persisted.
-                errors = [
-                    {"path": list(error["loc"]), "type": error["type"]}
-                    for error in exc.errors(include_input=False, include_url=False)[:8]] if isinstance(exc, ValidationError) else []
-                observation = {"status": "error", "code": "invalid_agent_contract" if isinstance(exc, ValidationError) else exc.code,
-                    "contract_errors": errors}
+                observation = self._error_observation(exc)
                 self.store.diagnostic(session_id, lease_id, observation)
                 continue
             # Event data is metadata only. Never save supplier objects or model transcripts.
@@ -86,6 +118,18 @@ class PlanningRuntime:
                 event_data={"action_kind": action.kind, "action_id": action.action_id, "status": observation["status"]})
             if state.status != "running":
                 return
+
+    @staticmethod
+    def _repairable(exc):
+        return isinstance(exc, ValidationError) or exc.code in {
+            "model_invalid_json", "model_empty_content", "model_output_truncated"}
+
+    @staticmethod
+    def _error_observation(exc):
+        errors = [{"path": list(e["loc"]), "type": e["type"]}
+            for e in exc.errors(include_input=False, include_url=False)[:8]] if isinstance(exc, ValidationError) else []
+        return {"status": "error", "code": "invalid_agent_contract" if isinstance(exc, ValidationError) else exc.code,
+            "contract_errors": errors}
 
     async def run(self, session_id, lease_id):
         heartbeat = asyncio.create_task(self._heartbeat(session_id, lease_id))

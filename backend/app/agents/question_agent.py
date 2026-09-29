@@ -30,12 +30,12 @@ class QuestionAgent:
         return Question(question_id=question_id, state_version=snapshot.state.state_version,
             gap_ids=action.gap_ids, **draft.model_dump())
 
-    async def interpret(self, queued, intent):
+    async def interpret(self, queued, intent, repair=None):
         patch = await self.client.complete(
             "Interpret ONLY this user answer into a trip intent patch. Return JSON. Only update allowed gap_ids. "
-            "Fields are whole validated units; use existing values for unchanged subfields. "
+            "Preferences contain ONLY changed subfields; dates/party/budget are whole validated units. "
             "Unknown/ambiguous facts must remain unknown. Do not guess exact count, dates, money currency or budget scope. "
             "Do not infer age-based or gender-based preferences. If not enough evidence return {} and ask again later.",
-            {"question": queued["question"], "answer": queued["answer"], "intent": intent.model_dump(mode="json")},
+            {"question": queued["question"], "answer": queued["answer"], "intent": intent.model_dump(mode="json"), "repair": repair},
             IntentPatch.model_json_schema())
         return IntentPatch.model_validate(patch)

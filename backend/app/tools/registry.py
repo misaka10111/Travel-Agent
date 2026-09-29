@@ -4,6 +4,7 @@ from uuid import uuid4
 from app.providers.maps.amap import AmapProvider
 from app.providers.maps.transport import MapTransport
 from app.runtime.guards import PlanningError
+from app.agents.intake_agent import IntakeAgent
 
 
 class BudgetMapTransport(MapTransport):
@@ -19,6 +20,7 @@ class BudgetMapTransport(MapTransport):
 class ToolRegistry:
     def __init__(self, question_agent, settings, provider_factory=None):
         self.question_agent = question_agent
+        self.intake_agent = IntakeAgent(question_agent.client)
         self.settings = settings
         self.provider_factory = provider_factory
 

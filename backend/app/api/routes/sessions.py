@@ -14,7 +14,7 @@ from app.runtime.executor import PlanningRuntime
 from app.runtime.guards import PlanningError
 from app.runtime.store import SessionStore, fingerprint
 from app.schemas.planning_api import AnswerSession, CreatedSession, CreateSession, EditSession, SessionEvent, SessionView, VersionCommand
-from app.services.intent_service import apply_patch
+from app.services.intent_service import apply_patch, invalidate
 from app.tools.registry import ToolRegistry
 
 router = APIRouter(prefix="/sessions", tags=["planning-sessions"])
@@ -94,8 +94,10 @@ async def answer_session(session_id: str, body: AnswerSession, runtime=Depends(o
     except ValueError:
         raise PlanningError("invalid_answer_options_or_version", 422) from None
     if body.intent_patch is not None:
+        previous = state.intent_snapshot.model_copy(deep=True)
         state.intent_snapshot = apply_patch(state.intent_snapshot, body.intent_patch, source="answer",
             source_ref=answer.request_id, allowed=question.gap_ids)
+        invalidate(state, previous)
     snapshot.messages.append({"kind": "answer", "question": question.model_dump(mode="json"),
         "answer": answer.model_dump(mode="json"), "processed": body.intent_patch is not None})
     state.pending_questions = [q for q in state.pending_questions if q.question_id != question.question_id]
@@ -111,27 +113,28 @@ async def edit_session(session_id: str, body: EditSession, runtime=Depends(owned
     if snapshot is None:
         return runtime.store.view(session_id, replayed=True)
     state = snapshot.state
-    if state.status in {"cancelled", "completed", "failed"}:
+    if state.status in {"cancelled", "failed"}:
         raise PlanningError("session_terminal")
-    if body.intent_patch is None and body.selections is None:
+    if body.intent_patch is None and body.selections is None and body.message is None:
         raise PlanningError("empty_edit", 422)
     if body.intent_patch:
-        old_region = state.intent_snapshot.destination
+        previous = state.intent_snapshot.model_copy(deep=True)
         state.intent_snapshot = apply_patch(state.intent_snapshot, body.intent_patch, source="form", source_ref=body.request_id)
-        if state.intent_snapshot.destination != old_region:
-            state.candidates, state.candidate_ids, state.selections = [], [], []
-            state.candidates_need_refresh = False
+        invalidate(state, previous)
     if body.selections is not None:
         if not {s.place_id for s in body.selections} <= set(state.candidate_ids):
             raise PlanningError("unknown_selected_place", 422)
         state.selections = body.selections
     state.status, state.attention_reason = "draft", None
     state.agent_message = None
-    state.pending_questions, state.current_plan_ref = [], None
+    state.pending_questions, state.current_plan_ref, state.current_plan = [], None, None
+    state.plan_needs_refresh = False
     # A manual edit supersedes unanswered interpretation jobs from the previous intent.
     for message in snapshot.messages:
-        if message.get("kind") == "answer" and not message.get("processed"):
+        if message.get("kind") in {"answer", "intake"} and not message.get("processed"):
             message["processed"], message["superseded"] = True, True
+    if body.message:
+        snapshot.messages.append({"kind": "intake", "text": body.message, "message_id": body.request_id, "processed": False})
     runtime.store.save(state, expected=state.state_version, kind="user_edited", messages=snapshot.messages,
         command=(body.request_id, signature))
     return runtime.store.view(session_id)

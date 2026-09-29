@@ -63,6 +63,9 @@ class Preferences(ContractModel):
     comfort_tags: list[str] = Field(default_factory=list)
     travel_modes: list[TravelMode] = Field(default_factory=list)
     pace: Literal["relaxed", "balanced", "busy"] | None = None
+    dietary_preferences: list[str] = Field(default_factory=list)
+    lodging_preferences: list[str] = Field(default_factory=list)
+    must_visit_names: list[str] = Field(default_factory=list)
 
 
 class ConstraintBase(ContractModel):
