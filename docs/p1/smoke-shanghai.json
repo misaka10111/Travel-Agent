@@ -1,0 +1,43 @@
+{
+  "executed_at": "2026-09-29T08:18:27.892038+00:00",
+  "city": "上海",
+  "duration_days": 5,
+  "services": "real DeepSeek-compatible JSON model and real Amap Web service",
+  "first_status": "waiting_user",
+  "question_count": 1,
+  "question_gap_ids": [
+    [
+      "party"
+    ]
+  ],
+  "final_status": "needs_attention",
+  "attention_reason": "plan_paused",
+  "party_count": 2,
+  "candidate_count": 8,
+  "coordinate_count": 8,
+  "coordinate_systems": [
+    "GCJ02"
+  ],
+  "provider_ref_count": 8,
+  "usage": {
+    "model_calls": 5,
+    "map_calls": 2,
+    "steps": 3,
+    "model_limit": 8,
+    "map_limit": 4,
+    "step_limit": 6
+  },
+  "action_sequence": [
+    "ask_user",
+    "search_candidates",
+    "pause"
+  ],
+  "contract_diagnostics": [],
+  "restart_needs_refresh": true,
+  "itinerary_generated": false,
+  "passed": true,
+  "scenario_scope": "Explicit bounded request: one party question, one two-keyword candidate search, then Plan chooses pause; not an open-ended itinerary benchmark",
+  "limits": "P1 candidate preparation only; itinerary route quality belongs to P2; UI map belongs to P3",
+  "agent_message_persisted": false,
+  "report_note": "Successful live action sequence recorded before the final volatile-summary persistence separation; counters and outcomes unchanged. Persistence separation is verified by offline tests; supplier-derived summary text is excluded from this report."
+}

@@ -1,0 +1,39 @@
+{
+  "executed_at": "2026-09-29T08:15:59.956316+00:00",
+  "city": "上海",
+  "duration_days": 5,
+  "services": "real DeepSeek-compatible JSON model and real Amap Web service",
+  "first_status": "waiting_user",
+  "question_count": 1,
+  "question_gap_ids": [
+    [
+      "party"
+    ]
+  ],
+  "final_status": "needs_attention",
+  "attention_reason": "budget_exhausted_or_obsolete",
+  "party_count": 2,
+  "candidate_count": 12,
+  "coordinate_count": 12,
+  "coordinate_systems": [
+    "GCJ02"
+  ],
+  "provider_ref_count": 12,
+  "usage": {
+    "model_calls": 5,
+    "map_calls": 4,
+    "steps": 3,
+    "model_limit": 8,
+    "map_limit": 4,
+    "step_limit": 6
+  },
+  "action_sequence": [
+    "ask_user",
+    "search_candidates"
+  ],
+  "restart_needs_refresh": true,
+  "itinerary_generated": false,
+  "passed": false,
+  "limits": "P1 candidate preparation only; itinerary route quality belongs to P2; UI map belongs to P3",
+  "acceptance_note": "Budget guard passed; candidate-preparation pause acceptance did not pass. Preserved as a diagnostic, not final acceptance."
+}

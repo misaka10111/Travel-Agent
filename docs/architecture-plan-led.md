@@ -1,6 +1,6 @@
 # Plan Agent 主导的旅行规划：执行蓝图与地图选型
 
-2026-09-29；状态：P0 数据契约与上海高德最小适配已实现并验收，49 项后端测试通过；新编排与规划页面尚未集成。用户明确先做国内，海外验证及接入移至后续海外阶段。
+2026-09-29；状态：P0 国内基础与 P1 最小编排已实现；94 项后端测试通过。上海真实问答循环与上海→北京真实候选任务已执行。当前实现 Plan/Q、Search 地图工具及可恢复会话；路线引擎与完整 Validate 在 P2，规划地图页面在 P3。用户明确先做国内，海外移至后续阶段。当前阶段的具体架构及证据见 docs/p1/implementation-plan.md、docs/p1/execution-report.md。
 
 本文是后续实施的最新基线，替代 `architecture-b-selected.md` 中由 Orchestrator 决定业务步骤的设计。保留 B 的地图/卡片共同规划体验，调整为 Plan Agent 统筹、程序约束执行。
 
@@ -66,10 +66,11 @@ Travel-Agent/
 │  │  │  ├─ validate_agent.py            # 软审核：偏好、舒适度、理由与事实一致性
 │  │  │  └─ prompts.py                   # 四个角色的提示词和版本标识
 │  │  ├─ runtime/
-│  │  │  ├─ graph.py                     # LangGraph 行动循环；工具执行后回到 Plan
+│  │  │  ├─ graph.py                     # 可选后续 LangGraph 适配；P1 实际采用异步动作循环
 │  │  │  ├─ executor.py                  # 后台任务、恢复、取消、超时和检查点
 │  │  │  ├─ guards.py                    # 参数、权限、调用预算、旧版本和完成条件检查
-│  │  │  └─ events.py                    # 结构化进度；不暴露模型内部推理文本
+│  │  │  ├─ store.py                     # P1 已实现：SQL版本、幂等、租约、限额、事件
+│  │  │  └─ events.py                    # 后续可拆分事件接口；P1 事件在 store 中实现
 │  │  ├─ tools/
 │  │  │  └─ registry.py                  # 工具白名单、输入输出类型与服务函数绑定
 │  │  ├─ services/

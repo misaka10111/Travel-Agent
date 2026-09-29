@@ -1,0 +1,30 @@
+{
+  "executed_at": "2026-09-29T08:17:13.991348+00:00",
+  "city": "上海",
+  "duration_days": 5,
+  "services": "real DeepSeek-compatible JSON model and real Amap Web service",
+  "first_status": "needs_attention",
+  "question_count": 0,
+  "question_gap_ids": [],
+  "final_status": "needs_attention",
+  "attention_reason": "invalid_agent_contract",
+  "party_count": null,
+  "candidate_count": 0,
+  "coordinate_count": 0,
+  "coordinate_systems": [],
+  "provider_ref_count": 0,
+  "usage": {
+    "model_calls": 2,
+    "map_calls": 0,
+    "steps": 1,
+    "model_limit": 8,
+    "map_limit": 4,
+    "step_limit": 6
+  },
+  "action_sequence": [],
+  "restart_needs_refresh": false,
+  "itinerary_generated": false,
+  "passed": false,
+  "scenario_scope": "Explicit bounded request: one party question, one two-keyword candidate search, then Plan chooses pause; not an open-ended itinerary benchmark",
+  "limits": "P1 candidate preparation only; itinerary route quality belongs to P2; UI map belongs to P3"
+}

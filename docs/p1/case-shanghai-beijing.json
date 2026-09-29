@@ -1,0 +1,180 @@
+{
+  "executed_at": "2026-09-29T08:35:21.656742+00:00",
+  "session_id": "7409468a-4bc1-4ab7-837a-67effa142491",
+  "run_stage": "resume_same_session",
+  "request": "从上海到北京玩5天，希望舒适，2人不喜欢吃辣，希望饮食清淡健康，住宿在景点附近，交通便利，更喜欢去偏人文的景点玩，喜欢古代建筑。",
+  "final_status": "needs_attention",
+  "attention_reason": "plan_paused",
+  "state_version": 6,
+  "intent_snapshot": {
+    "schema_version": "1.0",
+    "intent_id": "beijing-case-0d2922b2-e4b8-4cbc-97ba-00d01d6a5756",
+    "profile_snapshot_ref": "profile:59983bca-cb3a-4234-9d8d-592e1587789e",
+    "destination": {
+      "label": "北京",
+      "country_code": "CN",
+      "region_id": null,
+      "timezone": "Asia/Shanghai",
+      "identity_status": "unresolved"
+    },
+    "origin": {
+      "label": "上海",
+      "country_code": "CN",
+      "region_id": null,
+      "timezone": "Asia/Shanghai",
+      "identity_status": "unresolved"
+    },
+    "dates": {
+      "start_date": null,
+      "end_date": null,
+      "duration_days": 5,
+      "timezone": "Asia/Shanghai"
+    },
+    "party": {
+      "count": 2,
+      "count_min": null,
+      "count_status": "exact",
+      "raw": "2人",
+      "companion_tags": []
+    },
+    "budget": {
+      "money": null,
+      "limit_kind": "unspecified",
+      "raw": null,
+      "unknown_reason": "user_did_not_provide_budget"
+    },
+    "preferences": {
+      "interests": [
+        "人文",
+        "古代建筑"
+      ],
+      "comfort_tags": [
+        "舒适",
+        "交通便利"
+      ],
+      "travel_modes": [],
+      "pace": null
+    },
+    "constraints": [
+      {
+        "constraint_id": "diet-no-spicy",
+        "strength": "soft",
+        "evidence": {
+          "source": "message",
+          "source_ref": "beijing-user-request",
+          "confirmation": "explicit",
+          "updated_at": "2026-09-29T08:30:11.974764Z"
+        },
+        "kind": "special_requirement",
+        "description": "不喜欢吃辣，优先不辣餐食"
+      },
+      {
+        "constraint_id": "diet-healthy",
+        "strength": "soft",
+        "evidence": {
+          "source": "message",
+          "source_ref": "beijing-user-request",
+          "confirmation": "explicit",
+          "updated_at": "2026-09-29T08:30:11.974764Z"
+        },
+        "kind": "special_requirement",
+        "description": "饮食清淡健康"
+      },
+      {
+        "constraint_id": "stay-nearby",
+        "strength": "soft",
+        "evidence": {
+          "source": "message",
+          "source_ref": "beijing-user-request",
+          "confirmation": "explicit",
+          "updated_at": "2026-09-29T08:30:11.974764Z"
+        },
+        "kind": "special_requirement",
+        "description": "住宿在景点附近，交通便利"
+      }
+    ],
+    "field_evidence": {
+      "origin": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "destination": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "dates.duration_days": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "party": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "preferences.interests": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "preferences.comfort_tags": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "constraints": {
+        "source": "message",
+        "source_ref": "beijing-user-request",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:30:11.974764Z"
+      },
+      "notes": {
+        "source": "form",
+        "source_ref": "806fcb22-ba1f-4c52-a894-e10e833f45cf",
+        "confirmation": "explicit",
+        "updated_at": "2026-09-29T08:35:16.551543Z"
+      }
+    },
+    "unresolved_questions": [],
+    "message_refs": [],
+    "notes": "用户已确认出发日期和预算暂不确定，本轮先测试候选检索。原始旅行偏好保留；城际及市内交通方式未指定。"
+  },
+  "usage": {
+    "model_calls": 4,
+    "map_calls": 3,
+    "steps": 3,
+    "model_limit": 20,
+    "map_limit": 12,
+    "step_limit": 12
+  },
+  "run_usage_delta": {
+    "model_calls": 2,
+    "map_calls": 3,
+    "steps": 2
+  },
+  "action_sequence": [
+    "search_candidates",
+    "pause"
+  ],
+  "contract_diagnostics": [],
+  "candidate_count": 12,
+  "coordinate_count": 12,
+  "coordinate_systems": [
+    "GCJ02"
+  ],
+  "provider_ref_count": 12,
+  "categories": {
+    "attraction": 12
+  },
+  "pending_question_gap_ids": [],
+  "full_itinerary_generated": false,
+  "scope": "Actual user request, no scripted choice of agent action and no fabricated supplier data. P2 itinerary and P3 UI capabilities are unavailable in P1."
+}
