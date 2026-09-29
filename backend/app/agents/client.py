@@ -20,18 +20,28 @@ class JsonModelClient:
         parsed = urlsplit(base)
         if parsed.scheme != "https" or parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise PlanningError("model_invalid_base_url")
+        body = {"model": self.settings.planning_model, "temperature": 0.2,
+            "max_tokens": self.settings.planning_max_output_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [{"role": "system", "content": system + "\nReturn one JSON object following this JSON schema:\n" + json.dumps(schema, ensure_ascii=False)},
+                {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]}
+        if parsed.hostname == "api.deepseek.com":
+            # The provider defaults to thinking=enabled; keep small action emissions explicit.
+            body["thinking"] = {"type": self.settings.planning_thinking_mode}
         try:
             async with httpx.AsyncClient(timeout=self.settings.planning_model_timeout_seconds, follow_redirects=False) as client:
                 response = await client.post(base + "/chat/completions",
                     headers={"Authorization": "Bearer " + key.get_secret_value()},
-                    json={"model": self.settings.planning_model, "temperature": 0.2, "max_tokens": 2200,
-                        "response_format": {"type": "json_object"},
-                        "messages": [{"role": "system", "content": system + "\nReturn one JSON object following this JSON schema:\n" + json.dumps(schema, ensure_ascii=False)},
-                            {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]})
+                    json=body)
                 if response.status_code != 200:
                     code = "model_permission_denied" if response.status_code in (401, 403) else "model_request_failed"
                     raise PlanningError(code)
-                output = response.json()["choices"][0]["message"]["content"]
+                choice = response.json()["choices"][0]
+                if choice.get("finish_reason") == "length":
+                    raise PlanningError("model_output_truncated")
+                output = choice["message"]["content"]
+                if not isinstance(output, str) or not output.strip():
+                    raise PlanningError("model_empty_content")
                 data = json.loads(output)
                 if not isinstance(data, dict):
                     raise ValueError()

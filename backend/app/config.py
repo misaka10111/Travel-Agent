@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -29,6 +30,8 @@ class Settings(BaseSettings):
     planning_api_key: SecretStr | None = None
     planning_base_url: str = "https://api.deepseek.com"
     planning_model: str = "deepseek-flash"
+    planning_max_output_tokens: int = Field(default=4096, ge=512, le=8192)
+    planning_thinking_mode: Literal["enabled", "disabled"] = "disabled"
     planning_model_timeout_seconds: float = Field(default=45, gt=0, le=90)
     planning_model_call_limit: int = Field(default=20, ge=1, le=50)
     planning_map_call_limit: int = Field(default=12, ge=1, le=30)

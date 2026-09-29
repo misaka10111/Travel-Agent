@@ -55,6 +55,9 @@ class ScriptedModel:
         if self.mode == "invalid_once":
             self.mode = "pause"
             return {"kind": "shell", "command": "forbidden"}
+        if self.mode == "empty_once":
+            self.mode = "pause"
+            raise PlanningError("model_empty_content")
         if self.mode == "finish":
             return {**base, "kind": "finish", "plan_ref": {"plan_id": "invented", "version": 1}}
         if self.mode == "stale":
@@ -459,6 +462,9 @@ def test_one_contract_repair_is_bounded_and_returns_to_plan(harness):
     (429, {}, "model_request_failed"), (500, {}, "model_request_failed"),
     (200, {"choices": [{"message": {"content": "not json"}}]}, "model_invalid_json"),
     (200, {"choices": [{"message": {"content": "[]"}}]}, "model_invalid_json"),
+    (200, {"choices": [{"message": {"content": None}}]}, "model_empty_content"),
+    (200, {"choices": [{"message": {"content": " "}}]}, "model_empty_content"),
+    (200, {"choices": [{"finish_reason": "length", "message": {"content": "{}"}}]}, "model_output_truncated"),
 ])
 def test_model_http_errors_and_invalid_json_are_sanitized(monkeypatch, status, content, expected):
     original = httpx.AsyncClient
@@ -493,3 +499,32 @@ def test_action_scope_cannot_escape_current_trip(harness, scope, expected):
         "purpose": "test", "reason": "pause", "scope": scope})
     with pytest.raises(PlanningError, match=expected):
         check_action(action, state)
+
+
+def test_empty_model_output_gets_only_one_budgeted_repair(harness):
+    client, _, model, _, _ = harness
+    model.mode = "empty_once"
+    url, headers, _ = create(client)
+    run(client, url, headers, 0)
+    result = wait_state(client, url, headers)
+    assert result["usage"]["model_calls"] == 2 and result["state"]["attention_reason"] == "plan_paused"
+    assert model.contexts[-1]["last_observation"]["code"] == "model_empty_content"
+
+
+@pytest.mark.parametrize("host,has_thinking", [("https://api.deepseek.com", True), ("https://compatible.example.test/v1", False)])
+def test_provider_specific_thinking_switch_is_explicit(monkeypatch, host, has_thinking):
+    original = httpx.AsyncClient
+    captured = []
+
+    def handle(request):
+        captured.append(json.loads(request.content))
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {"content": "{}"}}]})
+
+    transport = httpx.MockTransport(handle)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: original(transport=transport, **kwargs))
+    model = JsonModelClient(Settings(_env_file=None, planning_api_key=SecretStr("unit-test-key"), planning_base_url=host))
+    assert asyncio.run(model.complete("JSON", {}, {})) == {}
+    assert ("thinking" in captured[0]) is has_thinking
+    assert captured[0]["max_tokens"] == 4096
+    if has_thinking:
+        assert captured[0]["thinking"] == {"type": "disabled"}

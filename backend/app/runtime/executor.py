@@ -64,15 +64,21 @@ class PlanningRuntime:
                 action = await self.plan.decide(snapshot, observation)
                 check_action(action, snapshot.state)
                 state, observation = await self.registry.execute(action, snapshot, reserve_model, reserve_map)
-            except ValidationError as exc:
+            except (ValidationError, PlanningError) as exc:
+                repairable = isinstance(exc, ValidationError) or exc.code in {
+                    "model_invalid_json", "model_empty_content", "model_output_truncated"}
+                if not repairable:
+                    raise
                 if not repairs_left:
                     raise
                 repairs_left -= 1
                 # Give Plan one bounded repair opportunity, with paths/types only.
                 # No supplier payload, raw model output or private reasoning is persisted.
-                observation = {"status": "error", "code": "invalid_agent_contract", "contract_errors": [
+                errors = [
                     {"path": list(error["loc"]), "type": error["type"]}
-                    for error in exc.errors(include_input=False, include_url=False)[:8]]}
+                    for error in exc.errors(include_input=False, include_url=False)[:8]] if isinstance(exc, ValidationError) else []
+                observation = {"status": "error", "code": "invalid_agent_contract" if isinstance(exc, ValidationError) else exc.code,
+                    "contract_errors": errors}
                 self.store.diagnostic(session_id, lease_id, observation)
                 continue
             # Event data is metadata only. Never save supplier objects or model transcripts.
