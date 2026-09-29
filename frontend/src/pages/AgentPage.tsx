@@ -1,713 +1,741 @@
-import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
-import { useLocation } from 'react-router-dom';
-import { api } from '../api/client';
+import { useMemo, useState } from 'react';
+import type { KeyboardEvent } from 'react';
 
-type RealBlock = {
+type ChatMessage = {
   id: string;
-  day: number;
-  date: string;
-  type: string;
-  time: string;
-  name: string;
-  note: string;
-  link: string;
+  role: 'assistant' | 'user';
+  content: string;
 };
 
-type RealPlan = {
-  style: string;
-  summary: string;
-  blocks: RealBlock[];
-};
+type OptionType = 'flight' | 'hotel' | 'spot';
 
-type MessageItem = {
+type BaseOption = {
   id: string;
-  role: 'user' | 'assistant';
-  text: string;
+  title: string;
+  subtitle: string;
+  scheduleAt: string;
+  scheduleLabel: string;
+  location: string;
+  tags: string[];
+  description: string;
 };
 
-const KNOWN_CITIES = [
-  '东京', '首尔', '大阪', '曼谷', '北京', '上海', '杭州', '宁波',
-  '广州', '深圳', '成都', '西安', '重庆', '三亚', '香港',
+type FlightOption = BaseOption & {
+  type: 'flight';
+  from: string;
+  to: string;
+  departTime: string;
+  arriveTime: string;
+  airline: string;
+  duration: string;
+  price: number;
+};
+
+type HotelOption = BaseOption & {
+  type: 'hotel';
+  district: string;
+  checkIn: string;
+  checkOut: string;
+  roomType: string;
+  rating: number;
+  nightlyPrice: number;
+  totalPrice: number;
+};
+
+type SpotOption = BaseOption & {
+  type: 'spot';
+  area: string;
+  openHours: string;
+  recommendedDuration: string;
+  ticketPrice: number;
+};
+
+type OptionItem = FlightOption | HotelOption | SpotOption;
+
+const flights: FlightOption[] = [
+  {
+    id: 'flight-1',
+    type: 'flight',
+    title: '国泰航空 CX420',
+    subtitle: '香港 → 首尔',
+    from: '香港 HKG',
+    to: '首尔 ICN',
+    departTime: '11/05 09:10',
+    arriveTime: '11/05 13:35',
+    airline: 'Cathay Pacific',
+    duration: '3h 25m',
+    price: 2180,
+    scheduleAt: '2026-11-05T09:10:00',
+    scheduleLabel: '11/05 · 09:10',
+    location: '仁川国际机场',
+    tags: ['直飞', '早班机', '推荐'],
+    description: '直飞航班，时间友好，适合作为当前首选方案。',
+  },
+  {
+    id: 'flight-2',
+    type: 'flight',
+    title: '大韩航空 KE608',
+    subtitle: '香港 → 首尔',
+    from: '香港 HKG',
+    to: '首尔 GMP',
+    departTime: '11/05 13:40',
+    arriveTime: '11/05 18:05',
+    airline: 'Korean Air',
+    duration: '3h 25m',
+    price: 1950,
+    scheduleAt: '2026-11-05T13:40:00',
+    scheduleLabel: '11/05 · 13:40',
+    location: '金浦国际机场',
+    tags: ['直飞', '性价比'],
+    description: '价格更低，适合预算优先的路线选择。',
+  },
+  {
+    id: 'flight-3',
+    type: 'flight',
+    title: '韩亚航空 OZ746',
+    subtitle: '香港 → 首尔',
+    from: '香港 HKG',
+    to: '首尔 ICN',
+    departTime: '11/06 08:20',
+    arriveTime: '11/06 12:50',
+    airline: 'Asiana Airlines',
+    duration: '3h 30m',
+    price: 2280,
+    scheduleAt: '2026-11-06T08:20:00',
+    scheduleLabel: '11/06 · 08:20',
+    location: '仁川国际机场',
+    tags: ['直飞', '时间稳定'],
+    description: '到达时间早，便于第一天安排更多活动。',
+  },
 ];
 
-function makeId() {
-  return `${Date.now()}-${Math.random()}`;
-}
-
-const RATINGS = [
-  { label: '很满意', value: 5 },
-  { label: '满意', value: 4 },
-  { label: '一般', value: 3 },
-  { label: '不满意', value: 1 },
+const hotels: HotelOption[] = [
+  {
+    id: 'hotel-1',
+    type: 'hotel',
+    title: 'L7 弘大酒店',
+    subtitle: '首尔 · 弘大',
+    district: '弘大商圈',
+    checkIn: '11/05 15:00',
+    checkOut: '11/09 11:00',
+    roomType: '标准双床房',
+    rating: 4.6,
+    nightlyPrice: 680,
+    totalPrice: 2720,
+    scheduleAt: '2026-11-05T15:00:00',
+    scheduleLabel: '11/05 · 15:00',
+    location: '首尔市麻浦区',
+    tags: ['交通方便', '年轻氛围', '推荐'],
+    description: '靠近地铁和演出活动区域，适合喜欢 live music 的用户。',
+  },
+  {
+    id: 'hotel-2',
+    type: 'hotel',
+    title: '九树明洞 2 号店',
+    subtitle: '首尔 · 明洞',
+    district: '明洞商圈',
+    checkIn: '11/05 15:00',
+    checkOut: '11/09 11:00',
+    roomType: '标准大床房',
+    rating: 4.5,
+    nightlyPrice: 720,
+    totalPrice: 2880,
+    scheduleAt: '2026-11-05T15:00:00',
+    scheduleLabel: '11/05 · 15:00',
+    location: '首尔市中区',
+    tags: ['购物方便', '热门区域'],
+    description: '更适合喜欢市中心商圈、购物与餐饮的行程搭配。',
+  },
+  {
+    id: 'hotel-3',
+    type: 'hotel',
+    title: '首尔花园酒店',
+    subtitle: '首尔 · 麻浦',
+    district: '麻浦区',
+    checkIn: '11/05 15:00',
+    checkOut: '11/09 11:00',
+    roomType: '高级房',
+    rating: 4.4,
+    nightlyPrice: 610,
+    totalPrice: 2440,
+    scheduleAt: '2026-11-05T15:00:00',
+    scheduleLabel: '11/05 · 15:00',
+    location: '首尔市麻浦区',
+    tags: ['预算友好', '安静'],
+    description: '总价更低，适合成本更敏感的方案。',
+  },
 ];
 
-const FIELD_QUESTIONS: Record<string, string> = {
-  origin: '您准备从哪里出发？',
-  travelers: '几个人一起出行？',
-  total_budget: '这次预算大概多少元？',
-  purposes: '这次主要想做什么？比如美食、文化、自然风光。',
-  start_date: '计划哪天出发？',
-  end_date: '哪天返程？',
-};
+const spots: SpotOption[] = [
+  {
+    id: 'spot-1',
+    type: 'spot',
+    title: '景福宫 + 北村韩屋村',
+    subtitle: '城市观光',
+    area: '钟路区',
+    openHours: '09:00 - 18:00',
+    recommendedDuration: '半天',
+    ticketPrice: 60,
+    scheduleAt: '2026-11-06T10:00:00',
+    scheduleLabel: '11/06 · 10:00',
+    location: '首尔钟路区',
+    tags: ['文化体验', '经典景点'],
+    description: '适合首次到首尔的经典路线，可作为白天行程。',
+  },
+  {
+    id: 'spot-2',
+    type: 'spot',
+    title: 'Seoul Music Week',
+    subtitle: '音乐活动',
+    area: '弘大',
+    openHours: '19:00 - 22:30',
+    recommendedDuration: '半天',
+    ticketPrice: 320,
+    scheduleAt: '2026-11-06T19:00:00',
+    scheduleLabel: '11/06 · 19:00',
+    location: '首尔弘大 Live House',
+    tags: ['演唱会', '高度匹配', '推荐'],
+    description: '与你的“现场音乐 / 演唱会”偏好高度匹配，是当前最推荐的活动。',
+  },
+  {
+    id: 'spot-3',
+    type: 'spot',
+    title: '汉江夜游',
+    subtitle: '城市夜景',
+    area: '汝矣岛',
+    openHours: '18:00 - 22:00',
+    recommendedDuration: '2-3 小时',
+    ticketPrice: 120,
+    scheduleAt: '2026-11-07T18:30:00',
+    scheduleLabel: '11/07 · 18:30',
+    location: '首尔汝矣岛',
+    tags: ['夜景', '轻松行程'],
+    description: '节奏更轻松，适合行程后半段放松。',
+  },
+];
 
-function hasDateMention(query: string): boolean {
-  return /\d+\s*[天日月号]|\d{1,2}月|\d{4}[-/.]\d{1,2}/.test(query);
+const allOptions: OptionItem[] = [...flights, ...hotels, ...spots];
+
+const formatPrice = (price: number) => `HKD ${price.toLocaleString()}`;
+const buildId = () => `${Date.now()}-${Math.random()}`;
+
+function getOptionPrice(item: OptionItem) {
+  if (item.type === 'flight') return item.price;
+  if (item.type === 'hotel') return item.totalPrice;
+  return item.ticketPrice;
 }
 
-function detectModifyScope(query: string): string | null {
-  if (query.includes('酒店') || query.includes('住宿')) return '酒店';
-  if (query.includes('景点') || query.includes('活动')) return '景点';
-  if (query.includes('美食') || query.includes('餐厅') || query.includes('饭店') || query.includes('餐')) return '美食';
-  if (query.includes('交通') || query.includes('机票') || query.includes('高铁')) return '交通';
-  return null;
+function getOptionIcon(type: OptionType) {
+  if (type === 'flight') return '✈';
+  if (type === 'hotel') return '▣';
+  return '●';
 }
 
-function getMissingFields(
-  basic: Record<string, unknown> | undefined,
-  query: string,
-): string[] {
-  const missing: string[] = [];
-  if (!basic?.origin) missing.push('origin');
-  if (!basic?.travelers) missing.push('travelers');
-  if (!basic?.total_budget) missing.push('total_budget');
-  if (!basic?.purposes || (basic.purposes as unknown[]).length === 0) missing.push('purposes');
-  if (!basic?.start_date && !hasDateMention(query)) missing.push('start_date');
-  if (!basic?.end_date && !hasDateMention(query)) missing.push('end_date');
-  return missing;
-}
-
-function buildSupplement(collected: Record<string, string>): string {
-  const parts: string[] = [];
-  if (collected.origin) parts.push(`从${collected.origin}出发`);
-  if (collected.travelers) {
-    parts.push(collected.travelers.includes('人') ? collected.travelers : `${collected.travelers}人`);
-  }
-  if (collected.total_budget) parts.push(`预算${collected.total_budget}元`);
-  if (collected.purposes) parts.push(`主要想做${collected.purposes}`);
-  if (collected.start_date) parts.push(`${collected.start_date}出发`);
-  if (collected.end_date) parts.push(`${collected.end_date}返程`);
-  return parts.join('，');
-}
-
-function extractDestination(query: string): string {
-  for (const city of KNOWN_CITIES) {
-    if (query.includes(city)) return city;
-  }
-  return '北京';
-}
-
-function PlanCard({
-  plan,
-  onSelect,
-  confirming,
-  onConfirm,
-  onRate,
-}: {
-  plan: RealPlan;
-  onSelect: () => void;
-  confirming: boolean;
-  onConfirm: (plan: RealPlan) => void;
-  onRate: (plan: RealPlan, rating: number) => void;
-}) {
-  return (
-    <article
-      className="agent-recommendation-card agent-clickable-card"
-      onClick={onSelect}
-      role="button"
-      tabIndex={0}
-    >
-      <div className="agent-card-topline">
-        <span className="agent-rank">{plan.style}</span>
-      </div>
-      <h3>{plan.style}</h3>
-      <p className="agent-card-reason">{plan.summary}</p>
-      <div className="agent-card-expand-hint">
-        <span>点击查看完整行程</span>
-        <span aria-hidden="true">→</span>
-      </div>
-      <button
-        type="button"
-        className="agent-confirm-btn"
-        onClick={(e) => {
-          e.stopPropagation();
-          onConfirm(plan);
-        }}
-      >
-        {confirming ? '请选择评价' : '确认此方案'}
-      </button>
-      {confirming && (
-        <div className="agent-rating" onClick={(e) => e.stopPropagation()}>
-          {RATINGS.map((r) => (
-            <button
-              key={r.value}
-              type="button"
-              className="agent-rating-btn"
-              onClick={() => onRate(plan, r.value)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      )}
-    </article>
-  );
-}
-
-function PlanDetail({
-  plan,
-  destination,
-  dates,
-  selectedBlocks,
-  onToggleBlock,
-  searchData,
-  onBack,
-}: {
-  plan: RealPlan;
-  destination: string;
-  dates: string;
-  selectedBlocks: Set<string>;
-  onToggleBlock: (id: string) => void;
-  searchData: Record<string, unknown> | null;
-  onBack: () => void;
-}) {
-  const days = Array.from(new Set(plan.blocks.map((block) => block.day)));
-
-  return (
-    <div className="agent-plan-detail">
-      <button type="button" className="agent-back-btn" onClick={onBack}>
-        ← 返回方案列表
-      </button>
-
-      <div className="agent-response-header compact">
-        <div className="agent-avatar">TR</div>
-        <div>
-          <div className="agent-response-title-row">
-            <strong>{plan.style} · 行程计划</strong>
-            <span className="agent-status-badge complete">已展开</span>
-          </div>
-          <p>
-            {destination} · {dates}
-          </p>
-        </div>
-      </div>
-
-      {days.map((day) => {
-        const dayBlocks = plan.blocks.filter((block) => block.day === day);
-        const dayDate = dayBlocks[0]?.date ?? '';
-        const weatherDays = (searchData?.weather as { days?: Array<Record<string, unknown>> } | undefined)?.days ?? [];
-        const weather = weatherDays.find((d) => d.date === dayDate);
-        const events = (searchData?.events ?? []) as Array<{ title?: string }>;
-        return (
-        <div key={day} className="agent-block-day">
-          <div className="agent-block-day-label">Day {day}</div>
-          <div className="agent-block-list">
-            {weather && (
-              <div className="agent-block agent-block-weather">
-                <div className="agent-block-left">
-                  <span className="agent-block-time">天气</span>
-                  <span className="agent-block-type">天气</span>
-                </div>
-                <div className="agent-block-body">
-                  <strong>{String(weather.weather ?? '')} {String(weather.temp_min ?? '')}~{String(weather.temp_max ?? '')}°C</strong>
-                  <p>湿度 {String(weather.humidity ?? '')}%</p>
-                </div>
-              </div>
-            )}
-            {events.length > 0 && (
-              <div className="agent-block agent-block-event">
-                <div className="agent-block-left">
-                  <span className="agent-block-time">活动</span>
-                  <span className="agent-block-type">活动</span>
-                </div>
-                <div className="agent-block-body">
-                  <strong>热点活动</strong>
-                  <p>{events.slice(0, 2).map((e) => e.title).filter(Boolean).join('；')}</p>
-                </div>
-              </div>
-            )}
-            {dayBlocks
-              .map((block) => (
-                <div
-                  key={block.id}
-                  className={`agent-block agent-block-${block.type}${
-                    selectedBlocks.has(block.id) ? ' agent-block-selected' : ''
-                  }`}
-                  onClick={() => onToggleBlock(block.id)}
-                  role="button"
-                  tabIndex={0}
-                >
-                  <div className="agent-block-left">
-                    <span className="agent-block-time">{block.time}</span>
-                    <span className="agent-block-type">{block.type}</span>
-                  </div>
-                  <div className="agent-block-body">
-                    {block.link ? (
-                      <strong>
-                        <a
-                          href={block.link}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="agent-block-link"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {block.name}
-                        </a>
-                      </strong>
-                    ) : (
-                      <strong>{block.name}</strong>
-                    )}
-                    <p>{block.note}</p>
-                  </div>
-                </div>
-              ))}
-          </div>
-        </div>
-        );
-      })}
-    </div>
-  );
+function getOptionTypeLabel(type: OptionType) {
+  if (type === 'flight') return '机票';
+  if (type === 'hotel') return '酒店';
+  return '景点 / 活动';
 }
 
 export function AgentPage() {
-  const location = useLocation();
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: buildId(),
+      role: 'assistant',
+      content:
+        '你好，我已经准备了一组可选择的机票、酒店和景点。你可以在右侧查看详情，并把喜欢的项目添加到“旅行计划”中。',
+    },
+  ]);
+
   const [draft, setDraft] = useState('');
-  const [messages, setMessages] = useState<MessageItem[]>([]);
-  const [plans, setPlans] = useState<RealPlan[]>([]);
-  const [destination, setDestination] = useState('');
-  const [dates, setDates] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
-  const [selectedPlan, setSelectedPlan] = useState<RealPlan | null>(null);
-  const [pendingQuery, setPendingQuery] = useState<string | null>(null);
-  const [pendingFields, setPendingFields] = useState<string[]>([]);
-  const [collected, setCollected] = useState<Record<string, string>>({});
-  const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
-  const [confirmingPlanId, setConfirmingPlanId] = useState<string | null>(null);
-  const [searchData, setSearchData] = useState<Record<string, unknown> | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement>(null);
-  const autoStartedRef = useRef(false);
+  const [activeTab, setActiveTab] = useState<OptionType>('flight');
+  const [planItemIds, setPlanItemIds] = useState<string[]>([]);
+  const [detailItem, setDetailItem] = useState<OptionItem | null>(null);
 
-  useEffect(() => {
-    const textarea = composerRef.current;
-    if (!textarea) return;
-    textarea.style.height = '44px';
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 144)}px`;
-  }, [draft]);
+  const visibleOptions: OptionItem[] = useMemo(() => {
+    if (activeTab === 'flight') return flights;
+    if (activeTab === 'hotel') return hotels;
+    return spots;
+  }, [activeTab]);
 
-  function toggleBlock(id: string) {
-    setSelectedBlocks((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
+  const travelPlan = useMemo(
+    () =>
+      allOptions
+        .filter((item) => planItemIds.includes(item.id))
+        .sort(
+          (a, b) =>
+            new Date(a.scheduleAt).getTime() - new Date(b.scheduleAt).getTime(),
+        ),
+    [planItemIds],
+  );
 
-  function confirmPlan(plan: RealPlan) {
-    setConfirmingPlanId((prev) => (prev === plan.style ? null : plan.style));
-  }
+  const totalBudget = useMemo(
+    () => travelPlan.reduce((sum, item) => sum + getOptionPrice(item), 0),
+    [travelPlan],
+  );
 
-  async function ratePlan(plan: RealPlan, rating: number) {
-    const userId = localStorage.getItem('currentUser') || '';
-    const [start, end] = dates.includes(' ~ ') ? dates.split(' ~ ') : ['', ''];
-    try {
-      await api.saveTripMemory({
-        user_id: userId,
-        destination,
-        start_date: start,
-        end_date: end,
-        chosen_plan_style: plan.style,
-        final_plan: plan,
-        rating,
-      });
-      setConfirmingPlanId(null);
-      setMessages((current) => [
-        ...current,
-        {
-          id: makeId(),
-          role: 'assistant',
-          text: '已确认方案并记录你的评价，感谢反馈！',
-        },
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  }
+  function handleSend() {
+    const content = draft.trim();
+    if (!content) return;
 
-  async function generate(
-    query: string,
-    profile: unknown,
-    basic: Record<string, unknown> | undefined,
-    modify?: unknown,
-    destination?: string,
-    start_date?: string,
-    end_date?: string,
-  ) {
-    try {
-      const raw = await api.plan({ query, profile, basic, modify, destination, start_date, end_date });
-      setSearchData((raw.search ?? null) as Record<string, unknown> | null);
-      const planData = (raw.plan ?? {}) as {
-        destination?: string;
-        start_date?: string;
-        end_date?: string;
-        plans?: Array<{ style?: string; summary?: string }>;
-        blocks?: RealBlock[];
-      };
-      const planList = planData.plans ?? [];
-      const allBlocks = planData.blocks ?? [];
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: buildId(),
+        role: 'user',
+        content,
+      },
+      {
+        id: buildId(),
+        role: 'assistant',
+        content:
+          '已收到你的补充需求。当前先用 Mock 数据展示交互；接入后端后，这里会根据对话动态更新右侧的候选行程。',
+      },
+    ]);
 
-      const mapped: RealPlan[] = planList.map((p) => ({
-        style: p.style ?? '方案',
-        summary: p.summary ?? '',
-        blocks: allBlocks.filter((b) => (b as unknown as { plan_style?: string }).plan_style === p.style),
-      }));
-
-      const dest = planData.destination ?? extractDestination(query);
-      const start = planData.start_date ?? '';
-      const end = planData.end_date ?? '';
-
-      setPlans(mapped);
-      setDestination(dest);
-      setDates(start && end ? `${start} ~ ${end}` : '');
-      setMessages((current) => [
-        ...current,
-        {
-          id: makeId(),
-          role: 'assistant',
-          text: `已为「${dest}」生成 ${mapped.length} 个方案，点击右侧卡片查看完整行程。`,
-        },
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function localModify(
-    blockList: RealBlock[],
-    instruction: string,
-    profile: unknown,
-    basic: Record<string, unknown> | undefined,
-  ) {
-    try {
-      if (blockList.length === 0) return;
-
-      const [start, end] = dates.includes(' ~ ') ? dates.split(' ~ ') : ['', ''];
-      const raw = await api.plan({
-        destination,
-        start_date: start,
-        end_date: end,
-        profile,
-        basic,
-        modify: { blocks: blockList, instruction },
-      });
-      const modified = (raw as { blocks?: RealBlock[] }).blocks ?? [];
-      const byId = new Map(modified.map((b) => [b.id, b]));
-
-      setPlans((prev) =>
-        prev.map((p) => ({
-          ...p,
-          blocks: p.blocks.map((b) => byId.get(b.id) ?? b),
-        })),
-      );
-      setSelectedPlan((prev) =>
-        prev ? { ...prev, blocks: prev.blocks.map((b) => byId.get(b.id) ?? b) } : prev,
-      );
-      setSelectedBlocks(new Set());
-      setMessages((current) => [
-        ...current,
-        { id: makeId(), role: 'assistant', text: '已根据你的意见修改选中块。' },
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function runPlan(query: string) {
-    setMessages((current) => [...current, { id: makeId(), role: 'user', text: query }]);
     setDraft('');
-    setLoading(true);
-    setError('');
-    setSelectedPlan(null);
-
-    let profile: unknown = undefined;
-    try {
-      profile = JSON.parse(localStorage.getItem('userProfile') || '{}');
-    } catch {
-      profile = undefined;
-    }
-
-    let basic: Record<string, unknown> | undefined = undefined;
-    try {
-      basic = JSON.parse(localStorage.getItem('tripInfo') || '{}');
-    } catch {
-      basic = undefined;
-    }
-
-    // 关键：若 tripInfo 的目的地与当前 query 说的目的地不一致，视为新旅行，忽略旧 tripInfo
-    if (basic?.destination && !query.includes(String(basic.destination))) {
-      basic = undefined;
-    }
-
-    // 修改流程：已选中 block，用户输入视为修改意见
-    if (selectedBlocks.size > 0) {
-      const selectedBlockList: RealBlock[] = [];
-      for (const p of plans) {
-        for (const b of p.blocks) {
-          if (selectedBlocks.has(b.id)) selectedBlockList.push(b);
-        }
-      }
-      await localModify(selectedBlockList, query.trim(), profile, basic);
-      return;
-    }
-
-    // 修改流程：没选块，但输入是修改指令（含「修改/改」），按类型范围收集块
-    if (query.includes('修改') || query.includes('改')) {
-      if (plans.length === 0) {
-        setLoading(false);
-        setMessages((current) => [
-          ...current,
-          {
-            id: makeId(),
-            role: 'assistant',
-            text: '还没有可修改的方案，请先告诉我想去哪里，生成方案后再修改。',
-          },
-        ]);
-        return;
-      }
-      const scope = detectModifyScope(query);
-      const blockList = plans
-        .flatMap((p) => p.blocks)
-        .filter((b) => !scope || b.type === scope);
-      if (blockList.length === 0) {
-        setLoading(false);
-        setMessages((current) => [
-          ...current,
-          { id: makeId(), role: 'assistant', text: '没有找到与你说的内容对应的块。' },
-        ]);
-        return;
-      }
-      await localModify(blockList, query.trim(), profile, basic);
-      return;
-    }
-
-    // 正在追问中：这轮是回答上一题
-    if (pendingFields.length > 0) {
-      const answeredField = pendingFields[0];
-      const nextCollected = { ...collected, [answeredField]: query.trim() };
-      const remaining = pendingFields.slice(1);
-      setCollected(nextCollected);
-
-      if (remaining.length > 0) {
-        setPendingFields(remaining);
-        setLoading(false);
-        setMessages((current) => [
-          ...current,
-          { id: makeId(), role: 'assistant', text: FIELD_QUESTIONS[remaining[0]] },
-        ]);
-        return;
-      }
-
-      setPendingFields([]);
-      const supplement = buildSupplement(nextCollected);
-      const finalQuery = pendingQuery ? `${pendingQuery}，${supplement}` : query;
-      setPendingQuery(null);
-      await generate(finalQuery, profile, basic);
-      return;
-    }
-
-    // 第一次输入：检测缺失字段，逐个追问
-    const missing = getMissingFields(basic, query);
-    if (missing.length > 0) {
-      setPendingQuery(query);
-      setPendingFields(missing);
-      setCollected({});
-      setLoading(false);
-      setMessages((current) => [
-        ...current,
-        { id: makeId(), role: 'assistant', text: FIELD_QUESTIONS[missing[0]] },
-      ]);
-      return;
-    }
-
-    await generate(query, profile, basic);
   }
-
-  function handleSubmit(event: FormEvent) {
-    event.preventDefault();
-    const query = draft.trim();
-    if (!query || loading) return;
-    runPlan(query);
-  }
-
-  useEffect(() => {
-    const state = location.state as { autostart?: boolean } | null;
-    if (!state?.autostart || autoStartedRef.current) return;
-    autoStartedRef.current = true;
-
-    let tripInfo: { destination?: string; start_date?: string; end_date?: string } = {};
-    try {
-      tripInfo = JSON.parse(localStorage.getItem('tripInfo') || '{}');
-    } catch {
-      tripInfo = {};
-    }
-    const dest = tripInfo.destination?.trim();
-    const start = tripInfo.start_date;
-    const end = tripInfo.end_date;
-    if (dest && start) {
-      const query = end ? `${dest} ${start} 到 ${end}` : `${dest} ${start}`;
-      setDraft(query);
-      runPlan(query);
-    } else {
-      setMessages((current) => [
-        ...current,
-        {
-          id: makeId(),
-          role: 'assistant',
-          text: '还没有填写目的地和日期，请在下方输入框补充。',
-        },
-      ]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
+      handleSend();
     }
+  }
+
+  function addToPlan(item: OptionItem) {
+    setPlanItemIds((current) =>
+      current.includes(item.id) ? current : [...current, item.id],
+    );
+  }
+
+  function removeFromPlan(itemId: string) {
+    setPlanItemIds((current) => current.filter((id) => id !== itemId));
+  }
+
+  function togglePlan(item: OptionItem) {
+    if (planItemIds.includes(item.id)) {
+      removeFromPlan(item.id);
+    } else {
+      addToPlan(item);
+    }
+  }
+
+  function isInPlan(item: OptionItem) {
+    return planItemIds.includes(item.id);
+  }
+
+  function renderOptionMeta(item: OptionItem) {
+    if (item.type === 'flight') {
+      return (
+        <>
+          <span>{item.scheduleLabel}</span>
+          <span>{item.duration}</span>
+          <span>{formatPrice(item.price)}</span>
+        </>
+      );
+    }
+
+    if (item.type === 'hotel') {
+      return (
+        <>
+          <span>{item.scheduleLabel}</span>
+          <span>{item.rating} ★</span>
+          <span>{formatPrice(item.totalPrice)}</span>
+        </>
+      );
+    }
+
+    return (
+      <>
+        <span>{item.scheduleLabel}</span>
+        <span>{item.recommendedDuration}</span>
+        <span>{formatPrice(item.ticketPrice)}</span>
+      </>
+    );
   }
 
   return (
-    <section className="agent-page">
-      <div className="agent-hero">
-        <span className="agent-kicker">✦ TravelAgent · AI Travel Planner</span>
-        <h1>
-          把模糊的旅行想法，
-          <span>变成清晰的选择。</span>
-        </h1>
-        <p>告诉我你想去哪里，我会为你生成可比较的旅行方案。</p>
-      </div>
-
-      <div className="agent-workspace">
-        <section className="agent-search-card agent-chat-panel">
-          <div className="agent-search-heading">
+    <section className="travel-agent-workbench">
+      <div className="travel-agent-layout">
+        {/* 左侧：AI 对话 */}
+        <aside className="ta-chat-panel">
+          <div className="ta-panel-header">
             <div>
-              <span className="agent-section-label">CONVERSATION</span>
-              <h2>这次想怎么旅行？</h2>
+              <span className="ta-section-kicker">AI ASSISTANT</span>
+              <h2>对话界面</h2>
             </div>
-            <span className="agent-status-badge ready">实时生成</span>
           </div>
 
-          <div className="agent-conversation-log agent-conversation-log-v3" aria-live="polite">
-            {messages.length === 0 && (
-              <div className="agent-message assistant">
-                <span className="agent-mini-avatar">TR</span>
-                <div className="agent-message-bubble">
-                  在左边告诉我你的旅行想法，我会在右边生成可比较的方案。
-                </div>
-              </div>
-            )}
-
+          <div className="ta-chat-messages">
             {messages.map((message) => (
-              <div key={message.id} className={`agent-message ${message.role}`}>
-                {message.role === 'assistant' && <span className="agent-mini-avatar">TR</span>}
-                <div className="agent-message-bubble">{message.text}</div>
+              <div
+                key={message.id}
+                className={`ta-message ${message.role === 'user' ? 'user' : 'assistant'}`}
+              >
+                {message.role === 'assistant' && (
+                  <span className="ta-message-avatar">TR</span>
+                )}
+                <div className="ta-message-bubble">{message.content}</div>
               </div>
             ))}
-
-            {loading && (
-              <div className="agent-message assistant">
-                <span className="agent-mini-avatar">TR</span>
-                <div className="agent-message-bubble agent-inline-thinking">
-                  <span />
-                  <span />
-                  <span />
-                  正在生成计划（约需 1~5 分钟）
-                </div>
-              </div>
-            )}
           </div>
 
-          <form className="agent-chat-composer agent-chat-composer-v3" onSubmit={handleSubmit}>
+          <div className="ta-chat-composer">
             <textarea
-              ref={composerRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="例如：我想去杭州玩五天"
+              placeholder="继续补充需求…"
               rows={1}
             />
-            <div className="agent-search-footer">
-              <span>Ctrl / ⌘ + Enter 发送 · 会调用真实的多 Agent 流水线</span>
+            <button
+              type="button"
+              className="ta-send-button"
+              onClick={handleSend}
+              disabled={!draft.trim()}
+            >
+              发送
+            </button>
+          </div>
+        </aside>
+
+        {/* 中间：可供选择的行程 */}
+        <section className="ta-options-panel ta-options-column">
+          <div className="ta-options-header">
+            <div>
+              <span className="ta-section-kicker">OPTIONS</span>
+              <h2>可供选择的行程</h2>
+            </div>
+
+            <div className="ta-tabs">
               <button
-                className="agent-primary-button"
-                type="submit"
-                disabled={loading || !draft.trim()}
+                type="button"
+                className={activeTab === 'flight' ? 'active' : ''}
+                onClick={() => setActiveTab('flight')}
               >
-                {loading ? '生成中…' : '生成计划'}
-                {!loading && <span aria-hidden="true">→</span>}
+                机票
+              </button>
+              <button
+                type="button"
+                className={activeTab === 'hotel' ? 'active' : ''}
+                onClick={() => setActiveTab('hotel')}
+              >
+                酒店
+              </button>
+              <button
+                type="button"
+                className={activeTab === 'spot' ? 'active' : ''}
+                onClick={() => setActiveTab('spot')}
+              >
+                景点 / 活动
               </button>
             </div>
-          </form>
-        </section>
-
-        <section className="agent-search-card agent-plan-panel">
-          <div className="agent-search-heading">
-            <div>
-              <span className="agent-section-label">PLAN</span>
-              <h2>{destination ? `${destination} 的行程` : '生成的计划'}</h2>
-            </div>
-            {selectedPlan ? (
-              <span className="agent-status-badge complete">查看详情</span>
-            ) : plans.length > 0 ? (
-              <span className="agent-status-badge complete">已生成</span>
-            ) : (
-              <span className="agent-status-badge ready">等待输入</span>
-            )}
           </div>
 
-          {error && <div className="login-error">{error}</div>}
+          <div className="ta-option-list">
+            {visibleOptions.map((item) => {
+              const added = isInPlan(item);
 
-          {selectedPlan ? (
-            <PlanDetail
-              plan={selectedPlan}
-              destination={destination}
-              dates={dates}
-              selectedBlocks={selectedBlocks}
-              onToggleBlock={toggleBlock}
-              searchData={searchData}
-              onBack={() => setSelectedPlan(null)}
-            />
-          ) : plans.length > 0 ? (
-            <div className="agent-recommendation-grid">
-              {plans.map((plan) => (
-                <PlanCard
-                  key={plan.style}
-                  plan={plan}
-                  onSelect={() => setSelectedPlan(plan)}
-                  confirming={confirmingPlanId === plan.style}
-                  onConfirm={confirmPlan}
-                  onRate={ratePlan}
-                />
-              ))}
-            </div>
-          ) : (
-            <div className="agent-plan-empty">
-              <div className="agent-surprise-icon">✦</div>
-              <h3>计划会出现在这里</h3>
-              <p>在左侧描述你的旅行想法，我会在这里生成可比较的方案。</p>
-            </div>
-          )}
+              return (
+                <article
+                  key={item.id}
+                  className={`ta-option-card ${added ? 'selected' : ''}`}
+                  onClick={() => setDetailItem(item)}
+                >
+                  <div className="ta-option-main">
+                    <div className="ta-option-title-row">
+                      <div>
+                        <h3>{item.title}</h3>
+                        <p>{item.subtitle}</p>
+                      </div>
+
+                      {added && (
+                        <span className="ta-selected-badge">已加入计划</span>
+                      )}
+                    </div>
+
+                    <div className="ta-option-meta">
+                      {renderOptionMeta(item)}
+                    </div>
+
+                    <div className="ta-option-tags">
+                      {item.tags.map((tag) => (
+                        <span key={tag}>{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div
+                    className="ta-option-actions"
+                    onClick={(event) => event.stopPropagation()}
+                  >
+                    <button
+                      className="ta-ghost-button"
+                      type="button"
+                      onClick={() => setDetailItem(item)}
+                    >
+                      查看详情
+                    </button>
+
+                    <button
+                      className={added ? 'ta-remove-button' : 'ta-primary-button'}
+                      type="button"
+                      onClick={() => togglePlan(item)}
+                    >
+                      {added ? '从计划移除' : '添加到计划'}
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
         </section>
+
+        {/* 右侧：上方地图，下方旅行计划 */}
+        <aside className="ta-right-panel">
+          <section className="ta-map-card">
+            <div className="ta-panel-header ta-compact-header">
+              <div>
+                <span className="ta-section-kicker">MAP</span>
+                <h2>地图</h2>
+              </div>
+            </div>
+
+            <div className="ta-map-placeholder">
+              <span>地图区域</span>
+              <p>当前阶段预留</p>
+            </div>
+          </section>
+
+          <section className="ta-plan-card">
+            <div className="ta-panel-header ta-compact-header">
+              <div>
+                <span className="ta-section-kicker">TRAVEL PLAN</span>
+                <h2>旅行计划</h2>
+              </div>
+
+              {travelPlan.length > 0 && (
+                <div className="ta-plan-budget">
+                  <span>预计</span>
+                  <strong>{formatPrice(totalBudget)}</strong>
+                </div>
+              )}
+            </div>
+
+            {travelPlan.length === 0 ? (
+              <div className="ta-plan-empty">
+                从中间候选行程中添加机票、酒店或景点。
+                <span>添加后会自动按时间排序。</span>
+              </div>
+            ) : (
+              <div className="ta-plan-timeline">
+                {travelPlan.map((item) => (
+                  <div
+                    className="ta-plan-row"
+                    key={item.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setDetailItem(item)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        setDetailItem(item);
+                      }
+                    }}
+                    aria-label={`查看 ${item.title} 的详细信息`}
+                  >
+                    <div className={`ta-plan-type ${item.type}`}>
+                      {getOptionIcon(item.type)}
+                    </div>
+
+                    <div className="ta-plan-time">{item.scheduleLabel}</div>
+
+                    <div className="ta-plan-content">
+                      <strong>{item.title}</strong>
+                      <span>
+                        {getOptionTypeLabel(item.type)} · {item.location}
+                      </span>
+                    </div>
+
+                    <button
+                      type="button"
+                      className="ta-plan-remove"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        removeFromPlan(item.id);
+                      }}
+                      aria-label={`从旅行计划移除 ${item.title}`}
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </aside>
       </div>
+
+      {detailItem && (
+        <div className="ta-modal-backdrop" onClick={() => setDetailItem(null)}>
+          <div
+            className="ta-detail-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="ta-detail-header">
+              <div>
+                <span className="ta-section-kicker">
+                  {getOptionTypeLabel(detailItem.type)}
+                </span>
+                <h3>{detailItem.title}</h3>
+                <p>
+                  {detailItem.subtitle} · {detailItem.scheduleLabel}
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="ta-close-button"
+                onClick={() => setDetailItem(null)}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="ta-detail-body">
+              {detailItem.type === 'flight' && (
+                <>
+                  <div className="ta-detail-grid">
+                    <div>
+                      <span>出发</span>
+                      <strong>{detailItem.from}</strong>
+                    </div>
+                    <div>
+                      <span>到达</span>
+                      <strong>{detailItem.to}</strong>
+                    </div>
+                    <div>
+                      <span>起飞时间</span>
+                      <strong>{detailItem.departTime}</strong>
+                    </div>
+                    <div>
+                      <span>到达时间</span>
+                      <strong>{detailItem.arriveTime}</strong>
+                    </div>
+                    <div>
+                      <span>航司</span>
+                      <strong>{detailItem.airline}</strong>
+                    </div>
+                    <div>
+                      <span>飞行时长</span>
+                      <strong>{detailItem.duration}</strong>
+                    </div>
+                  </div>
+
+                  <div className="ta-detail-foot">
+                    <span>位置：{detailItem.location}</span>
+                    <strong>{formatPrice(detailItem.price)}</strong>
+                  </div>
+                </>
+              )}
+
+              {detailItem.type === 'hotel' && (
+                <>
+                  <div className="ta-detail-grid">
+                    <div>
+                      <span>区域</span>
+                      <strong>{detailItem.district}</strong>
+                    </div>
+                    <div>
+                      <span>房型</span>
+                      <strong>{detailItem.roomType}</strong>
+                    </div>
+                    <div>
+                      <span>入住</span>
+                      <strong>{detailItem.checkIn}</strong>
+                    </div>
+                    <div>
+                      <span>离店</span>
+                      <strong>{detailItem.checkOut}</strong>
+                    </div>
+                    <div>
+                      <span>评分</span>
+                      <strong>{detailItem.rating} ★</strong>
+                    </div>
+                    <div>
+                      <span>每晚均价</span>
+                      <strong>{formatPrice(detailItem.nightlyPrice)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="ta-detail-foot">
+                    <span>位置：{detailItem.location}</span>
+                    <strong>{formatPrice(detailItem.totalPrice)}</strong>
+                  </div>
+                </>
+              )}
+
+              {detailItem.type === 'spot' && (
+                <>
+                  <div className="ta-detail-grid">
+                    <div>
+                      <span>区域</span>
+                      <strong>{detailItem.area}</strong>
+                    </div>
+                    <div>
+                      <span>开放时间</span>
+                      <strong>{detailItem.openHours}</strong>
+                    </div>
+                    <div>
+                      <span>建议时长</span>
+                      <strong>{detailItem.recommendedDuration}</strong>
+                    </div>
+                    <div>
+                      <span>门票</span>
+                      <strong>{formatPrice(detailItem.ticketPrice)}</strong>
+                    </div>
+                  </div>
+
+                  <div className="ta-detail-foot">
+                    <span>位置：{detailItem.location}</span>
+                    <strong>{detailItem.subtitle}</strong>
+                  </div>
+                </>
+              )}
+
+              <div className="ta-detail-description">
+                <span>说明</span>
+                <p>{detailItem.description}</p>
+              </div>
+
+              <div className="ta-modal-actions">
+                <button
+                  type="button"
+                  className="ta-ghost-button"
+                  onClick={() => setDetailItem(null)}
+                >
+                  关闭
+                </button>
+
+                <button
+                  type="button"
+                  className={
+                    isInPlan(detailItem)
+                      ? 'ta-remove-button'
+                      : 'ta-primary-button'
+                  }
+                  onClick={() => togglePlan(detailItem)}
+                >
+                  {isInPlan(detailItem) ? '从计划移除' : '添加到计划'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
+
+export default AgentPage;

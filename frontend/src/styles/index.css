@@ -1730,3 +1730,2444 @@ button:disabled {
 .agent-block-weather .agent-block-type { background: #e0f2fe; color: #0284c7; }
 .agent-block-event .agent-block-type { background: #fef3c7; color: #d97706; }
 .agent-block-活动 .agent-block-type { background: #ffeaf6; color: #c0265b; }
+
+/* =========================
+   Travel Agent Workbench v2
+   Compact one-screen layout
+   ========================= */
+
+/* Replace the previous workbench CSS block with this one. */
+
+.travel-agent-workbench {
+  width: min(1480px, calc(100vw - 40px));
+  height: calc(100vh - 96px);
+  min-height: 650px;
+  margin-left: 50%;
+  transform: translateX(-50%);
+  padding: 14px 0 18px;
+  background: #f7f8fc;
+}
+
+.travel-agent-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  height: 100%;
+  min-height: 0;
+}
+
+.ta-chat-panel,
+.ta-plan-card,
+.ta-map-card,
+.ta-options-panel,
+.ta-detail-modal {
+  background: #ffffff;
+  border: 1px solid #e9edf5;
+  border-radius: 20px;
+  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.055);
+}
+
+.ta-chat-panel {
+  min-height: 0;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-main-panel {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 210px minmax(0, 1fr);
+  gap: 16px;
+}
+
+.ta-top-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(360px, 0.95fr) minmax(420px, 1.25fr);
+  gap: 16px;
+}
+
+.ta-plan-card,
+.ta-map-card {
+  height: 210px;
+  min-height: 0;
+  padding: 14px 16px;
+  overflow: hidden;
+}
+
+.ta-options-panel {
+  min-height: 0;
+  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ta-panel-header,
+.ta-options-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ta-panel-header {
+  margin-bottom: 12px;
+}
+
+.ta-compact-header {
+  margin-bottom: 9px;
+}
+
+.ta-panel-header h2,
+.ta-options-header h2 {
+  margin: 3px 0 0;
+  color: #172033;
+  font-size: 19px;
+  line-height: 1.2;
+}
+
+.ta-section-kicker {
+  display: inline-block;
+  color: #7a8395;
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.ta-status-badge {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4f6df5;
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.ta-chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 2px 3px 10px 0;
+}
+
+.ta-message {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.ta-message.user {
+  justify-content: flex-end;
+}
+
+.ta-message-avatar {
+  display: inline-flex;
+  width: 27px;
+  height: 27px;
+  flex: 0 0 27px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  background: #4f6df5;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.ta-message-bubble {
+  max-width: 88%;
+  padding: 10px 12px;
+  border: 1px solid #eaedf4;
+  border-radius: 14px;
+  background: #f8faff;
+  color: #283347;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.ta-message.user .ta-message-bubble {
+  border-color: #4f6df5;
+  background: #4f6df5;
+  color: #fff;
+}
+
+.ta-chat-composer {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  padding-top: 11px;
+  border-top: 1px solid #eef1f6;
+}
+
+.ta-chat-composer textarea {
+  width: 100%;
+  min-height: 38px;
+  max-height: 96px;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid #dde2ee;
+  border-radius: 13px;
+  outline: none;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.ta-chat-composer textarea:focus {
+  border-color: #8297f8;
+  box-shadow: 0 0 0 3px rgba(79, 109, 245, 0.08);
+}
+
+.ta-send-button,
+.ta-primary-button,
+.ta-remove-button,
+.ta-ghost-button {
+  border: 0;
+  border-radius: 11px;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ta-send-button,
+.ta-primary-button {
+  background: #4f6df5;
+  color: #fff;
+}
+
+.ta-send-button:hover:not(:disabled),
+.ta-primary-button:hover {
+  background: #425fe9;
+}
+
+.ta-send-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.ta-ghost-button {
+  background: #f1f4f9;
+  color: #455064;
+}
+
+.ta-ghost-button:hover {
+  background: #e8edf5;
+}
+
+.ta-remove-button {
+  background: #eef1f6;
+  color: #59657a;
+}
+
+.ta-remove-button:hover {
+  background: #e3e8f0;
+}
+
+.ta-plan-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-plan-budget {
+  text-align: right;
+}
+
+.ta-plan-budget span {
+  display: block;
+  color: #929aaa;
+  font-size: 9px;
+}
+
+.ta-plan-budget strong {
+  color: #25314b;
+  font-size: 15px;
+}
+
+.ta-plan-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 5px;
+  min-height: 0;
+  border: 1px dashed #dce2ed;
+  border-radius: 13px;
+  background: #fafbfe;
+  color: #6f798c;
+  text-align: center;
+  font-size: 12px;
+}
+
+.ta-plan-empty span {
+  color: #9aa2b0;
+  font-size: 10px;
+}
+
+.ta-plan-timeline {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.ta-plan-row {
+  display: grid;
+  grid-template-columns: 26px 78px minmax(0, 1fr) 24px;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 7px 4px;
+  border-bottom: 1px solid #eff2f6;
+}
+
+.ta-plan-row:last-child {
+  border-bottom: 0;
+}
+
+.ta-plan-type {
+  display: grid;
+  place-items: center;
+  width: 25px;
+  height: 25px;
+  border-radius: 8px;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.ta-plan-type.flight {
+  background: #4f6df5;
+}
+
+.ta-plan-type.hotel {
+  background: #6d7f9f;
+}
+
+.ta-plan-type.spot {
+  background: #7789e9;
+}
+
+.ta-plan-time {
+  color: #768095;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.ta-plan-content {
+  min-width: 0;
+}
+
+.ta-plan-content strong {
+  display: block;
+  overflow: hidden;
+  color: #263149;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ta-plan-content span {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: #929aaa;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ta-plan-remove {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #9aa2b0;
+  font-size: 17px;
+  cursor: pointer;
+}
+
+.ta-plan-remove:hover {
+  background: #f0f2f6;
+  color: #556176;
+}
+
+.ta-map-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-map-placeholder {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px dashed #dce2ed;
+  border-radius: 13px;
+  background: #fafbfe;
+  color: #a0a7b4;
+}
+
+.ta-map-placeholder span {
+  color: #778094;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ta-map-placeholder p {
+  margin: 0;
+  font-size: 10px;
+}
+
+.ta-options-header {
+  flex: 0 0 auto;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.ta-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  flex-wrap: wrap;
+}
+
+.ta-tabs button {
+  padding: 7px 11px;
+  border: 0;
+  border-radius: 999px;
+  background: #f0f3f8;
+  color: #566176;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.ta-tabs button.active {
+  background: #4f6df5;
+  color: #fff;
+}
+
+.ta-option-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: 9px;
+  padding: 2px 3px 2px 0;
+}
+
+.ta-option-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 13px;
+  border: 1px solid #e9edf4;
+  border-radius: 15px;
+  background: #fff;
+  cursor: pointer;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    transform 0.15s ease;
+}
+
+.ta-option-card:hover {
+  transform: translateY(-1px);
+  border-color: #d9deea;
+  box-shadow: 0 5px 14px rgba(40, 50, 77, 0.06);
+}
+
+.ta-option-card.selected {
+  border-color: #aebcfb;
+  background: #f9faff;
+}
+
+.ta-option-main {
+  min-width: 0;
+}
+
+.ta-option-title-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.ta-option-title-row h3 {
+  margin: 0;
+  color: #202b42;
+  font-size: 14px;
+}
+
+.ta-option-title-row p {
+  margin: 3px 0 0;
+  color: #7b8496;
+  font-size: 10px;
+}
+
+.ta-selected-badge {
+  flex: 0 0 auto;
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #edf1ff;
+  color: #4f6df5;
+  font-size: 9px;
+  font-weight: 750;
+}
+
+.ta-option-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.ta-option-meta span {
+  padding: 4px 7px;
+  border-radius: 999px;
+  background: #f4f6fa;
+  color: #566176;
+  font-size: 9px;
+}
+
+.ta-option-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.ta-option-tags span {
+  color: #7c8799;
+  font-size: 9px;
+}
+
+.ta-option-actions {
+  display: flex;
+  gap: 7px;
+  flex-shrink: 0;
+}
+
+.ta-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 28, 45, 0.34);
+}
+
+.ta-detail-modal {
+  width: min(720px, 100%);
+  padding: 20px;
+}
+
+.ta-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 15px;
+}
+
+.ta-detail-header h3 {
+  margin: 4px 0 0;
+  color: #172033;
+  font-size: 22px;
+}
+
+.ta-detail-header p {
+  margin: 6px 0 0;
+  color: #737d90;
+  font-size: 12px;
+}
+
+.ta-close-button {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: #f1f4f8;
+  color: #5b667b;
+  font-size: 21px;
+  cursor: pointer;
+}
+
+.ta-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.ta-detail-grid > div {
+  padding: 12px;
+  border: 1px solid #edf0f6;
+  border-radius: 13px;
+  background: #fafbfe;
+}
+
+.ta-detail-grid span {
+  display: block;
+  margin-bottom: 5px;
+  color: #8a93a3;
+  font-size: 10px;
+}
+
+.ta-detail-grid strong {
+  color: #263149;
+  font-size: 13px;
+}
+
+.ta-detail-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px 13px;
+  border-radius: 13px;
+  background: #f5f7fb;
+  color: #596579;
+  font-size: 12px;
+}
+
+.ta-detail-foot strong {
+  color: #25314b;
+  font-size: 16px;
+}
+
+.ta-detail-description {
+  margin-top: 13px;
+}
+
+.ta-detail-description span {
+  display: block;
+  margin-bottom: 5px;
+  color: #8a93a3;
+  font-size: 10px;
+}
+
+.ta-detail-description p {
+  margin: 0;
+  color: #364156;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ta-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.ta-chat-messages,
+.ta-plan-timeline,
+.ta-option-list {
+  scrollbar-width: thin;
+  scrollbar-color: #d6dbe6 transparent;
+}
+
+.ta-chat-messages::-webkit-scrollbar,
+.ta-plan-timeline::-webkit-scrollbar,
+.ta-option-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.ta-chat-messages::-webkit-scrollbar-thumb,
+.ta-plan-timeline::-webkit-scrollbar-thumb,
+.ta-option-list::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #d6dbe6;
+}
+
+@media (max-width: 1180px) {
+  .travel-agent-workbench {
+    width: min(1120px, calc(100vw - 28px));
+    height: auto;
+    min-height: 0;
+  }
+
+  .travel-agent-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .ta-chat-panel {
+    min-height: 380px;
+  }
+
+  .ta-main-panel {
+    grid-template-rows: auto auto;
+  }
+
+  .ta-options-panel {
+    max-height: 540px;
+  }
+}
+
+@media (max-width: 820px) {
+  .ta-top-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .ta-plan-card,
+  .ta-map-card {
+    height: 220px;
+  }
+
+  .ta-options-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .ta-option-card {
+    grid-template-columns: 1fr;
+  }
+
+  .ta-option-actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 620px) {
+  .travel-agent-workbench {
+    width: calc(100vw - 20px);
+  }
+
+  .ta-chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .ta-send-button {
+    width: 100%;
+  }
+
+  .ta-option-actions {
+    flex-direction: column;
+  }
+
+  .ta-detail-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   Travel Agent Workbench v3
+   Wider chat + more side whitespace + always-visible composer
+   Append AFTER agent-workbench-v2.css
+   ========================= */
+
+/* 整体：两侧留白略多 */
+.travel-agent-workbench {
+  width: min(1360px, calc(100vw - 112px));
+  height: calc(100vh - 96px);
+  min-height: 620px;
+}
+
+/* 左侧对话区加宽 */
+.travel-agent-layout {
+  grid-template-columns: minmax(350px, 390px) minmax(0, 1fr);
+  gap: 18px;
+}
+
+/* 左侧整个面板固定在当前视口高度内，不让输入框被页面滚动挤走 */
+.ta-chat-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 对话消息区域自己滚动 */
+.ta-chat-messages {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-bottom: 10px;
+}
+
+/* 输入框始终留在左栏底部 */
+.ta-chat-composer {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  margin-top: 4px;
+  padding-top: 10px;
+  padding-bottom: 1px;
+  background: #ffffff;
+}
+
+/* 左侧输入框稍微宽松一点 */
+.ta-chat-composer textarea {
+  min-height: 38px;
+  max-height: 100px;
+}
+
+/* 右侧保持一屏结构 */
+.ta-main-panel {
+  height: 100%;
+  min-height: 0;
+  grid-template-rows: 200px minmax(0, 1fr);
+}
+
+.ta-plan-card,
+.ta-map-card {
+  height: 200px;
+}
+
+/* 中等屏幕时不要过早挤得太窄 */
+@media (max-width: 1280px) {
+  .travel-agent-workbench {
+    width: min(1180px, calc(100vw - 72px));
+  }
+
+  .travel-agent-layout {
+    grid-template-columns: minmax(330px, 360px) minmax(0, 1fr);
+  }
+}
+
+/* 真正较窄时才切成上下布局 */
+@media (max-width: 1050px) {
+  .travel-agent-workbench {
+    width: min(980px, calc(100vw - 36px));
+    height: auto;
+    min-height: 0;
+  }
+
+  .travel-agent-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .ta-chat-panel {
+    height: 460px;
+  }
+
+  .ta-main-panel {
+    height: auto;
+    grid-template-rows: auto auto;
+  }
+}
+/* =========================
+   Travel Agent Workbench v4
+   Fit the full board in the viewport + clickable plan rows
+   Append AFTER the v3 layout patch.
+   ========================= */
+
+/*
+  The existing global layout has a 60px header and .app-main vertical padding.
+  The previous 100vh - 96px height still made the Agent page taller than the
+  available content area. This version accounts for that extra space.
+*/
+.travel-agent-workbench {
+  height: calc(100dvh - 164px);
+  min-height: 500px;
+  max-height: calc(100dvh - 164px);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* Keep both columns strictly inside the available board height. */
+.travel-agent-layout,
+.ta-chat-panel,
+.ta-main-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Compact the chat header a little to free vertical space. */
+.ta-chat-panel {
+  padding: 13px 14px;
+}
+
+.ta-chat-panel .ta-panel-header {
+  margin-bottom: 8px;
+}
+
+.ta-chat-panel .ta-panel-header h2 {
+  font-size: 18px;
+}
+
+/* Only the message history scrolls. The composer always remains visible. */
+.ta-chat-messages {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+
+.ta-chat-composer {
+  position: relative;
+  bottom: auto;
+  flex: 0 0 auto;
+  margin-top: 0;
+  padding-top: 8px;
+  padding-bottom: 0;
+  background: #fff;
+}
+
+/* Slightly tighter composer to make sure it fits on shorter screens. */
+.ta-chat-composer textarea {
+  min-height: 36px;
+  max-height: 82px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+
+.ta-send-button {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+/* Give the bottom options panel a little more room. */
+.ta-main-panel {
+  grid-template-rows: 188px minmax(0, 1fr);
+}
+
+.ta-plan-card,
+.ta-map-card {
+  height: 188px;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+/* Travel-plan items are now interactive and open the same detail modal. */
+.ta-plan-row {
+  cursor: pointer;
+  border-radius: 9px;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.ta-plan-row:hover {
+  background: #f7f9fd;
+}
+
+.ta-plan-row:focus-visible {
+  outline: none;
+  background: #f7f9fd;
+  box-shadow: inset 0 0 0 2px rgba(79, 109, 245, 0.22);
+}
+
+/* Keep the remove X visually independent from the clickable row. */
+.ta-plan-remove {
+  position: relative;
+  z-index: 2;
+}
+
+/* On shorter laptop/browser windows, compress the top row further. */
+@media (max-height: 760px) and (min-width: 1051px) {
+  .travel-agent-workbench {
+    height: calc(100dvh - 150px);
+    min-height: 460px;
+    max-height: calc(100dvh - 150px);
+  }
+
+  .ta-main-panel {
+    grid-template-rows: 170px minmax(0, 1fr);
+  }
+
+  .ta-plan-card,
+  .ta-map-card {
+    height: 170px;
+  }
+
+  .ta-chat-panel {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+
+  .ta-message-bubble {
+    padding-top: 8px;
+    padding-bottom: 8px;
+    line-height: 1.45;
+  }
+}
+
+/* Preserve the stacked responsive layout on narrower screens. */
+@media (max-width: 1050px) {
+  .travel-agent-workbench {
+    height: auto;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .ta-chat-panel {
+    height: 420px;
+  }
+
+  .ta-main-panel {
+    height: auto;
+  }
+}
+/* =========================
+   Travel Agent Workbench v5
+   Three-column desktop layout
+   Left: chat | Center: options | Right: map + travel plan
+   Append AFTER previous workbench CSS so these rules take priority.
+   ========================= */
+
+/* One-screen desktop workbench with slightly larger outer whitespace */
+.travel-agent-workbench {
+  width: min(1420px, calc(100vw - 112px));
+  height: calc(100dvh - 158px);
+  min-height: 540px;
+  max-height: calc(100dvh - 158px);
+  margin-left: 50%;
+  transform: translateX(-50%);
+  padding: 0;
+  background: transparent;
+}
+
+/* 30% / 38% / 32%-ish: left a little narrower, center a little wider */
+.travel-agent-layout {
+  display: grid;
+  grid-template-columns:
+    minmax(285px, 0.88fr)
+    minmax(390px, 1.16fr)
+    minmax(320px, 0.96fr);
+  gap: 16px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+/* All three columns must stay within the viewport */
+.ta-chat-panel,
+.ta-options-column,
+.ta-right-panel {
+  height: 100%;
+  min-height: 0;
+}
+
+/* Shared card treatment */
+.ta-chat-panel,
+.ta-options-panel,
+.ta-map-card,
+.ta-plan-card {
+  border-radius: 18px;
+  border: 1px solid #e9edf5;
+  background: #ffffff;
+  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.05);
+}
+
+/* =========================
+   Left: Chat
+   ========================= */
+.ta-chat-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.ta-chat-panel .ta-panel-header {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.ta-chat-panel .ta-panel-header h2 {
+  font-size: 18px;
+}
+
+/* Only message history scrolls; composer remains visible */
+.ta-chat-messages {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 2px 3px 7px 0;
+}
+
+.ta-chat-composer {
+  position: relative;
+  bottom: auto;
+  z-index: 2;
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 7px;
+  margin: 0;
+  padding: 8px 0 0;
+  border-top: 1px solid #eef1f6;
+  background: #fff;
+}
+
+.ta-chat-composer textarea {
+  min-height: 36px;
+  max-height: 82px;
+  height: auto;
+  padding: 7px 9px;
+  resize: none;
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.ta-send-button {
+  padding: 8px 11px;
+}
+
+/* =========================
+   Center: Options
+   ========================= */
+.ta-options-panel.ta-options-column {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 14px;
+}
+
+.ta-options-column .ta-options-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.ta-options-column .ta-options-header h2 {
+  margin: 3px 0 0;
+  font-size: 19px;
+}
+
+/* Tabs use the full center width without crowding the heading */
+.ta-options-column .ta-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+}
+
+.ta-options-column .ta-tabs button {
+  width: 100%;
+  padding: 7px 8px;
+  font-size: 11px;
+}
+
+.ta-options-column .ta-option-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: start;
+  padding-right: 3px;
+}
+
+/* Center cards can use a little more vertical breathing room */
+.ta-options-column .ta-option-card {
+  grid-template-columns: 1fr;
+  gap: 10px;
+  padding: 13px;
+}
+
+.ta-options-column .ta-option-actions {
+  justify-content: flex-end;
+}
+
+.ta-options-column .ta-option-title-row h3 {
+  font-size: 14px;
+}
+
+.ta-options-column .ta-option-meta {
+  margin-top: 8px;
+}
+
+/* =========================
+   Right: Map + Travel plan
+   ========================= */
+.ta-right-panel {
+  display: grid;
+  grid-template-rows: minmax(185px, 0.82fr) minmax(260px, 1.18fr);
+  gap: 16px;
+  overflow: hidden;
+}
+
+.ta-map-card,
+.ta-plan-card {
+  width: 100%;
+  height: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 13px 14px;
+  overflow: hidden;
+}
+
+.ta-map-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-map-card .ta-panel-header,
+.ta-plan-card .ta-panel-header {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+}
+
+.ta-map-card .ta-panel-header h2,
+.ta-plan-card .ta-panel-header h2 {
+  font-size: 18px;
+}
+
+.ta-map-placeholder {
+  flex: 1 1 0;
+  min-height: 0;
+  border-radius: 12px;
+}
+
+/* Travel plan uses its own internal scroll */
+.ta-plan-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-plan-timeline {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ta-plan-empty {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.ta-plan-row {
+  grid-template-columns: 25px 71px minmax(0, 1fr) 22px;
+  gap: 7px;
+  min-height: 40px;
+  padding: 6px 3px;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.ta-plan-row:hover {
+  background: #f7f9fd;
+}
+
+.ta-plan-row:focus-visible {
+  outline: none;
+  background: #f7f9fd;
+  box-shadow: inset 0 0 0 2px rgba(79, 109, 245, 0.2);
+}
+
+.ta-plan-time {
+  font-size: 9px;
+}
+
+.ta-plan-content strong {
+  font-size: 10px;
+}
+
+.ta-plan-content span {
+  font-size: 9px;
+}
+
+.ta-plan-budget strong {
+  font-size: 14px;
+}
+
+/* =========================
+   Internal scrollbars
+   ========================= */
+.ta-chat-messages,
+.ta-option-list,
+.ta-plan-timeline {
+  scrollbar-width: thin;
+  scrollbar-color: #d6dbe6 transparent;
+}
+
+/* =========================
+   Short desktop windows
+   ========================= */
+@media (max-height: 760px) and (min-width: 1101px) {
+  .travel-agent-workbench {
+    height: calc(100dvh - 146px);
+    max-height: calc(100dvh - 146px);
+    min-height: 500px;
+  }
+
+  .ta-right-panel {
+    grid-template-rows: minmax(160px, 0.75fr) minmax(240px, 1.25fr);
+    gap: 12px;
+  }
+
+  .ta-chat-panel,
+  .ta-options-panel.ta-options-column {
+    padding-top: 11px;
+    padding-bottom: 11px;
+  }
+
+  .ta-option-card {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+}
+
+/* =========================
+   Medium screens
+   ========================= */
+@media (max-width: 1280px) and (min-width: 1101px) {
+  .travel-agent-workbench {
+    width: calc(100vw - 64px);
+  }
+
+  .travel-agent-layout {
+    grid-template-columns:
+      minmax(270px, 0.9fr)
+      minmax(350px, 1.13fr)
+      minmax(300px, 0.97fr);
+    gap: 13px;
+  }
+}
+
+/* Stack only when there is no longer enough room for three usable columns */
+@media (max-width: 1100px) {
+  .travel-agent-workbench {
+    width: min(1000px, calc(100vw - 32px));
+    height: auto;
+    max-height: none;
+    min-height: 0;
+  }
+
+  .travel-agent-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .ta-chat-panel {
+    height: 430px;
+  }
+
+  .ta-options-panel.ta-options-column {
+    height: 520px;
+  }
+
+  .ta-right-panel {
+    height: auto;
+    grid-template-rows: 240px 360px;
+  }
+}
+
+@media (max-width: 620px) {
+  .travel-agent-workbench {
+    width: calc(100vw - 20px);
+  }
+
+  .ta-chat-composer {
+    grid-template-columns: 1fr;
+  }
+
+  .ta-send-button {
+    width: 100%;
+  }
+
+  .ta-options-column .ta-tabs {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* =========================
+   Travel Agent Workbench v6
+   True one-screen layout + more side whitespace
+   Append AFTER the v5 CSS.
+   ========================= */
+
+.app-main:has(.travel-agent-workbench) {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - 60px);
+  min-height: 0;
+  margin: 0;
+  padding: 24px 64px 28px;
+  overflow: hidden;
+}
+
+.travel-agent-workbench {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  transform: none;
+  overflow: hidden;
+}
+
+.travel-agent-layout {
+  grid-template-columns:
+    minmax(275px, 0.86fr)
+    minmax(390px, 1.18fr)
+    minmax(310px, 0.96fr);
+  gap: 18px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.ta-chat-panel,
+.ta-options-column,
+.ta-right-panel {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ta-chat-panel {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-chat-messages {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ta-chat-composer {
+  flex: 0 0 auto;
+}
+
+.ta-options-panel.ta-options-column {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-options-column .ta-options-header {
+  flex: 0 0 auto;
+}
+
+.ta-options-column .ta-option-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ta-right-panel {
+  display: grid;
+  grid-template-rows: minmax(170px, 0.78fr) minmax(250px, 1.22fr);
+  gap: 18px;
+}
+
+.ta-map-card,
+.ta-plan-card {
+  height: auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ta-plan-card {
+  display: flex;
+  flex-direction: column;
+}
+
+.ta-plan-timeline {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ta-chat-panel,
+.ta-options-panel.ta-options-column,
+.ta-map-card,
+.ta-plan-card {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.ta-panel-header,
+.ta-options-header {
+  margin-bottom: 8px;
+}
+
+.ta-option-list {
+  gap: 8px;
+}
+
+.ta-option-card {
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.ta-map-placeholder {
+  min-height: 0;
+}
+
+@media (max-width: 1320px) and (min-width: 1101px) {
+  .app-main:has(.travel-agent-workbench) {
+    padding-left: 42px;
+    padding-right: 42px;
+  }
+
+  .travel-agent-layout {
+    grid-template-columns:
+      minmax(260px, 0.88fr)
+      minmax(350px, 1.16fr)
+      minmax(290px, 0.96fr);
+    gap: 14px;
+  }
+}
+
+@media (max-height: 760px) and (min-width: 1101px) {
+  .app-main:has(.travel-agent-workbench) {
+    padding-top: 16px;
+    padding-bottom: 18px;
+  }
+
+  .ta-right-panel {
+    grid-template-rows: minmax(145px, 0.72fr) minmax(220px, 1.28fr);
+    gap: 14px;
+  }
+
+  .ta-chat-panel,
+  .ta-options-panel.ta-options-column,
+  .ta-map-card,
+  .ta-plan-card {
+    padding-top: 10px;
+    padding-bottom: 10px;
+  }
+
+  .ta-option-card {
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .app-main:has(.travel-agent-workbench) {
+    height: auto;
+    min-height: calc(100dvh - 60px);
+    padding: 20px 18px 28px;
+    overflow: visible;
+  }
+
+  .travel-agent-workbench {
+    height: auto;
+    overflow: visible;
+  }
+
+  .travel-agent-layout {
+    height: auto;
+  }
+
+  .ta-chat-panel {
+    height: 430px;
+  }
+
+  .ta-options-panel.ta-options-column {
+    height: 520px;
+  }
+
+  .ta-right-panel {
+    height: auto;
+  }
+}
+/* =========================
+   Global header/nav refresh
+   ========================= */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 60px;
+  padding: 0 32px;
+  background: rgba(255, 255, 255, 0.96);
+  border-bottom: 1px solid #e9edf5;
+  box-shadow: 0 1px 0 rgba(31, 41, 55, 0.02);
+}
+
+.app-header .brand {
+  flex: 0 0 auto;
+  color: #172033;
+  font-size: 21px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-decoration: none;
+}
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.app-nav-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0 14px;
+  border-radius: 11px;
+  color: #4162df;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.app-nav-link:hover {
+  background: #f2f5ff;
+  color: #3556d9;
+}
+
+.app-nav-link.active {
+  background: #4f6df5;
+  color: #ffffff;
+  box-shadow: 0 5px 12px rgba(79, 109, 245, 0.18);
+}
+
+.app-nav-link:active {
+  transform: translateY(1px);
+}
+
+.app-profile-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  margin-left: 4px;
+  border: 1px solid #e4e8f3;
+  border-radius: 50%;
+  background: #f7f8ff;
+  color: #6171d9;
+  text-decoration: none;
+  transition:
+    background 0.16s ease,
+    color 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.app-profile-button:hover {
+  background: #eef2ff;
+  border-color: #d9e0fb;
+}
+
+.app-profile-button.active {
+  background: #4f6df5;
+  border-color: #4f6df5;
+  color: #ffffff;
+  box-shadow: 0 5px 12px rgba(79, 109, 245, 0.18);
+}
+
+.app-profile-icon {
+  display: grid;
+  place-items: center;
+}
+
+/* Keep the navigation usable when the browser gets narrower. */
+@media (max-width: 980px) {
+  .app-header {
+    padding: 0 18px;
+  }
+
+  .app-nav {
+    gap: 2px;
+  }
+
+  .app-nav-link {
+    padding: 0 9px;
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-header {
+    height: auto;
+    min-height: 60px;
+    align-items: flex-start;
+    gap: 12px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .app-nav {
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+}
+/* =========================
+   Home page: adaptive one-screen layout
+   ========================= */
+
+.app-main:has(.home-dashboard-page) {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - 60px);
+  min-height: 0;
+  margin: 0;
+  padding: 26px 64px 30px;
+  overflow: hidden;
+}
+
+.home-dashboard-page {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.home-dashboard-shell {
+  display: grid;
+  grid-template-rows: minmax(270px, 1.08fr) minmax(250px, 0.92fr);
+  gap: 18px;
+  width: min(1380px, 100%);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.home-hero-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(330px, 0.92fr);
+  align-items: center;
+  min-height: 0;
+  overflow: hidden;
+  padding: clamp(24px, 3vw, 44px);
+  border: 1px solid #e8ecf5;
+  border-radius: 28px;
+  background:
+    radial-gradient(circle at 78% 16%, rgba(79, 109, 245, 0.13), transparent 31%),
+    linear-gradient(135deg, #ffffff 0%, #f7f9ff 100%);
+  box-shadow: 0 8px 28px rgba(31, 41, 55, 0.055);
+}
+
+.home-hero-copy {
+  max-width: 690px;
+}
+
+.home-eyebrow,
+.home-section-kicker {
+  display: inline-block;
+  color: #6272d8;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.home-hero-copy h1 {
+  margin: 13px 0 13px;
+  color: #172033;
+  font-size: clamp(36px, 4vw, 58px);
+  line-height: 1.06;
+  letter-spacing: -0.045em;
+}
+
+.home-hero-copy h1 span {
+  display: block;
+  color: #4f6df5;
+}
+
+.home-hero-copy > p {
+  max-width: 620px;
+  margin: 0;
+  color: #687286;
+  font-size: clamp(13px, 1.2vw, 16px);
+  line-height: 1.75;
+}
+
+.home-hero-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 23px;
+}
+
+.home-primary-action,
+.home-secondary-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 17px;
+  border-radius: 13px;
+  font-size: 13px;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.home-primary-action {
+  background: #4f6df5;
+  color: #fff;
+  box-shadow: 0 7px 18px rgba(79, 109, 245, 0.18);
+}
+
+.home-primary-action:hover {
+  background: #425fe9;
+}
+
+.home-secondary-action {
+  border: 1px solid #e0e5f0;
+  background: #fff;
+  color: #435068;
+}
+
+.home-secondary-action:hover {
+  background: #f6f8fc;
+}
+
+.home-hero-visual {
+  position: relative;
+  display: grid;
+  min-height: 210px;
+  place-items: center;
+}
+
+.home-visual-card.main {
+  position: relative;
+  z-index: 2;
+  width: min(300px, 78%);
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 42px rgba(49, 62, 111, 0.12);
+  backdrop-filter: blur(12px);
+}
+
+.home-visual-label {
+  color: #7b8497;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+}
+
+.home-visual-card.main > strong {
+  display: block;
+  margin-top: 7px;
+  color: #1f2a41;
+  font-size: 23px;
+}
+
+.home-visual-card.main > p {
+  margin: 5px 0 16px;
+  color: #7c8698;
+  font-size: 11px;
+}
+
+.home-score-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #758095;
+  font-size: 10px;
+}
+
+.home-score-row strong {
+  color: #4f6df5;
+  font-size: 18px;
+}
+
+.home-score-track {
+  height: 7px;
+  margin-top: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf0f6;
+}
+
+.home-score-track i {
+  display: block;
+  width: 87%;
+  height: 100%;
+  border-radius: inherit;
+  background: #4f6df5;
+}
+
+.home-visual-orbit {
+  position: absolute;
+  border: 1px solid rgba(79, 109, 245, 0.13);
+  border-radius: 50%;
+}
+
+.orbit-one {
+  width: 310px;
+  height: 310px;
+}
+
+.orbit-two {
+  width: 220px;
+  height: 220px;
+}
+
+.home-visual-chip {
+  position: absolute;
+  z-index: 3;
+  padding: 7px 11px;
+  border: 1px solid #e5e9f4;
+  border-radius: 999px;
+  background: #fff;
+  color: #526078;
+  box-shadow: 0 7px 18px rgba(43, 53, 82, 0.08);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.chip-flight {
+  top: 17%;
+  right: 5%;
+}
+
+.chip-hotel {
+  bottom: 18%;
+  right: 8%;
+}
+
+.chip-event {
+  bottom: 14%;
+  left: 6%;
+}
+
+.home-bottom-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.45fr);
+  gap: 18px;
+  min-height: 0;
+}
+
+.home-feature-section,
+.home-highlight-panel {
+  min-height: 0;
+  padding: 20px;
+  border: 1px solid #e8ecf5;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 6px 20px rgba(31, 41, 55, 0.045);
+}
+
+.home-feature-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.home-section-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 13px;
+}
+
+.home-section-heading h2,
+.home-highlight-panel h2 {
+  margin: 4px 0 0;
+  color: #1e293d;
+  font-size: 20px;
+}
+
+.home-section-heading > p {
+  margin: 0;
+  color: #939baa;
+  font-size: 11px;
+}
+
+.home-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 11px;
+  flex: 1;
+  min-height: 0;
+}
+
+.home-feature-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 15px;
+  border: 1px solid #ebeff6;
+  border-radius: 17px;
+  background: #fbfcff;
+  color: inherit;
+  text-decoration: none;
+  transition:
+    border-color 0.16s ease,
+    transform 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.home-feature-card:hover {
+  transform: translateY(-2px);
+  border-color: #dbe1f1;
+  box-shadow: 0 8px 18px rgba(39, 49, 78, 0.06);
+}
+
+.home-feature-icon {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 10px;
+  background: #edf1ff;
+  color: #4f6df5;
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.home-feature-copy {
+  margin-top: 11px;
+}
+
+.home-feature-copy h3 {
+  margin: 0;
+  color: #263149;
+  font-size: 14px;
+}
+
+.home-feature-copy p {
+  margin: 6px 0 0;
+  color: #7a8497;
+  font-size: 10px;
+  line-height: 1.55;
+}
+
+.home-feature-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 10px;
+  color: #4f6df5;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.home-highlight-panel {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.home-highlight-panel > p {
+  margin: 8px 0 17px;
+  color: #7b8496;
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+.home-highlight-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.home-highlight-stats > div {
+  padding: 11px 7px;
+  border-radius: 13px;
+  background: #f7f9fd;
+  text-align: center;
+}
+
+.home-highlight-stats strong {
+  display: block;
+  color: #4f6df5;
+  font-size: 19px;
+}
+
+.home-highlight-stats span {
+  display: block;
+  margin-top: 3px;
+  color: #848d9e;
+  font-size: 9px;
+}
+
+/* Short laptop screens: make both rows denser instead of introducing page scroll */
+@media (max-height: 760px) and (min-width: 901px) {
+  .app-main:has(.home-dashboard-page) {
+    padding-top: 16px;
+    padding-bottom: 18px;
+  }
+
+  .home-dashboard-shell {
+    grid-template-rows: minmax(225px, 1fr) minmax(205px, 0.82fr);
+    gap: 13px;
+  }
+
+  .home-hero-panel {
+    padding-top: 20px;
+    padding-bottom: 20px;
+  }
+
+  .home-hero-copy h1 {
+    margin-top: 9px;
+    margin-bottom: 9px;
+    font-size: clamp(31px, 3.5vw, 48px);
+  }
+
+  .home-hero-actions {
+    margin-top: 15px;
+  }
+
+  .home-feature-section,
+  .home-highlight-panel {
+    padding: 15px;
+  }
+}
+
+@media (max-width: 1100px) {
+  .app-main:has(.home-dashboard-page) {
+    padding-left: 34px;
+    padding-right: 34px;
+  }
+
+  .home-hero-panel {
+    grid-template-columns: minmax(0, 1.1fr) minmax(270px, 0.9fr);
+  }
+
+  .home-bottom-grid {
+    grid-template-columns: minmax(0, 1.45fr) minmax(250px, 0.55fr);
+  }
+}
+
+/* Mobile/tablet can scroll because a true one-screen three-column layout is no longer usable */
+@media (max-width: 900px) {
+  .app-main:has(.home-dashboard-page) {
+    height: auto;
+    min-height: calc(100dvh - 60px);
+    padding: 20px;
+    overflow: visible;
+  }
+
+  .home-dashboard-page {
+    height: auto;
+  }
+
+  .home-dashboard-shell {
+    grid-template-rows: auto auto;
+    height: auto;
+  }
+
+  .home-hero-panel,
+  .home-bottom-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .home-hero-visual {
+    min-height: 250px;
+  }
+
+  .home-feature-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* =========================
+   Agent page micro-cleanup
+   ========================= */
+
+/* No MOCK badge in the chat header in the latest TSX. Keep header balanced. */
+.ta-chat-panel .ta-panel-header {
+  align-items: center;
+}
+
+/* The empty travel-plan message is now only one concise line. */
+.ta-plan-empty {
+  padding-left: 18px;
+  padding-right: 18px;
+}
+/* =========================
+   Original-style HomePage: adaptive one-screen layout
+   Append AFTER previous CSS.
+   ========================= */
+
+/* Keep the original simple homepage, but fit it into the viewport. */
+.app-main:has(.home-page-adaptive) {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - 60px);
+  min-height: 0;
+  margin: 0;
+  padding: 26px 64px 30px;
+  overflow: hidden;
+}
+
+.home-page-adaptive {
+  display: flex;
+  flex-direction: column;
+  width: min(1320px, 100%);
+  height: 100%;
+  min-height: 0;
+  margin: 0 auto;
+}
+
+.home-page-adaptive > h1 {
+  flex: 0 0 auto;
+  margin: 0 0 18px;
+  font-size: 28px;
+}
+
+/* Preserve the old card-grid look, but let the grid occupy the remaining space. */
+.home-page-adaptive .home-destination-grid {
+  flex: 1 1 0;
+  min-height: 0;
+  margin-top: 0;
+  overflow-y: auto;
+  align-content: start;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 16px;
+  padding-right: 4px;
+}
+
+.home-page-adaptive .home-destination-card {
+  min-height: 0;
+  padding: 18px;
+  border-radius: 14px;
+  box-shadow: 0 4px 14px rgba(31, 41, 55, 0.045);
+}
+
+.home-page-adaptive .home-destination-card h2 {
+  margin: 0 0 5px;
+  font-size: 18px;
+}
+
+.home-page-adaptive .home-destination-card p {
+  margin-top: 7px;
+  margin-bottom: 7px;
+  line-height: 1.55;
+}
+
+/* Slim internal scrollbar if there are more destinations than can fit. */
+.home-page-adaptive .home-destination-grid {
+  scrollbar-width: thin;
+  scrollbar-color: #d6dbe6 transparent;
+}
+
+.home-page-adaptive .home-destination-grid::-webkit-scrollbar {
+  width: 6px;
+}
+
+.home-page-adaptive .home-destination-grid::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: #d6dbe6;
+}
+
+@media (max-height: 760px) and (min-width: 761px) {
+  .app-main:has(.home-page-adaptive) {
+    padding-top: 18px;
+    padding-bottom: 20px;
+  }
+
+  .home-page-adaptive > h1 {
+    margin-bottom: 12px;
+    font-size: 25px;
+  }
+
+  .home-page-adaptive .home-destination-grid {
+    gap: 12px;
+  }
+
+  .home-page-adaptive .home-destination-card {
+    padding: 15px;
+  }
+}
+
+@media (max-width: 760px) {
+  .app-main:has(.home-page-adaptive) {
+    height: auto;
+    min-height: calc(100dvh - 60px);
+    padding: 20px 18px 28px;
+    overflow: visible;
+  }
+
+  .home-page-adaptive {
+    height: auto;
+  }
+
+  .home-page-adaptive .home-destination-grid {
+    overflow: visible;
+    grid-template-columns: 1fr;
+  }
+}
+
+
+/* =========================
+   Agent travel-plan empty state cleanup
+   ========================= */
+
+/* Ensure no leftover second-line helper text appears even if old CSS remains. */
+.ta-plan-empty > span {
+  display: none !important;
+}
+/* =========================
+   HomePage adaptive layout
+   Keep the original simple HomePage style
+   ========================= */
+
+/* 首页只占导航栏下方的可视区域，不产生整页上下滚动 */
+.app-main:has(.home-page) {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: none;
+  height: calc(100dvh - 60px);
+  min-height: 0;
+  margin: 0;
+  padding: 24px 64px 28px;
+  overflow: hidden;
+}
+
+/* 保留原来的 agent-page / agent-hero 视觉，只做首页专属尺寸控制 */
+.home-page {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 页面内容始终在视口中央 */
+.home-center {
+  width: min(900px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  text-align: center;
+}
+
+/* 覆盖 Agent 页面 hero 的顶部留白，避免首页被撑高 */
+.home-page .agent-hero {
+  width: 100%;
+  max-width: 860px;
+  margin: 0;
+  padding: 0;
+  text-align: center;
+}
+
+.home-page .agent-hero h1 {
+  margin: 14px 0 16px;
+  font-size: clamp(42px, 5.2vw, 72px);
+  line-height: 1.08;
+  letter-spacing: -0.045em;
+}
+
+.home-page .agent-hero p {
+  max-width: 620px;
+  margin: 0 auto;
+  font-size: clamp(14px, 1.35vw, 18px);
+  line-height: 1.7;
+}
+
+.home-page .agent-kicker {
+  display: inline-block;
+}
+
+.home-start-button {
+  min-width: 170px;
+  min-height: 46px;
+  padding: 0 20px;
+  font-size: 14px;
+}
+
+/* 较矮的笔记本屏幕：自动缩小文字和间距，仍然保持一屏 */
+@media (max-height: 760px) and (min-width: 761px) {
+  .app-main:has(.home-page) {
+    padding-top: 16px;
+    padding-bottom: 18px;
+  }
+
+  .home-center {
+    gap: 20px;
+  }
+
+  .home-page .agent-hero h1 {
+    margin-top: 10px;
+    margin-bottom: 12px;
+    font-size: clamp(36px, 4.6vw, 58px);
+  }
+
+  .home-page .agent-hero p {
+    font-size: 14px;
+  }
+
+  .home-start-button {
+    min-height: 42px;
+  }
+}
+
+/* 平板/手机：允许自然滚动，避免内容被强行压缩 */
+@media (max-width: 760px) {
+  .app-main:has(.home-page) {
+    height: auto;
+    min-height: calc(100dvh - 60px);
+    padding: 24px 18px 32px;
+    overflow: visible;
+  }
+
+  .home-page {
+    min-height: calc(100dvh - 116px);
+    height: auto;
+  }
+
+  .home-center {
+    gap: 22px;
+  }
+
+  .home-page .agent-hero h1 {
+    font-size: clamp(38px, 11vw, 54px);
+  }
+
+  .home-start-button {
+    width: min(280px, 100%);
+  }
+}
+/* 首页主标题真正居中 */
+.home-page .agent-hero h1 {
+  text-align: center;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* 让整个 hero 内容也保持居中 */
+.home-page .agent-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
