@@ -48,7 +48,7 @@ export function AgentPage() {
     try { remembered = JSON.parse(sessionStorage.getItem(SAVED) ?? 'null'); } catch { remembered = null; }
     if (remembered) {
       setCredential(remembered);
-      planning.get(remembered).then(setView).catch(e => { setError(String(e)); sessionStorage.removeItem(SAVED); setCredential(null); });
+      planning.get(remembered).then(next => { setView(next); setError(''); }).catch(e => { setError(String(e)); sessionStorage.removeItem(SAVED); setCredential(null); });
       return;
     }
     if ((location.state as { autostart?: boolean } | null)?.autostart) {
@@ -69,6 +69,7 @@ export function AgentPage() {
       try {
         const next = await planning.get(credential);
         if (!active) return;
+        setError('');
         setView(next);
         if (next.state.status === 'running') timer = setTimeout(poll, 1500);
       } catch (e) { if (active) { setError(String(e)); timer = setTimeout(poll, 4000); } }
