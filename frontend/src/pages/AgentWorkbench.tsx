@@ -148,7 +148,7 @@ function RouteSketch({ plan, dayIndex, places, alternatives, focusPlace, onFocus
       <button type="button" onClick={() => setViewport({ x: 0, y: 0, width: 640, height: 330 })}>适应</button>
     </div>
     <svg viewBox={`${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`}
-      role="img" aria-label={`第 ${dayIndex} 天的地点位置示意图，可拖动查看`}
+      role="group" aria-label={`第 ${dayIndex} 天的地点位置示意图，可拖动查看和选择地点`}
       onPointerDown={event => { drag.current = { clientX: event.clientX, clientY: event.clientY, viewport }; event.currentTarget.setPointerCapture(event.pointerId); }}
       onPointerMove={event => {
         if (!drag.current) return;
