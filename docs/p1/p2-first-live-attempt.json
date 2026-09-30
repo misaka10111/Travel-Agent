@@ -1,0 +1,18 @@
+{
+  "session_id": "3ac0bb95-ea79-469a-9c09-65075e720a70",
+  "input_path": "natural_language",
+  "status": "needs_attention",
+  "attention_reason": "runtime_internal_error",
+  "usage": {
+    "model_calls": 2,
+    "map_calls": 0,
+    "steps": 1,
+    "model_limit": 20,
+    "map_limit": 80,
+    "step_limit": 24
+  },
+  "coverage": {},
+  "days": 0,
+  "plan_status": null,
+  "audit": null
+}

@@ -1,0 +1,23 @@
+{
+  "session_id": "4d82ff74-1490-45a0-9221-ccb262620fe2",
+  "input_path": "natural_language",
+  "status": "needs_attention",
+  "attention_reason": "model_request_failed",
+  "usage": {
+    "model_calls": 10,
+    "map_calls": 64,
+    "steps": 9,
+    "model_limit": 20,
+    "map_limit": 80,
+    "step_limit": 24
+  },
+  "coverage": {
+    "attraction": 20,
+    "restaurant": 15,
+    "hotel": 31,
+    "transport": 0
+  },
+  "days": 5,
+  "plan_status": "partial",
+  "audit": null
+}
