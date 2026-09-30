@@ -10,7 +10,22 @@ from app.schemas.itinerary import DraftDay, Stop
 def schedule(index, date, attractions, hotel, restaurants, routes, intent, children=None, arrival=None, departure=None):
     zone = ZoneInfo(intent.dates.timezone or intent.destination.timezone or "Asia/Shanghai")
     reference = date or utc_now().astimezone(zone).date()
-    current = arrival["minute"] if arrival else 9 * 60
+    preferences = intent.preferences
+    default_start = {"early": 7 * 60 + 30, "late": 10 * 60}.get(preferences.morning_style, 9 * 60)
+    start = (preferences.day_start_time.hour * 60 + preferences.day_start_time.minute
+        if preferences.day_start_time else default_start)
+    current = arrival["minute"] if arrival else start
+    day = DraftDay(day_index=index, date=date, hotel_place_id=hotel.place_id if hotel else None)
+    if preferences.breakfast_required:
+        if arrival:
+            day.breakfast_note = "抵达日早餐的时间和地点需结合实际航班确认"
+        elif current + 45 <= 1440:
+            day.breakfast_start_minute = current
+            day.breakfast_end_minute = current + 45
+            day.breakfast_note = "早餐时段已预留；酒店早餐或附近餐馆尚未核实"
+            current += 45
+        else:
+            day.breakfast_note = "当天开始时间过晚，早餐时段尚未安排"
     chain = []
     if arrival:
         chain.append((arrival["place"], arrival["buffer"], None))
@@ -26,7 +41,6 @@ def schedule(index, date, attractions, hotel, restaurants, routes, intent, child
         chain.append((departure["place"], departure["buffer"], None))
     elif hotel:
         chain.append((hotel, 1, None))
-    day = DraftDay(day_index=index, date=date, hotel_place_id=hotel.place_id if hotel else None)
     known = True
     for i, (place, dwell, earliest) in enumerate(chain):
         if i and chain[i - 1][0].place_id != place.place_id:
@@ -51,5 +65,5 @@ def schedule(index, date, attractions, hotel, restaurants, routes, intent, child
         day.notes.append("抵离时刻来自候选班次，尚未预订；火车预留60分钟、飞机预留120分钟缓冲")
     if date is None:
         day.notes.append("日期待定；路线查询日期仅为参考，时刻表不是旅行日确认结果")
-    day.notes.append("09:00 开始、景点停留120分钟、景点间休息15分钟、交通缓冲10分钟均为草案假设")
+    day.notes.append(f"{start // 60:02d}:{start % 60:02d} 开始、景点停留120分钟、景点间休息15分钟、交通缓冲10分钟均为草案假设；可在对话中调整早晚时间")
     return day

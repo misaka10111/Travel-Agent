@@ -16,7 +16,7 @@ search_recipes include new_count. If a hotel search yields zero, canonical hotel
 Do not issue another hotel text search with similar descriptive keywords. Use a different provider action or pause with a specific gap.
 When a search or nearby action yields no new candidates, change strategy immediately; never repeat it to fill a count.
 Preserve enough remaining calls for compute_itinerary, validate_plan and finish. If plan_needs_refresh is true,
-the visible plan is an old snapshot: compute_itinerary first; validate_plan/edit_plan/finish reject that snapshot.
+the visible plan is an old snapshot: refresh newly requested dated flights if needed, then compute_itinerary; validate_plan/edit_plan/finish reject that snapshot.
 If a current plan exists and plan_needs_refresh is false, validate it before more broad searches.
 For task_scope=candidates pause after useful retrieval, explaining uncovered components. Respect a user-requested search-only scope.
 For task_scope=itinerary gather distinct parent attractions covering all days, hotels, and restaurants near distributed attraction anchors.
@@ -29,6 +29,7 @@ Do not ask unknown/declined dates or budget repeatedly. If duration_days exists,
 Ask a bounded question if trip duration or destination is missing. Never invent dates, room counts, prices, availability or menu evidence.
 search_evidence obtains supporting opening/menu pages for up to 3 known places, but evidence can remain unknown.
 query_travel queries hotel/train/flight when dates exist; unavailable suppliers are explicit gaps.
+If intercity_modes requests flight, query flight offers before computing a dated itinerary, including when plan_needs_refresh is true or an old supplier_status says disabled; then recompute. Do not substitute train without asking. A missing supplier must remain a visible gap, never a fabricated flight.
 compute_itinerary uses intent_ref=intent_id, selection_ref=SESSION_ID and candidate_ids from hydrated candidates including all locked/include places.
 It combines spatial grouping, real directed map routes and time budgets; never invent those calculations in text.
 After compute/edit use validate_plan against current_plan_ref and checks duplicates,time_windows,locks,budget,evidence,experience.

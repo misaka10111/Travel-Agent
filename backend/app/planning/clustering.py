@@ -65,7 +65,7 @@ def identity_groups(places):
     return groups
 
 
-def allocate(places, count, per_day, required_ids, fixed_days, scores):
+def allocate(places, count, per_day, required_ids, fixed_days, scores, spread_seeds=False):
     days = [[] for _ in range(count)]
     remaining = list(places)
     for place in list(remaining):
@@ -81,7 +81,13 @@ def allocate(places, count, per_day, required_ids, fixed_days, scores):
     remaining = ordered[:max(count * per_day - sum(map(len, days)), len(required_ids & {p.place_id for p in ordered}))]
     for index, day in enumerate(days):
         if not day and remaining:
-            seed = max(remaining, key=lambda p: meters(p, center))
+            seeded = [place for group in days for place in group]
+            if spread_seeds and seeded:
+                seed = max(remaining, key=lambda p: (min(meters(p, other) for other in seeded), scores[p.place_id]))
+            elif spread_seeds:
+                seed = max(remaining, key=lambda p: scores[p.place_id])
+            else:
+                seed = max(remaining, key=lambda p: meters(p, center))
             day.append(seed)
             remaining.remove(seed)
         # Fill a compact area before seeding another day, while reserving at

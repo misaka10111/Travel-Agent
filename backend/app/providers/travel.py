@@ -103,6 +103,9 @@ class TravelServices:
             from datetime import timedelta
             end = start + timedelta(days=intent.dates.duration_days - 1)
         for category in categories:
+            if category not in self.settings.travel_supplier_categories:
+                statuses[category] = "category_disabled"
+                continue
             requests = []
             if category == "hotel":
                 if not end or end <= start:

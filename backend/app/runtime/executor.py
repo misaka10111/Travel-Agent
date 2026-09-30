@@ -79,6 +79,8 @@ class PlanningRuntime:
                 previous = state.intent_snapshot
                 state.intent_snapshot = updated
                 invalidate(state, previous)
+                if "flight" in updated.preferences.intercity_modes and not self.settings.travel_supplier_enabled:
+                    state.supplier_status["flight"] = "disabled_pending_account_validation"
                 if queued["kind"] == "intake":
                     valid = {"dates", "budget", "party", "origin", "destination", "preferences", "constraints"}
                     state.intake_state.unknown_fields = list(dict.fromkeys(state.intake_state.unknown_fields + [f for f in result.unknown_fields if f in valid]))

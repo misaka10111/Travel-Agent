@@ -44,6 +44,7 @@ class Settings(BaseSettings):
     map_request_interval_seconds: float = Field(default=1.0, ge=0, le=5)
     tavily_api_key: SecretStr | None = None
     travel_supplier_enabled: bool = False
+    travel_supplier_categories: list[Literal["hotel", "train", "flight"]] = ["flight"]
     travel_supplier_timeout_seconds: float = Field(default=30, ge=1, le=60)
 
 

@@ -36,6 +36,9 @@ class DraftDay(ContractModel):
     stops: list[Stop] = Field(default_factory=list)
     routes: list[RouteLeg] = Field(default_factory=list)
     hotel_place_id: str | None = None
+    breakfast_start_minute: int | None = Field(default=None, ge=0, le=1439)
+    breakfast_end_minute: int | None = Field(default=None, ge=0, le=1440)
+    breakfast_note: str | None = None
     departure_deadline_minute: int | None = Field(default=None, ge=0, le=1439)
     notes: list[str] = Field(default_factory=list)
 

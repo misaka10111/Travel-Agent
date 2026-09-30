@@ -50,12 +50,13 @@ def compute(state, provider, route_limit, previous=None):
         any(meters(p, food) <= 2000 for food in food_pool)]
     if len(supported) >= count:
         attractions = supported
-    per_day = 2 if intent.preferences.pace == "relaxed" or "舒适" in intent.preferences.comfort_tags else 3
+    per_day = 3 if intent.preferences.compact_nearby else (2 if intent.preferences.pace == "relaxed" or "舒适" in intent.preferences.comfort_tags else 3)
     scores = {p.place_id: preference_score(p, intent) for p in attractions}
-    assignments = allocate(attractions, count, per_day, mapped_required, fixed, scores)
+    assignments = allocate(attractions, count, per_day, mapped_required, fixed, scores,
+        spread_seeds=bool(intent.preferences.compact_nearby))
     # Preserve untouched day assignments when editing a previous draft. Changes
     # enter as explicit assignments, then routes/times are recomputed.
-    if previous:
+    if previous and not intent.preferences.compact_nearby:
         retained = []
         assignments = []
         for day in previous.days:
@@ -95,7 +96,9 @@ def compute(state, provider, route_limit, previous=None):
     # The route budget belongs to the legs shown in the final itinerary. Hotel
     # candidates have already been ranked against all days by proximity;
     # probing alternatives here previously consumed calls before later days.
-    transfers = choose_transfers(state.travel_offers, intent, state.candidates)
+    requested_modes = set(intent.preferences.intercity_modes)
+    transfer_offers = [offer for offer in state.travel_offers if not requested_modes or offer.get("category") in requested_modes]
+    transfers = choose_transfers(transfer_offers, intent, state.candidates)
     days, food_ranks, used_restaurants = [], [], set()
     version = max([p.version for p in state.plan_history], default=0) + 1
     for i, assigned in enumerate(assignments, 1):
@@ -139,7 +142,7 @@ def compute(state, provider, route_limit, previous=None):
     if not intent.budget.money:
         missing.append("预算")
     if intent.origin and intent.origin.label != intent.destination.label and len(transfers) != 2:
-        missing.append("往返城际交通与抵离接驳")
+        missing.append("往返航班班次、票价及机场接驳" if "flight" in requested_modes else "往返城际交通与抵离接驳")
     return ItineraryDraft(plan_id=state.current_plan_ref.plan_id if state.current_plan_ref else str(uuid4()),
         version=version, base_state_version=state.state_version, intent_snapshot_ref=intent.intent_id,
         status="partial", days=days, recommendations=hotel_ranks[:5] + list({r.place_id: r for r in food_ranks}.values()),

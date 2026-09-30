@@ -1,6 +1,7 @@
 """Trip-specific intent; draft requirements may remain unknown."""
 
-from datetime import date
+from datetime import date, time
+import re
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator, field_validator
@@ -53,6 +54,11 @@ class Budget(ContractModel):
 
     @model_validator(mode="after")
     def known_limit(self):
+        # Older intake revisions flattened an explicit daily per-person amount
+        # into per_person. Repair only when its saved wording is unambiguous.
+        if (self.money and self.money.scope == "per_person" and self.raw and
+                re.search(r"(?:每天\s*每人|每人\s*每天)", self.raw)):
+            self.money = self.money.model_copy(update={"scope": "per_person_per_day"})
         if self.limit_kind in ("hard", "target") and self.money is None:
             raise ValueError("numeric budget limit requires amount, currency and scope")
         return self
@@ -66,6 +72,18 @@ class Preferences(ContractModel):
     dietary_preferences: list[str] = Field(default_factory=list)
     lodging_preferences: list[str] = Field(default_factory=list)
     must_visit_names: list[str] = Field(default_factory=list)
+    intercity_modes: list[Literal["flight", "train"]] = Field(default_factory=list)
+    morning_style: Literal["early", "standard", "late"] | None = None
+    breakfast_required: bool | None = None
+    day_start_time: time | None = None
+    day_end_time: time | None = None
+    compact_nearby: bool | None = None
+
+    @model_validator(mode="after")
+    def usable_day_window(self):
+        if self.day_start_time and self.day_end_time and self.day_end_time <= self.day_start_time:
+            raise ValueError("day_end_time must follow day_start_time")
+        return self
 
 
 class ConstraintBase(ContractModel):

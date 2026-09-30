@@ -39,7 +39,7 @@ class FieldEvidence(ContractModel):
 class Money(ContractModel):
     amount: Decimal = Field(ge=0, allow_inf_nan=False)
     currency: str = Field(pattern=r"^[A-Z]{3}$")
-    scope: Literal["trip_total", "per_person", "per_night", "per_room_night", "ticket", "route"]
+    scope: Literal["trip_total", "per_person", "per_person_per_day", "per_night", "per_room_night", "ticket", "route"]
 
 
 class RegionRef(ContractModel):

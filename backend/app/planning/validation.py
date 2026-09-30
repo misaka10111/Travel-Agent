@@ -91,8 +91,10 @@ def validate(plan, state):
                     issue("opening_unknown", "unknown", "开放时段及预约条件尚未核实", day.day_index, [stop.place_id])
             if stop.start_minute is None:
                 issue("schedule_unknown", "unknown", "缺少交通耗时，后续时刻暂不可确认", day.day_index, [stop.place_id])
-            elif stop.category != "hotel" and stop.end_minute > 20 * 60:
-                issue("day_overflow", "blocking", "活动超过草案每日20:00上限，应缩减或重排", day.day_index)
+            elif stop.category != "hotel" and stop.end_minute > (
+                intent.preferences.day_end_time.hour * 60 + intent.preferences.day_end_time.minute
+                if intent.preferences.day_end_time else 20 * 60):
+                issue("day_overflow", "blocking", "活动超过用户指定或默认的每日结束时间，应缩减或重排", day.day_index)
         for first, second in zip(day.stops, day.stops[1:]):
             if first.end_minute is not None and second.start_minute is not None and second.start_minute < first.end_minute:
                 issue("stop_overlap", "blocking", "活动时间重叠", day.day_index)

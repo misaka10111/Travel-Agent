@@ -1,5 +1,6 @@
 """P1 requests carry a version and command ID; tokens are returned only at creation."""
 
+from datetime import time
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -17,6 +18,12 @@ class PreferencePatch(ContractModel):
     dietary_preferences: list[str] | None = None
     lodging_preferences: list[str] | None = None
     must_visit_names: list[str] | None = None
+    intercity_modes: list[Literal["flight", "train"]] | None = None
+    morning_style: Literal["early", "standard", "late"] | None = None
+    breakfast_required: bool | None = None
+    day_start_time: time | None = None
+    day_end_time: time | None = None
+    compact_nearby: bool | None = None
 
 
 class ProfileSnapshot(ContractModel):
