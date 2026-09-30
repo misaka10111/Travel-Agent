@@ -325,7 +325,7 @@ export function AgentWorkbench() {
     try {
       const edited = await planning.edit(credential, state.state_version, { intent_patch: { preferences } });
       setView(edited);
-      say('已更新每日时间、早餐与就近安排偏好，正在调整行程。');
+      say('已更新每日时间、早餐、就近安排与出行方式，正在调整行程。');
       await run(credential, edited);
     } catch (cause) { setError(friendlyError(cause)); planning.get(credential).then(setView).catch(() => undefined); }
     finally { setBusy(false); }
