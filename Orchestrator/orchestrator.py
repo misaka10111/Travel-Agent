@@ -93,8 +93,18 @@ class State(TypedDict, total=False):
 
 
 def _call(python: Path, script: Path, payload: dict) -> dict:
+    # 🌟 强行替换 Linux 路径为 Windows 路径
+    python_str = str(python).replace("bin\\python", "Scripts\\python.exe").replace("bin/python", "Scripts\\python.exe")
+    
+    # 🌟 兜底：如果替换后的路径依然不存在，直接用当前环境的 Python！
+    import os
+    import sys
+    if not os.path.exists(python_str):
+        print(f"====== DEBUG: 路径 {python_str} 不存在，改用当前 Python: {sys.executable}", file=sys.stderr)
+        python_str = sys.executable
+
     proc = subprocess.run(
-        [str(python), str(script)],
+        [python_str, str(script)],
         input=json.dumps(payload, ensure_ascii=False),
         capture_output=True,
         text=True,
