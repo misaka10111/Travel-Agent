@@ -28,6 +28,7 @@ const ISSUE: Record<string, string> = {
   duplicate_attraction: '同一景点在不同日期重复出现，需要重新安排。',
   opening_unknown: '景点开放时间还需要核实。',
   evidence_missing: '部分价格、开放时间或服务信息尚待核实。',
+  hotel_commute_long: '住宿到当天景点的往返交通较久，建议改选更靠近主要游览区域的酒店。',
 };
 function friendlyError(value: unknown) {
   const text = value instanceof Error ? value.message : String(value);
@@ -283,7 +284,10 @@ export function AgentWorkbench() {
 
   const offers = plan?.travel_offers.filter(offer => category === 'transport' && (offer.category === 'flight' || offer.category === 'train')) ?? [];
   const selectedDay = plan?.days.find(day => day.day_index === dayIndex) ?? plan?.days[0];
-  const warnings = selectedDay ? plan?.audit?.issues.filter(issue => issue.day_index === selectedDay.day_index && issue.severity !== 'warning') ?? [] : [];
+  const warnings = selectedDay ? plan?.audit?.issues.filter(issue => issue.day_index === selectedDay.day_index &&
+    (issue.severity !== 'warning' || issue.code === 'hotel_commute_long')) ?? [] : [];
+  const hotelRecommendations = (plan?.recommendations ?? []).filter(item => item.category === 'hotel');
+  const hotelOrder = new Map(hotelRecommendations.map((item, index) => [item.place_id, index]));
 
   return <section className="travel-agent-workbench">
     <div className="travel-agent-layout">
@@ -328,10 +332,13 @@ export function AgentWorkbench() {
                 <p>{offer.segments.map(segment => `${segment.origin_station ?? '出发地待确认'} → ${segment.destination_station ?? '目的地待确认'}`).join(' / ')}</p>
                 <small>{offer.price_display && offer.currency ? `${offer.price_display} ${offer.currency}` : '价格待查询'} · 候选班次，尚未预订</small>
               </article>)}
-            {state?.candidates.filter(place => place.category === group).slice(0, 24).map(place => {
+            {state?.candidates.filter(place => place.category === group).sort((a, b) => group === 'hotel' ?
+              (hotelOrder.get(a.place_id) ?? 999) - (hotelOrder.get(b.place_id) ?? 999) : 0).slice(0, 24).map(place => {
               const selected = state.selections.some(item => item.place_id === place.place_id && item.decision === 'lock');
+              const hotelFit = group === 'hotel' ? hotelRecommendations.find(item => item.place_id === place.place_id) : undefined;
               return <article className={`ta-option-card ${selected ? 'selected' : ''}`} key={place.place_id}>
                 <strong>{place.name}</strong><p>{place.address ?? '地址待确认'}</p>
+                {hotelFit && <small>{hotelOrder.get(place.place_id) === 0 ? '当前行程优先推荐 · ' : '多日位置参考 · '}{hotelFit.reasons[0]}</small>}
                 <small>{group === 'hotel' ? '房价和空房需按日期查询' : group === 'attraction' ? '开放与预约信息待核实' : '出行方式待确认'}</small>
                 {group !== 'transport' && <button type="button" disabled={busy || running} onClick={() => void choose(place)}>
                   {selected ? '从行程移除' : '选入并更新行程'}</button>}

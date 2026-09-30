@@ -24,6 +24,7 @@ export interface Route {
 export interface Draft {
   plan_id: string; version: number; status: string;
   days: Array<{ day_index: number; date: string | null; hotel_place_id: string | null; stops: Stop[]; routes: Route[]; notes: string[] }>;
+  recommendations: Array<{ place_id: string; category: string; reasons: string[]; unknowns: string[] }>;
   missing_requirements: string[]; assumptions: string[];
   audit: { hard_status: string; experience_status: string; reviewed: boolean; issues: Array<{ code: string; severity: string; message: string; day_index: number | null }> } | null;
   travel_offers: Array<{ category: string; direction: string; name: string | null; price_display: string | null; currency: string | null; price_scope: string; segments: Array<{ service_no: string | null; origin_station: string | null; destination_station: string | null; departure_at: string | null; arrival_at: string | null }> }>;
