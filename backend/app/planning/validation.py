@@ -21,6 +21,7 @@ def validate(plan, state):
     if len(plan.days) != expected:
         issue("day_coverage", "blocking", "日程天数与需求不一致")
     seen, scheduled, seen_attractions = set(), {}, []
+    long_hotel_days = []
     for day in plan.days:
         if not any(s.category == "attraction" for s in day.stops):
             issue("empty_day", "blocking", "该天没有景点安排，需要补搜或调整", day.day_index)
@@ -46,6 +47,7 @@ def validate(plan, state):
         # edges at different times each need their own route observation.
         remaining = list(day.routes)
         walking = 0
+        hotel_commute_seconds = []
         for first, second in pairs:
             leg = next((r for r in remaining if r.from_place_id == first.place_id and r.to_place_id == second.place_id), None)
             if leg is None:
@@ -58,8 +60,12 @@ def validate(plan, state):
                 if first.end_minute is not None and second.start_minute is not None and second.start_minute < first.end_minute + leg.duration_seconds / 60:
                     issue("travel_overlap", "blocking", "安排没有包含真实交通耗时", day.day_index)
                 walking += leg.distance_meters if leg.mode == "walking" else sum(s.distance_meters or 0 for s in leg.steps if s.mode == "walking")
+                if first.category == "hotel" or second.category == "hotel":
+                    hotel_commute_seconds.append(leg.duration_seconds)
                 if (utc_now() - leg.queried_at).total_seconds() > 3600:
                     issue("route_stale", "unknown", "路线观察已过期，需要重新查询", day.day_index)
+        if hotel_commute_seconds and (max(hotel_commute_seconds) > 60 * 60 or sum(hotel_commute_seconds) > 90 * 60):
+            long_hotel_days.append(day)
         for limit in (c for c in intent.constraints if c.kind == "walking_limit" and c.strength == "hard"):
             if walking > limit.max_daily_meters:
                 issue("walking_limit", "blocking", "已知步行距离超过每日限制", day.day_index)
@@ -90,6 +96,13 @@ def validate(plan, state):
         for first, second in zip(day.stops, day.stops[1:]):
             if first.end_minute is not None and second.start_minute is not None and second.start_minute < first.end_minute:
                 issue("stop_overlap", "blocking", "活动时间重叠", day.day_index)
+    explicitly_chosen_hotels = {s.place_id for s in state.selections if s.decision in {"include", "lock"}
+        and s.place_id in by_id and by_id[s.place_id].category == "hotel"}
+    explicitly_chosen_hotels.update(c.place_id for c in intent.constraints if c.kind == "booked_hotel" and c.strength == "hard")
+    for day in long_hotel_days:
+        severity = "warning" if day.hotel_place_id in explicitly_chosen_hotels or len(long_hotel_days) == 1 else "blocking"
+        issue("hotel_commute_long", severity, "住宿往返当天景点耗时较长，请围绕主要游览区域补搜酒店或调整住宿安排",
+              day.day_index, [day.hotel_place_id] if day.hotel_place_id else [])
     for selected in state.selections:
         visits = scheduled.get(selected.place_id, [])
         if selected.decision in {"include", "lock"} and not visits:

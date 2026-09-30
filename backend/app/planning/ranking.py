@@ -1,3 +1,5 @@
+from math import isfinite
+
 from app.planning.clustering import meters
 from app.schemas.itinerary import Recommendation
 
@@ -40,3 +42,32 @@ def nearby_ranking(places, anchors, category, intent):
             reasons=["按多天景点平均距离初筛；最终路线需核验" if category == "hotel" else "按用餐区域附近筛选；距离不是通勤耗时"],
             unknowns=unknown))
     return sorted(result, key=lambda r: (-sum(r.score_components.values()), r.place_id))
+
+
+def hotel_ranking(places, day_groups, intent):
+    """Choose a stable trip base using each day's attractions equally.
+
+    Distances only shortlist candidate locations; actual commute time is checked
+    after routing. Rating is a small tie-breaker, not a substitute for proximity.
+    """
+    groups = [group for group in day_groups if group]
+    if not groups:
+        return []
+    anchors = [place for group in groups for place in group]
+    ranked = nearby_ranking(places, anchors, "hotel", intent)
+    by_id = {place.place_id: place for place in places}
+    comparable = []
+    for item in ranked:
+        hotel = by_id[item.place_id]
+        daily_meters = [sum(meters(hotel, place) for place in group) / len(group) for group in groups]
+        if not all(isfinite(distance) for distance in daily_meters):
+            continue
+        average = sum(daily_meters) / len(daily_meters)
+        worst = max(daily_meters)
+        distance_proxy = average * 0.8 + worst * 0.2
+        quality = item.score_components["provider_rating"]
+        item.score_components = {"multi_day_proximity": 1 / (1 + distance_proxy / 1000),
+            "provider_rating": quality * 0.02}
+        item.reasons = [f"距各日景点的直线距离平均约{average / 1000:.1f}公里，最远一天约{worst / 1000:.1f}公里；实际通勤以地图路线为准"]
+        comparable.append(item)
+    return sorted(comparable, key=lambda item: (-sum(item.score_components.values()), item.place_id))

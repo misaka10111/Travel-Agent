@@ -2,7 +2,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from app.planning.clustering import allocate, identity_groups, meters, same_visit_area
-from app.planning.ranking import nearby_ranking, preference_score
+from app.planning.ranking import hotel_ranking, nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
 from app.planning.scheduling import schedule
 from app.planning.transfers import choose_transfers
@@ -68,13 +68,17 @@ def compute(state, provider, route_limit, previous=None):
                 retained.append(place)
                 group.append(place)
             assignments.append(group)
-    anchors = [p for group in assignments for p in group]
-    hotel_ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded], anchors, "hotel", intent)
+    hotel_ranks = hotel_ranking([p for p in state.candidates if p.place_id not in excluded], assignments, intent)
     forced_hotels = [by_id[pid] for pid in required if by_id[pid].category == "hotel"]
     if len(forced_hotels) > 1:
         raise PlanningError("multiple_locked_hotels_require_explicit_stay_assignment", 422)
-    override = by_id.get(previous.days[0].hotel_place_id) if previous and previous.days else None
-    hotel = forced_hotels[0] if forced_hotels else (override or (by_id[hotel_ranks[0].place_id] if hotel_ranks else None))
+    # Retain an explicit replace_hotel edit, but re-rank an unselected hotel
+    # after other edits instead of carrying a distant old default forever.
+    edited_hotel_id = (previous.days[0].hotel_place_id if previous and previous.days and
+        state.current_plan and state.current_plan.days and
+        previous.days[0].hotel_place_id != state.current_plan.days[0].hotel_place_id else None)
+    hotel = forced_hotels[0] if forced_hotels else (by_id.get(edited_hotel_id) if edited_hotel_id else
+        (by_id[hotel_ranks[0].place_id] if hotel_ranks else None))
     food_candidates = [p for p in state.candidates if p.category == "restaurant" and p.place_id not in excluded and p.coordinates]
     # Record meal coverage separately from routing. Missing restaurant candidates
     # must not suppress real routes between places that are already known.
@@ -88,7 +92,7 @@ def compute(state, provider, route_limit, previous=None):
     prior_legs = [r for d in state.current_plan.days for r in d.routes] if state.current_plan else []
     router = RoutePlanner(provider, intent, route_limit, prior_legs)
     # The route budget belongs to the legs shown in the final itinerary. Hotel
-    # candidates have already been ranked against all day anchors by proximity;
+    # candidates have already been ranked against all days by proximity;
     # probing alternatives here previously consumed calls before later days.
     transfers = choose_transfers(state.travel_offers, intent, state.candidates)
     days, food_ranks, used_restaurants = [], [], set()
