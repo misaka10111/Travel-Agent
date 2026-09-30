@@ -137,15 +137,17 @@ class ToolRegistry:
                 for anchor in anchors:
                     if anchor.coordinates:
                         for p in provider.nearby_places(anchor.coordinates, "餐厅" if action.category == "restaurant" else "酒店",
-                                state.intent_snapshot.destination, radius_meters=5000, limit=10):
+                                state.intent_snapshot.destination, radius_meters=2000 if action.category == "restaurant" else 5000, limit=20):
                             if p.category == action.category and p.place_id not in {s.place_id for s in state.selections if s.decision == "exclude"}:
                                 found[p.place_id] = p
                 return list(found.values())
             places = await asyncio.to_thread(self._map, nearby, reserve_map)
             merged = {p.place_id: p for p in state.candidates}
-            merged.update({p.place_id: p for p in places})
-            if len(merged) > 150:
-                raise PlanningError("candidate_capacity_reached")
+            kept = []
+            for place in places:
+                if place.place_id in merged or len(merged) < 150:
+                    merged[place.place_id] = place
+                    kept.append(place)
             state.candidates = list(merged.values())
             state.candidate_ids = list(dict.fromkeys(list(merged) + [s.place_id for s in state.selections]))
             state.candidates_need_refresh = len(merged) != len(state.candidate_ids)
@@ -154,10 +156,11 @@ class ToolRegistry:
             recipe = SearchRecipe(queries=["餐厅" if action.category == "restaurant" else "酒店"], categories=[action.category], limit=25)
             if recipe not in state.search_recipes:
                 state.search_recipes.append(recipe)
-            ranking = nearby_ranking(places, anchors, action.category, state.intent_snapshot)
+            ranking = nearby_ranking(kept, anchors, action.category, state.intent_snapshot)
             return state, {"status": "partial", "kind": "ranking", "items": [
                 {"place_id": r.place_id, "score": sum(r.score_components.values()), "explanation": "；".join(r.reasons)} for r in ranking],
-                "warnings": ["distance_is_pruning_only; menus_and_inventory_not_confirmed"]}
+                "warnings": ["distance_is_pruning_only; menus_and_inventory_not_confirmed"] +
+                    (["candidate_capacity_reached"] if len(kept) < len(places) else [])}
         if action.kind in {"compute_itinerary", "edit_plan"}:
             previous = edit(state.current_plan, action.changes, state) if action.kind == "edit_plan" else None
             if action.kind == "compute_itinerary":
