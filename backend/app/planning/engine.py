@@ -1,6 +1,5 @@
-from datetime import datetime, time, timedelta
+from datetime import timedelta
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from app.planning.clustering import allocate, identity_groups, meters, same_visit_area
 from app.planning.ranking import nearby_ranking, preference_score
@@ -9,7 +8,6 @@ from app.planning.scheduling import schedule
 from app.planning.transfers import choose_transfers
 from app.runtime.guards import PlanningError
 from app.schemas.itinerary import ItineraryDraft
-from app.schemas.common import utc_now
 
 
 def compute(state, provider, route_limit, previous=None):
@@ -78,8 +76,8 @@ def compute(state, provider, route_limit, previous=None):
     override = by_id.get(previous.days[0].hotel_place_id) if previous and previous.days else None
     hotel = forced_hotels[0] if forced_hotels else (override or (by_id[hotel_ranks[0].place_id] if hotel_ranks else None))
     food_candidates = [p for p in state.candidates if p.category == "restaurant" and p.place_id not in excluded and p.coordinates]
-    # Establish meal coverage before spending the route budget. A preliminary
-    # draft exposes exact missing anchors to Plan/Validate for targeted search.
+    # Record meal coverage separately from routing. Missing restaurant candidates
+    # must not suppress real routes between places that are already known.
     retrieval_gaps = []
     for group in assignments:
         nearby = [{food.place_id for food in food_candidates if meters(food, anchor) <= 2000} for anchor in group]
@@ -87,47 +85,26 @@ def compute(state, provider, route_limit, previous=None):
         if group and len(set().union(*nearby)) < 2:
             retrieval_gaps.extend(anchor.place_id for anchor in group)
     retrieval_gaps = list(dict.fromkeys(retrieval_gaps))
-    meal_coverage = not retrieval_gaps
     prior_legs = [r for d in state.current_plan.days for r in d.routes] if state.current_plan else []
-    router = RoutePlanner(provider, intent, route_limit if meal_coverage else 0, prior_legs)
-    if not meal_coverage:
-        router.failed_code = "nearby_meal_coverage_required"
-    zone = ZoneInfo(intent.dates.timezone or intent.destination.timezone or "Asia/Shanghai")
-    reference_departure = datetime.combine(intent.dates.start_date or utc_now().astimezone(zone).date(), time(9), zone)
-    if not forced_hotels and not override and hotel_ranks:
-        samples = [group[0] for group in assignments if group][:3]
-        choices = []
-        for rank in hotel_ranks[:2]:
-            node = by_id[rank.place_id]
-            observations = [router.leg(node, anchor, reference_departure) for anchor in samples if node.place_id != anchor.place_id]
-            if observations and all(r.status == "ok" for r in observations):
-                seconds = sum(r.duration_seconds for r in observations) / len(observations)
-                rank.score_components["sampled_commute"] = 1 / (1 + seconds / 1800)
-                rank.reasons.append("已比较多个日程锚点的真实去程耗时；回程仍逐日查询")
-                choices.append((seconds, node))
-        if choices:
-            hotel = min(choices, key=lambda p: p[0])[1]
+    router = RoutePlanner(provider, intent, route_limit, prior_legs)
+    # The route budget belongs to the legs shown in the final itinerary. Hotel
+    # candidates have already been ranked against all day anchors by proximity;
+    # probing alternatives here previously consumed calls before later days.
     transfers = choose_transfers(state.travel_offers, intent, state.candidates)
     days, food_ranks, used_restaurants = [], [], set()
     version = max([p.version for p in state.plan_history], default=0) + 1
     for i, assigned in enumerate(assignments, 1):
         date = intent.dates.start_date + timedelta(days=i - 1) if intent.dates.start_date else None
         if assigned:
-            # Spatial shortlist plus actual directed-time comparison for the two
-            # best starts; avoid a quadratic all-pairs route matrix.
+            # Use spatial ordering as a shortlist heuristic. Only the final
+            # scheduled legs may consume map route calls.
             if hotel:
                 assigned.sort(key=lambda p: meters(hotel, p))
             ordered = []
             remaining = assigned[:]
             cursor = hotel or remaining[0]
             while remaining:
-                short = sorted(remaining, key=lambda p: meters(cursor, p))[:2]
-                if cursor == short[0]:
-                    chosen = short[0]
-                else:
-                    departure = datetime.combine(date or utc_now().astimezone(zone).date(), time(9), zone)
-                    options = [(p, router.leg(cursor, p, departure)) for p in short]
-                    chosen = min(options, key=lambda pair: pair[1].duration_seconds if pair[1].status == "ok" else float("inf"))[0]
+                chosen = min(remaining, key=lambda p: meters(cursor, p))
                 ordered.append(chosen)
                 remaining.remove(chosen)
                 cursor = chosen
