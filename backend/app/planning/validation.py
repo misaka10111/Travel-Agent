@@ -26,7 +26,8 @@ def validate(plan, state):
         if not day.hotel_place_id and len(plan.days) > 1:
             issue("hotel_missing", "blocking", "多日行程缺少住宿候选", day.day_index)
         if sum(s.category == "restaurant" for s in day.stops) < 2:
-            issue("meals_missing", "blocking", "缺少午餐或晚餐候选", day.day_index)
+            issue("meals_missing", "blocking", "缺少景点周边2公里内的午餐或晚餐候选，请围绕当天景点补搜", day.day_index,
+                  [s.place_id for s in day.stops if s.category == "attraction"])
         if day.hotel_place_id and (not day.stops or
                 (day.stops[0].place_id != day.hotel_place_id and not (day.day_index == 1 and day.stops[0].category == "transport" and plan.selected_offer_ids)) or
                 (day.stops[-1].place_id != day.hotel_place_id and not (day.day_index == len(plan.days) and day.stops[-1].category == "transport" and plan.selected_offer_ids))):

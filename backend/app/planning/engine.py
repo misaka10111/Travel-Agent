@@ -107,7 +107,7 @@ def compute(state, provider, route_limit, previous=None):
             # Diversity is a tie-break within a local shortlist, never a reason
             # to cross the city for an unused restaurant.
             local = [r for r in ranks if meters(by_id[r.place_id], anchor) <= 2000]
-            pool = local or ranks[:2]
+            pool = local
             if pool:
                 chosen = next((r for r in pool if r.place_id not in used_restaurants), pool[0])
                 food_ranks.append(chosen)

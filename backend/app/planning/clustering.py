@@ -54,13 +54,24 @@ def allocate(places, count, per_day, required_ids, fixed_days, scores):
         if index is not None and 1 <= index <= count:
             days[index - 1].append(place)
             remaining.remove(place)
-    # Each day receives a seed before filling neighbours. Required nodes outrank
-    # proximity; a far locked attraction is retained and validated, not discarded.
-    ordered = sorted(remaining, key=lambda p: (p.place_id not in required_ids, -scores[p.place_id], p.place_id))
+    # Penalize isolated optional attractions before selecting the finite pool.
+    # Explicitly required nodes always remain, even if they imply a long trip.
+    center = min(places, key=lambda p: sum(meters(p, q) for q in places)) if places else None
+    ordered = sorted(remaining, key=lambda p: (p.place_id not in required_ids,
+        -(scores[p.place_id] - (meters(p, center) / 10000 if center else 0)), p.place_id))
     remaining = ordered[:max(count * per_day - sum(map(len, days)), len(required_ids & {p.place_id for p in ordered}))]
-    for day in days:
+    for index, day in enumerate(days):
         if not day and remaining:
-            day.append(remaining.pop(0))
+            seed = max(remaining, key=lambda p: meters(p, center))
+            day.append(seed)
+            remaining.remove(seed)
+        # Fill a compact area before seeding another day, while reserving at
+        # least one attraction for each remaining empty day.
+        empty_later = sum(not d for d in days[index + 1:])
+        while day and len(day) < per_day and len(remaining) > empty_later:
+            neighbour = min(remaining, key=lambda p: min(meters(p, q) for q in day))
+            day.append(neighbour)
+            remaining.remove(neighbour)
     while remaining:
         place = remaining.pop(0)
         possible = [i for i, day in enumerate(days) if len(day) < per_day]

@@ -25,7 +25,11 @@ def check_action(action, state):
         raise PlanningError("scope_outside_trip_dates")
     if action.kind == "ask_user" and not set(action.gap_ids) <= GAP_FIELDS:
         raise PlanningError("unknown_question_gap")
-    if action.kind == "ask_user" and set(action.gap_ids) & set(state.intake_state.unknown_fields + state.intake_state.declined_fields):
+    deferred = set(state.intake_state.declined_fields)
+    deferred |= set(state.intake_state.unknown_fields) & {"budget"}
+    if dates.duration_days or (dates.start_date and dates.end_date):
+        deferred |= set(state.intake_state.unknown_fields) & {"dates"}
+    if action.kind == "ask_user" and set(action.gap_ids) & deferred:
         raise PlanningError("question_already_unknown_or_declined")
     if action.kind == "search_candidates":
         if action.intent_ref != state.intent_snapshot.intent_id:

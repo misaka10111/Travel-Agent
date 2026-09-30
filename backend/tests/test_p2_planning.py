@@ -63,7 +63,30 @@ def test_meals_follow_separate_attraction_anchors():
         place("r2", category="restaurant", lon=116.501)]
     plan = compute(session, Routes(), 60)
     stops = plan.days[0].stops
-    assert [s.place_id for s in stops] == ["a", "r1", "b", "r2"]
+    visits = [s.place_id for s in stops]
+    assert visits in (["a", "r1", "b", "r2"], ["b", "r2", "a", "r1"])
+
+
+def test_far_restaurants_are_missing_coverage_not_forced_detours():
+    session = state()
+    session.candidates = [p for p in session.candidates if p.category != "restaurant"] + [
+        place("far-food", category="restaurant", lon=117.0)]
+    plan = compute(session, Routes(), 60)
+    assert not any(s.category == "restaurant" for d in plan.days for s in d.stops)
+    issues = validate(plan, session).issues
+    assert sum(i.code == "meals_missing" for i in issues) == 5
+    assert all(i.place_ids for i in issues if i.code == "meals_missing")
+
+
+def test_unknown_destination_can_be_clarified_but_deferred_dates_are_not_reasked():
+    session = state()
+    session.intake_state.unknown_fields = ["destination", "dates", "budget"]
+    def question(field):
+        return AGENT_ACTION_ADAPTER.validate_python({"kind": "ask_user", "action_id": "q",
+            "base_state_version": 1, "purpose": "确认需求", "gap_ids": [field], "question_goal": "确认需求"})
+    check_action(question("destination"), session)
+    with pytest.raises(PlanningError, match="question_already_unknown_or_declined"):
+        check_action(question("dates"), session)
 
 
 def place(pid, name=None, category="attraction", lon=116.4, lat=39.9):
@@ -72,7 +95,7 @@ def place(pid, name=None, category="attraction", lon=116.4, lat=39.9):
 
 
 def candidates():
-    return [place("a" + str(i), "古建景点" + str(i), lon=116.4 + i * .003) for i in range(10)] + [
+    return [place("a" + str(i), "古建景点" + str(i), lon=116.4 + i * .001) for i in range(10)] + [
         place("h", "住宿", "hotel"), place("r1", "餐馆1", "restaurant"), place("r2", "餐馆2", "restaurant", lon=116.403)]
 
 
