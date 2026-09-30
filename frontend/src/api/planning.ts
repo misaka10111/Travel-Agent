@@ -23,7 +23,8 @@ export interface Route {
 }
 export interface Draft {
   plan_id: string; version: number; status: string;
-  days: Array<{ day_index: number; date: string | null; hotel_place_id: string | null; stops: Stop[]; routes: Route[]; notes: string[] }>;
+  days: Array<{ day_index: number; date: string | null; hotel_place_id: string | null; stops: Stop[]; routes: Route[]; notes: string[];
+    breakfast_start_minute?: number | null; breakfast_end_minute?: number | null; breakfast_note?: string | null }>;
   cost_summary?: { currency: 'CNY'; planned_meals: number; meals_with_reference: number;
     food_reference_per_person: string | null; food_reference_for_party: string | null; party_count: number | null };
   recommendations: Array<{ place_id: string; category: string; reasons: string[]; unknowns: string[] }>;
@@ -38,10 +39,14 @@ export interface SessionView {
     agent_message: string | null; candidates: Place[]; candidates_need_refresh: boolean; candidates_stale: boolean;
     plan_needs_refresh: boolean; current_plan: Draft | null; current_plan_ref: { plan_id: string; version: number } | null;
     coverage: Record<string, number>; supplier_status: Record<string, string>;
-    intent_snapshot: { destination: { label: string }; dates: { duration_days: number | null; start_date: string | null };
+    travel_offers: Draft['travel_offers'];
+    intent_snapshot: { destination: { label: string }; origin: { label: string } | null;
+      dates: { duration_days: number | null; start_date: string | null; end_date: string | null };
       party: { count_status: string; count: number | null };
       budget: { money: { amount: string; currency: string; scope: string } | null };
-      preferences: { interests: string[]; dietary_preferences: string[]; lodging_preferences: string[] } };
+      preferences: { interests: string[]; dietary_preferences: string[]; lodging_preferences: string[];
+        intercity_modes: string[]; morning_style: string | null; breakfast_required: boolean | null;
+        day_start_time: string | null; day_end_time: string | null; compact_nearby: boolean | null } };
     pending_questions: Array<{ question_id: string; state_version: number; prompt: string; mode: string; options: Array<{ option_id: string; label: string }> }>;
     selections: Array<{ selection_id: string; place_id: string; decision: string; evidence: { source: string; source_ref: string; confirmation: string } }>;
     plan_history: Array<{ plan_id: string; version: number; change_reason: string }>;

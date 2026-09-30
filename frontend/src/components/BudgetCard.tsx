@@ -33,9 +33,11 @@ export function BudgetCard({ plan, intent, sessionId }: { plan: Draft | null; in
   useEffect(() => { sessionStorage.setItem(key, JSON.stringify(values)); }, [key, values]);
 
   const party = intent.party.count_status === 'exact' ? intent.party.count : null;
+  const days = intent.dates.duration_days ?? plan?.days.length ?? null;
   const money = intent.budget.money;
   const target = money?.currency === 'CNY' && money.scope === 'trip_total' ? amount(money.amount) :
-    money?.currency === 'CNY' && money.scope === 'per_person' && party ? (amount(money.amount) ?? 0) * party : null;
+    money?.currency === 'CNY' && money.scope === 'per_person' && party ? (amount(money.amount) ?? 0) * party :
+    money?.currency === 'CNY' && money.scope === 'per_person_per_day' && party && days ? (amount(money.amount) ?? 0) * party * days : null;
   const food = plan?.cost_summary;
   const foodReference = amount(food?.food_reference_for_party);
   const completeFoodReference = !!food && food.planned_meals > 0 &&
@@ -48,8 +50,9 @@ export function BudgetCard({ plan, intent, sessionId }: { plan: Draft | null; in
   const filled = items.filter(item => item !== null).length;
 
   return <section className="ta-budget-card" aria-label="旅行预算参考">
-    <div className="ta-budget-head"><strong>预算参考</strong><span>{target !== null ? `目标总预算 ${yuan(target)}` :
-      money ? `用户预算 ${money.amount} ${money.currency} · ${money.scope === 'per_person' ? '每人' : '计价范围待确认'}` : '尚未填写目标预算'}</span></div>
+    <div className="ta-budget-head"><strong>预算参考</strong><span>{target !== null ?
+      `目标总预算 ${yuan(target)}${money?.scope === 'per_person_per_day' ? `（${money.amount} 元 × ${party} 人 × ${days} 天）` : ''}` :
+      money ? `用户预算 ${money.amount} ${money.currency} · ${money.scope === 'per_person_per_day' ? '每人每天' : money.scope === 'per_person' ? '每人' : '计价范围待确认'}` : '尚未填写目标预算'}</span></div>
     {food && <p>餐饮人均消费参考：{foodReference !== null ? `${yuan(foodReference)} / ${party} 人` :
       food.food_reference_per_person !== null ? `${yuan(Number(food.food_reference_per_person))} / 人` : '暂无金额'}
       <small>已覆盖 {food.meals_with_reference}/{food.planned_meals} 餐；来自高德地点信息，不是实时菜单报价。</small></p>}

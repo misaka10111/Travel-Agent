@@ -4,6 +4,8 @@ import { useLocation } from 'react-router-dom';
 import { planning } from '../api/planning';
 import type { Draft, Place, Route, SessionCredential, SessionView } from '../api/planning';
 import { BudgetCard } from '../components/BudgetCard';
+import { ScheduleControls } from '../components/ScheduleControls';
+import type { SchedulePatch } from '../components/ScheduleControls';
 import './agent-workbench.css';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -44,6 +46,15 @@ function time(value: number | null) {
 function duration(seconds: number) {
   return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
 }
+function supplierMessage(status?: string) {
+  if (!status) return '航班尚未查询；不会编造班次或价格。';
+  if (status.includes('disabled_pending_account_validation')) return '航班查询服务尚未启用，无法提供可核实的班次和票价。';
+  if (status.includes('no_results')) return '当前日期没有返回可核实的航班候选。';
+  if (status.includes('origin_and_return_date_required')) return '需要出发地及去返程日期后才能查询航班。';
+  if (status.includes('destination_unconfirmed')) return '查询结果的出发地或目的地未通过核对。';
+  return '航班查询尚未得到可核实的结果。';
+}
+function offerTime(value: string | null) { return value ? value.replace('T', ' ').slice(0, 16) : '时间待确认'; }
 function spendReference(place: Place) {
   const fact = place.facts.average_spend_cny;
   const value = Number(fact?.value);
@@ -308,6 +319,17 @@ export function AgentWorkbench() {
     } catch (cause) { setError(friendlyError(cause)); planning.get(credential).then(setView).catch(() => undefined); }
     finally { setBusy(false); }
   }
+  async function updateSchedule(preferences: SchedulePatch) {
+    if (!credential || !state || running || busy) return;
+    setBusy(true); setError('');
+    try {
+      const edited = await planning.edit(credential, state.state_version, { intent_patch: { preferences } });
+      setView(edited);
+      say('已更新每日时间、早餐与就近安排偏好，正在调整行程。');
+      await run(credential, edited);
+    } catch (cause) { setError(friendlyError(cause)); planning.get(credential).then(setView).catch(() => undefined); }
+    finally { setBusy(false); }
+  }
   async function cancel() {
     if (!credential || !state) return;
     try { setView(await planning.cancel(credential, state.state_version)); }
@@ -321,7 +343,8 @@ export function AgentWorkbench() {
   }
   function onSubmit(event: FormEvent) { event.preventDefault(); void submit(draft); }
 
-  const offers = plan?.travel_offers.filter(offer => category === 'transport' && (offer.category === 'flight' || offer.category === 'train')) ?? [];
+  const travelOffers = state?.travel_offers ?? plan?.travel_offers ?? [];
+  const offers = travelOffers.filter(offer => offer.category === 'flight' || offer.category === 'train');
   const selectedDay = plan?.days.find(day => day.day_index === dayIndex) ?? plan?.days[0];
   const warnings = selectedDay ? plan?.audit?.issues.filter(issue => issue.day_index === selectedDay.day_index &&
     (issue.severity !== 'warning' || issue.code === 'hotel_commute_long')) ?? [] : [];
@@ -365,10 +388,16 @@ export function AgentWorkbench() {
           {(['transport', 'hotel', 'attraction'] as Category[]).map(group => <section key={group}
             className={`ta-candidate-lane ${category === group ? 'active' : ''}`}>
             <h3>{CATEGORY[group]}</h3>
-            {group === 'transport' && (plan?.travel_offers ?? []).filter(offer => offer.category === 'train' || offer.category === 'flight').map((offer, index) =>
+            {group === 'transport' && state?.intent_snapshot.preferences.intercity_modes?.includes('flight') &&
+              <p className="ta-empty-options">已记录往返飞机：{state.intent_snapshot.origin?.label ?? '出发地待确认'} → {state.intent_snapshot.destination.label}
+                （{state.intent_snapshot.dates.start_date ?? '出发日期待确认'}）；返程 {state.intent_snapshot.dates.end_date ?? '日期待确认'}。
+                {!offers.some(offer => offer.category === 'flight') && supplierMessage(state.supplier_status.flight)}</p>}
+            {group === 'transport' && offers.map((offer, index) =>
               <article className="ta-option-card" key={`${offer.name}-${index}`}>
-                <strong>{offer.name ?? (offer.category === 'train' ? '火车候选' : '航班候选')}</strong>
-                <p>{offer.segments.map(segment => `${segment.origin_station ?? '出发地待确认'} → ${segment.destination_station ?? '目的地待确认'}`).join(' / ')}</p>
+                <strong>{offer.direction === 'inbound' ? '返程' : '去程'} · {offer.name ?? (offer.category === 'train' ? '火车候选' : '航班候选')}</strong>
+                {offer.segments.map((segment, part) => <p key={part}>{segment.service_no ?? '班次待确认'} ·
+                  {segment.origin_station ?? '出发站待确认'} {offerTime(segment.departure_at)} →
+                  {segment.destination_station ?? '到达站待确认'} {offerTime(segment.arrival_at)}</p>)}
                 <small>{offer.price_display ? `供应商显示 ${offer.price_display} ${offer.currency ?? '（币种待确认）'} · ${offer.price_scope === 'ticket' ? '每张票' : '计价范围待确认'}` : '价格待查询'} · 尚未预订</small>
               </article>)}
             {state?.candidates.filter(place => place.category === group).sort((a, b) => group === 'hotel' ?
@@ -384,7 +413,7 @@ export function AgentWorkbench() {
                   {selected ? '从行程移除' : '选入并更新行程'}</button>}
               </article>;
             })}
-            {group === 'transport' && !offers.length && !state?.candidates.some(place => place.category === 'transport') &&
+            {group === 'transport' && !offers.length && !state?.intent_snapshot.preferences.intercity_modes?.includes('flight') &&
               <p className="ta-empty-options">{state?.intent_snapshot.dates.start_date ? '当前还没有可核实的车次或航班。' : '确定出发日期后，可查询车次或航班。'}</p>}
             {group !== 'transport' && !state?.candidates.some(place => place.category === group) &&
               <p className="ta-empty-options">{group === 'hotel' ? '住宿候选还在查询。' : '景点候选还在查询。'}</p>}
@@ -409,10 +438,21 @@ export function AgentWorkbench() {
             <span>{busy || running ? `已等待 ${duration(elapsedSeconds)}；下面仍是上一版，完成后自动替换。` : '下面仍是上一版，可调整选择后继续规划。'}</span></div>}
           {error && <div className="ta-error" role="alert">{error}</div>}
           {state && <BudgetCard key={state.session_id} plan={plan ?? null} intent={state.intent_snapshot} sessionId={state.session_id} />}
+          {state && <ScheduleControls preferences={state.intent_snapshot.preferences} disabled={busy || running}
+            onApply={preferences => void updateSchedule(preferences)} />}
           {!plan ? <p className="ta-plan-empty">选择景点或描述需求后，这里会展示每天的地点和交通。</p> : <>
             <p className="ta-plan-context">{plan.status === 'verified' && !refreshing ? '已核实的行程草案' : '行程草案，部分信息待确认'} · 尚未预订
               {!busy && !running && lastDuration !== null && ` · 上次处理用时 ${duration(lastDuration)}`}</p>
             {selectedDay && <div className="ta-day-plan"><h3>第 {selectedDay.day_index} 天 {selectedDay.date ?? '日期待定'}</h3>
+              {state?.intent_snapshot.preferences.intercity_modes?.includes('flight') &&
+                (selectedDay.day_index === 1 || selectedDay.day_index === plan.days.length) &&
+                <p className="ta-plan-context">{selectedDay.day_index === 1 ? '去程' : '返程'}飞机：
+                  {offers.some(offer => offer.category === 'flight' && offer.direction === (selectedDay.day_index === 1 ? 'outbound' : 'inbound')) ?
+                    '候选班次见左侧交通卡；机场接驳需根据具体班次核对。' : supplierMessage(state.supplier_status.flight)}</p>}
+              {selectedDay.breakfast_note && <p className="ta-plan-breakfast"><strong>早餐</strong> ·
+                {selectedDay.breakfast_start_minute != null && selectedDay.breakfast_end_minute != null ?
+                  ` ${time(selectedDay.breakfast_start_minute)}–${time(selectedDay.breakfast_end_minute)} · ` : ' 时间待确认 · '}
+                {selectedDay.breakfast_note}</p>}
               {selectedDay.stops.map((stop, index) => {
                 const before = selectedDay.stops[index - 1];
                 const occurrence = before ? selectedDay.stops.slice(1, index).filter((prior, offset) =>
