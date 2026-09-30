@@ -15,6 +15,7 @@ export function HomePage() {
           </h1>
           <p>从一次对话开始，为你生成专属的旅行方案。</p>
         </header>
+
         <button
           type="button"
           className="agent-primary-button home-start-button"
@@ -27,3 +28,5 @@ export function HomePage() {
     </div>
   );
 }
+
+export default HomePage;
