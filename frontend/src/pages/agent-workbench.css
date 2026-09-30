@@ -1,0 +1,70 @@
+.app-main:has(.travel-agent-workbench) { max-width: 1800px; padding: 20px 18px 32px; }
+.travel-agent-workbench { color: #24334d; }
+.travel-agent-layout { display: grid; grid-template-columns: minmax(280px, .78fr) minmax(450px, 1.42fr) minmax(350px, 1fr); gap: 16px; align-items: start; }
+.travel-agent-layout > * { min-width: 0; }
+.ta-chat-panel, .ta-options-panel, .ta-map-card, .ta-plan-card { background: #fff; border: 1px solid #e1e6f2; border-radius: 22px; box-shadow: 0 10px 32px rgba(37, 54, 95, .055); }
+.ta-chat-panel, .ta-options-panel { display: flex; flex-direction: column; min-height: min(780px, calc(100vh - 150px)); max-height: calc(100vh - 130px); overflow: hidden; }
+.ta-panel-header { padding: 22px 24px 16px; border-bottom: 1px solid #edf0f7; }
+.ta-panel-header span { font-size: 11px; letter-spacing: .12em; font-weight: 800; color: #6879d4; }
+.ta-panel-header h2 { margin: 6px 0 0; font-size: 20px; line-height: 1.25; color: #182847; }
+.ta-panel-header p { margin: 8px 0 0; color: #78839a; font-size: 12px; line-height: 1.45; }
+.ta-panel-header small { display: inline-block; margin-top: 9px; color: #74819a; }
+.ta-chat-messages { flex: 1; min-height: 220px; padding: 20px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+.ta-empty-chat { margin: 0; color: #8792a6; line-height: 1.7; font-size: 14px; }
+.ta-message { max-width: 90%; padding: 12px 15px; border-radius: 16px; font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; }
+.ta-message.assistant { align-self: flex-start; background: #f2f5fc; color: #34435e; }
+.ta-message.user { align-self: flex-end; background: #6676ef; color: white; }
+.ta-option-answer { margin: 0 18px 8px; padding: 9px 13px; border: 1px solid #dce4fb; background: #f7f9ff; border-radius: 12px; text-align: left; color: #374b87; cursor: pointer; }
+.ta-chat-composer { margin: 8px 16px; padding: 10px; border: 1px solid #e0e5f1; border-radius: 16px; background: #fafbff; }
+.ta-chat-composer textarea { display: block; width: 100%; min-height: 76px; box-sizing: border-box; resize: vertical; border: 0; outline: none; background: transparent; font: inherit; font-size: 14px; color: #273653; }
+.ta-chat-composer button { display: block; width: 100%; margin-top: 8px; padding: 10px; background: #747bf3; color: white; border: 0; border-radius: 10px; font-weight: 700; cursor: pointer; }
+.ta-chat-composer button:disabled { opacity: .55; cursor: default; }
+.ta-chat-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 16px 16px; }
+.ta-chat-actions button { border: 1px solid #d9e1f0; background: white; border-radius: 999px; padding: 8px 12px; color: #526282; cursor: pointer; font-size: 12px; }
+.ta-chat-actions button:disabled { opacity: .45; cursor: default; }
+.ta-category-tabs { display: flex; gap: 7px; padding: 14px 16px 4px; }
+.ta-category-tabs button { flex: 1; border: 1px solid #e2e7f1; border-radius: 10px; padding: 10px 7px; background: #fff; color: #63718a; cursor: pointer; font-size: 12px; }
+.ta-category-tabs button.active { color: #4b5bd4; background: #f0f2ff; border-color: #bfc7ff; font-weight: 700; }
+.ta-candidate-lanes { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 16px 18px; }
+.ta-candidate-lane { display: none; }
+.ta-candidate-lane.active { display: block; }
+.ta-candidate-lane h3 { margin: 0 0 10px; font-size: 14px; color: #5c6880; }
+.ta-option-card { display: flex; flex-direction: column; gap: 7px; margin-bottom: 10px; padding: 15px 16px; border: 1px solid #e2e7f1; border-radius: 16px; background: #fff; }
+.ta-option-card.selected { border-color: #aeb9fb; background: #f8f9ff; }
+.ta-option-card strong { font-size: 15px; color: #1d2c49; }
+.ta-option-card p { margin: 0; color: #5b6880; line-height: 1.45; font-size: 13px; }
+.ta-option-card small { color: #8a96aa; line-height: 1.45; }
+.ta-option-card button { align-self: flex-start; margin-top: 3px; padding: 8px 12px; border: 1px solid #cbd3f9; border-radius: 999px; background: #eef0ff; color: #4758cd; font-weight: 700; cursor: pointer; font-size: 12px; }
+.ta-option-card button:disabled { opacity: .5; cursor: default; }
+.ta-empty-options { color: #8490a4; font-size: 13px; line-height: 1.6; }
+.ta-right-panel { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ta-map-card { overflow: hidden; }
+.ta-map-card .ta-panel-header, .ta-plan-card .ta-panel-header { padding: 18px 20px 13px; }
+.ta-map-card .ta-panel-header h2, .ta-plan-card .ta-panel-header h2 { font-size: 17px; }
+.ta-day-tabs { display: flex; gap: 6px; padding: 11px 16px; overflow-x: auto; }
+.ta-day-tabs button { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 50%; border: 1px solid #dce2f1; background: white; color: #69768d; cursor: pointer; }
+.ta-day-tabs button.active { background: #6574e9; border-color: #6574e9; color: white; }
+.ta-map-image { display: block; width: calc(100% - 28px); height: 230px; margin: 0 14px; object-fit: cover; border-radius: 12px; background: #f2f4fa; }
+.ta-map-empty { display: grid; place-items: center; min-height: 200px; margin: 0 14px; padding: 16px; box-sizing: border-box; border-radius: 12px; background: #f2f5fa; color: #7c899e; text-align: center; font-size: 13px; }
+.ta-map-caption, .ta-map-focus { margin: 9px 17px 13px; color: #748096; font-size: 11px; line-height: 1.4; }
+.ta-map-focus { margin-top: -5px; color: #495dc9; font-weight: 700; }
+.ta-plan-card { overflow: hidden; max-height: calc(100vh - 520px); min-height: 280px; display: flex; flex-direction: column; }
+.ta-plan-card > :not(.ta-panel-header):not(.ta-day-plan) { flex-shrink: 0; }
+.ta-update-banner { display: flex; flex-direction: column; gap: 3px; margin: 12px 16px 0; padding: 10px 12px; border-radius: 11px; background: #edf2ff; color: #4c5caa; font-size: 12px; }
+.ta-error { margin: 10px 16px 0; padding: 10px; border-radius: 10px; background: #fff2ee; color: #bf4a39; font-size: 12px; }
+.ta-plan-empty, .ta-plan-context { margin: 12px 17px; color: #7b879b; font-size: 12px; line-height: 1.55; }
+.ta-day-plan { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 16px 16px; }
+.ta-day-plan h3 { position: sticky; top: 0; z-index: 1; margin: 0; padding: 12px 0 9px; background: white; font-size: 14px; }
+.ta-route { margin: 9px 0 9px 13px; padding-left: 12px; border-left: 2px dashed #7d8cea; color: #566985; font-size: 11px; line-height: 1.5; }
+.ta-route.unknown { border-color: #e3ad70; color: #a07952; }
+.ta-plan-stop { display: flex; flex-direction: column; gap: 4px; width: 100%; padding: 10px 12px; border: 1px solid #e5e9f3; border-radius: 12px; background: #fff; text-align: left; cursor: pointer; }
+.ta-plan-stop.focused { border-color: #8c9afa; background: #f7f8ff; }
+.ta-plan-stop span { color: #6675af; font-size: 11px; }
+.ta-plan-stop strong { color: #273858; font-size: 13px; }
+.ta-plan-stop small { color: #8490a2; font-size: 11px; }
+.ta-day-notes { margin: 8px 16px 14px; color: #60718b; font-size: 12px; line-height: 1.5; }
+.ta-day-notes summary { cursor: pointer; font-weight: 700; }
+.ta-day-notes p { margin: 5px 0; }
+@media (min-width: 1540px) { .ta-category-tabs { display: none; } .ta-candidate-lanes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; } .ta-candidate-lane { display: block; } .ta-candidate-lane h3 { padding-left: 4px; } .ta-option-card { padding: 13px 12px; } }
+@media (max-width: 1180px) { .travel-agent-layout { grid-template-columns: minmax(260px, .7fr) minmax(440px, 1.3fr); } .ta-right-panel { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); } .ta-plan-card { max-height: 520px; } }
+@media (max-width: 760px) { .app-main:has(.travel-agent-workbench) { padding: 12px; } .travel-agent-layout { display: flex; flex-direction: column; } .ta-chat-panel, .ta-options-panel, .ta-right-panel { width: 100%; box-sizing: border-box; } .ta-chat-panel, .ta-options-panel { min-height: 350px; max-height: 570px; } .ta-right-panel { display: flex; } .ta-plan-card { max-height: 590px; } }

@@ -1,6 +1,6 @@
 import { BrowserRouter, Route, Routes } from 'react-router-dom';
 import { Layout } from './components/Layout';
-import { AgentPage } from './pages/AgentPage';
+import { AgentWorkbench } from './pages/AgentWorkbench';
 import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
@@ -17,7 +17,7 @@ export default function App() {
           <Route path="/login" element={<LoginPage />} />
           <Route path="/trips" element={<TripsPage />} />
           <Route path="/trips/:id" element={<TripDetailPage />} />
-          <Route path="/agent" element={<AgentPage />} />
+          <Route path="/agent" element={<AgentWorkbench />} />
           <Route path="/profile" element={<ProfilePage />} />
           <Route path="/trip-survey" element={<TripSurveyPage />} />
         </Route>

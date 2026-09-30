@@ -18,6 +18,7 @@ export interface Route {
   mode: string; status: string; duration_seconds: number | null; distance_meters: number | null;
   provider: string; requested_departure_at: string; queried_at: string;
   unknown_reason: string | null; warnings: string[];
+  geometry?: { crs: string; encoding: string; points: Array<{ longitude: number; latitude: number; crs: string }> } | null;
   steps: Array<{ line_name: string | null; instruction: string | null }>;
 }
 export interface Draft {
@@ -64,4 +65,12 @@ export const planning = {
   edit: (c: SessionCredential, version: number, update: unknown) => call<SessionView>(`/${c.id}`, c.token, { request_id: crypto.randomUUID(), base_state_version: version, ...(update as object) }, 'PATCH'),
   answer: (c: SessionCredential, q: SessionView['state']['pending_questions'][number], text?: string, optionId?: string) => call<SessionView>(`/${c.id}/answers`, c.token, { answer: { request_id: crypto.randomUUID(), question_id: q.question_id, state_version: q.state_version, ...(text ? { text } : {}), option_ids: optionId ? [optionId] : [] } }, 'POST'),
   cancel: (c: SessionCredential, version: number) => call<SessionView>(`/${c.id}/cancel`, c.token, { request_id: crypto.randomUUID(), base_state_version: version }, 'POST'),
+  mapDay: async (c: SessionCredential, day: number) => {
+    const response = await fetch(`${BASE}/sessions/${c.id}/map?day_index=${day}`, {
+      headers: { Authorization: `Bearer ${c.token}` },
+    });
+    if (!response.ok) throw new Error('地图暂时无法加载');
+    return { blob: await response.blob(), shown: Number(response.headers.get('X-Route-Segments-Shown') ?? 0),
+      total: Number(response.headers.get('X-Route-Segments-Total') ?? 0) };
+  },
 };
