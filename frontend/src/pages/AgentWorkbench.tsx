@@ -83,8 +83,9 @@ function routeLabel(route: Route) {
   return `${MODE[route.mode] ?? '交通'}约 ${minutes} 分钟 · ${((route.distance_meters ?? 0) / 1000).toFixed(1)} 公里${lines ? ` · ${lines}` : ''}`;
 }
 
-function RouteSketch({ plan, dayIndex, places, focusPlace, onFocus }: {
-  plan: Draft; dayIndex: number; places: Map<string, Place>; focusPlace: string | null; onFocus: (id: string) => void;
+function RouteSketch({ plan, dayIndex, places, alternatives, focusPlace, onFocus }: {
+  plan: Draft; dayIndex: number; places: Map<string, Place>; alternatives: Place[];
+  focusPlace: string | null; onFocus: (id: string) => void;
 }) {
   const [viewport, setViewport] = useState({ x: 0, y: 0, width: 640, height: 330 });
   const drag = useRef<{ clientX: number; clientY: number; viewport: typeof viewport } | null>(null);
@@ -100,6 +101,17 @@ function RouteSketch({ plan, dayIndex, places, focusPlace, onFocus }: {
     .filter((entry): entry is { stop: typeof day.stops[number]; place: Place } =>
       !!entry.place?.coordinates && entry.place.coordinates.crs === 'GCJ02');
   if (!stops.length) return <div className="ta-map-empty">这些地点的坐标还需要重新查询。</div>;
+  const placedIds = new Set(day.stops.flatMap(stop => [stop.place_id, ...stop.child_place_ids]));
+  const nearby = alternatives.filter(place => place.coordinates?.crs === 'GCJ02' &&
+    (place.category === 'hotel' || place.category === 'attraction') && !placedIds.has(place.place_id))
+    .map(place => ({ place, distance: Math.min(...stops.map(({ place: anchor }) => {
+      const a = anchor.coordinates!; const b = place.coordinates!;
+      const east = (a.longitude - b.longitude) * Math.cos(a.latitude * Math.PI / 180) * 111320;
+      const north = (a.latitude - b.latitude) * 111320;
+      return Math.hypot(east, north);
+    })) }))
+    .filter(item => item.distance <= 3000)
+    .sort((a, b) => a.distance - b.distance || a.place.place_id.localeCompare(b.place.place_id)).slice(0, 10);
   let routeIndex = 0;
   const segments = day.stops.slice(1).flatMap((stop, index) => {
     const before = day.stops[index];
@@ -114,7 +126,8 @@ function RouteSketch({ plan, dayIndex, places, focusPlace, onFocus }: {
     return [{ from, to, route: matchingRoute, trace }];
   });
   const traces = segments.flatMap(item => item.trace ?? []);
-  const points = [...stops.map(item => item.place.coordinates!), ...traces];
+  const points = [...stops.map(item => item.place.coordinates!), ...traces,
+    ...nearby.map(item => item.place.coordinates!)];
   const middleLatitude = points.reduce((sum, point) => sum + point.latitude, 0) / points.length;
   const cosine = Math.cos(middleLatitude * Math.PI / 180);
   const xs = points.map(point => point.longitude * cosine);
@@ -160,6 +173,17 @@ function RouteSketch({ plan, dayIndex, places, focusPlace, onFocus }: {
           `${from.name} → ${to.name}：路线尚未查到，虚线只表示先后顺序`}</title>
       </polyline>;
     })}
+    {nearby.map(({ place }) => {
+      const at = position(place.coordinates!);
+      return <g key={`candidate-${place.place_id}`} onClick={() => onFocus(place.place_id)}
+        onPointerDown={event => event.stopPropagation()}
+        onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onFocus(place.place_id); } }}
+        tabIndex={0} role="button" aria-label={`查看候选${place.name}`} className="ta-sketch-marker">
+        <title>候选地点：{place.name}（点击查看卡片，不会立即修改行程）</title>
+        <circle cx={at.x} cy={at.y} r={focusPlace === place.place_id ? 11 : 8} fill="white"
+          stroke={place.category === 'hotel' ? '#5969d6' : '#e97856'} strokeWidth="3" />
+      </g>;
+    })}
     {stops.map(({ stop, place }, index) => {
       const at = position(place.coordinates!);
       const focused = focusPlace === place.place_id;
@@ -170,7 +194,7 @@ function RouteSketch({ plan, dayIndex, places, focusPlace, onFocus }: {
         <text x={at.x} y={at.y + 4} textAnchor="middle" fill="white" fontSize="11" fontWeight="700">{stop.category === 'hotel' ? 'H' : index + 1}</text>
       </g>;
     })}
-  </svg><span>蓝色实线为已查路线 · 灰色虚线仅表示顺序</span></div>;
+  </svg><span>实心：行程地点 · 空心：附近候选 · 虚线：路线待查</span></div>;
 }
 
 export function AgentWorkbench() {
@@ -210,7 +234,7 @@ export function AgentWorkbench() {
     if (day) setDayIndex(day);
     setFocusPlace(placeId);
     setMapMode('routes');
-    const place = places.get(placeId);
+    const place = places.get(placeId) ?? state?.candidates.find(item => item.place_id === placeId);
     if (place?.category === 'hotel' || place?.category === 'attraction') setCategory(place.category);
   }
 
@@ -470,8 +494,8 @@ export function AgentWorkbench() {
               const hotelFit = group === 'hotel' ? hotelRecommendations.find(item => item.place_id === place.place_id) : undefined;
               const mapped = plan?.days.flatMap(day => day.stops.map(stop => ({ day, stop })))
                 .find(item => item.stop.place_id === place.place_id || item.stop.child_place_ids.includes(place.place_id));
-              return <article data-trip-map-place-id={mapped?.stop.place_id}
-                className={`ta-option-card ${selected ? 'selected' : ''} ${mapped?.stop.place_id === focusPlace ? 'focused' : ''}`} key={place.place_id}>
+              return <article data-trip-map-place-id={mapped?.stop.place_id ?? place.place_id}
+                className={`ta-option-card ${selected ? 'selected' : ''} ${(mapped?.stop.place_id ?? place.place_id) === focusPlace ? 'focused' : ''}`} key={place.place_id}>
                 <strong>{place.name}</strong><p>{place.address ?? '地址待确认'}</p>
                 {hotelFit && <small>{hotelOrder.get(place.place_id) === 0 ? '当前行程优先推荐 · ' : '多日位置参考 · '}{hotelFit.reasons[0]}</small>}
                 {group === 'attraction' && spendReference(place) !== null && <small>高德人均消费参考 ¥{spendReference(place)}；不代表门票报价</small>}
@@ -499,6 +523,7 @@ export function AgentWorkbench() {
               onClick={() => setMapMode('routes')}>路线关系图</button></div>}
           {mapMode === 'basemap' && mapUrl ? <img className="ta-map-image" src={mapUrl} alt={`第 ${dayIndex} 天的高德地点与路线地图`} /> : plan ?
             <RouteSketch key={`${plan.plan_id}:${plan.version}:${dayIndex}`} plan={plan} dayIndex={dayIndex} places={places}
+              alternatives={state?.candidates ?? []}
               focusPlace={focusPlace} onFocus={focusOnPlace} /> :
             <div className="ta-map-empty">行程生成后会显示地点与路线地图。</div>}
           {mapMode === 'basemap' && <p className="ta-map-caption">{mapNotice}</p>}
