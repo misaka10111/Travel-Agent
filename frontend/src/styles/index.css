@@ -1670,3 +1670,15 @@ button:disabled {
 .agent-block-景点 .agent-block-type { background: #e9f8f0; color: #18794e; }
 .agent-block-酒店 .agent-block-type { background: #f0edff; color: #6152cc; }
 .agent-block-活动 .agent-block-type { background: #ffeaf6; color: #c0265b; }
+
+.planning-notice { padding: 16px; border-radius: 12px; background: #fff6de; color: #63490f; margin: 16px 0; line-height: 1.65; }
+.planning-route { padding: 12px 16px; margin: 8px 0; background: #eef3ff; border-left: 3px solid #5267ff; border-radius: 8px; }
+.planning-route p { margin: 6px 0; }
+.planning-muted { color: #6b7280; font-size: 13px; overflow-wrap: anywhere; }
+.planning-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.planning-candidate { padding: 16px; border: 1px solid #e5e7eb; border-radius: 12px; }
+.agent-day { margin-top: 24px; }
+.agent-day details { padding: 12px; font-size: 13px; line-height: 1.7; }
+.agent-block-left { min-width: 100px; }
+.agent-block-body .profile-option { display: block; margin-top: 8px; }
+.agent-block-body small { display: block; line-height: 1.6; }
