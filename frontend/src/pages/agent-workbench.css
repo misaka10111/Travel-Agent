@@ -44,7 +44,7 @@
 .ta-day-tabs { display: flex; gap: 6px; padding: 11px 16px; overflow-x: auto; }
 .ta-day-tabs button { flex: 0 0 32px; width: 32px; height: 32px; border-radius: 50%; border: 1px solid #dce2f1; background: white; color: #69768d; cursor: pointer; }
 .ta-day-tabs button.active { background: #6574e9; border-color: #6574e9; color: white; }
-.ta-map-image { display: block; width: calc(100% - 28px); height: 230px; margin: 0 14px; object-fit: cover; border-radius: 12px; background: #f2f4fa; }
+.ta-map-image { display: block; width: calc(100% - 28px); height: 230px; margin: 0 14px; object-fit: contain; border-radius: 12px; background: #f2f4fa; }
 .ta-map-empty { display: grid; place-items: center; min-height: 200px; margin: 0 14px; padding: 16px; box-sizing: border-box; border-radius: 12px; background: #f2f5fa; color: #7c899e; text-align: center; font-size: 13px; }
 .ta-map-caption, .ta-map-focus { margin: 9px 17px 13px; color: #748096; font-size: 11px; line-height: 1.4; }
 .ta-map-focus { margin-top: -5px; color: #495dc9; font-weight: 700; }
