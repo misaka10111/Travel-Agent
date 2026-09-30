@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { planning } from '../api/planning';
 import type { Draft, Place, Route, SessionCredential, SessionView } from '../api/planning';
+import { BudgetCard } from '../components/BudgetCard';
 import './agent-workbench.css';
 
 type Message = { id: string; role: 'user' | 'assistant'; text: string };
@@ -39,6 +40,14 @@ function friendlyError(value: unknown) {
 }
 function time(value: number | null) {
   return value === null ? '时间待定' : `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`;
+}
+function duration(seconds: number) {
+  return seconds < 60 ? `${seconds} 秒` : `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+function spendReference(place: Place) {
+  const fact = place.facts.average_spend_cny;
+  const value = Number(fact?.value);
+  return fact?.value != null && fact.source_ref.startsWith('amap:poi:') && Number.isFinite(value) && value > 0 ? value : null;
 }
 function saved<T>(key: string, fallback: T): T {
   try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; } catch { return fallback; }
@@ -112,6 +121,9 @@ export function AgentWorkbench() {
   const [credential, setCredential] = useState<SessionCredential | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [busy, setBusy] = useState(false);
+  const [updateStartedAt, setUpdateStartedAt] = useState<number | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [lastDuration, setLastDuration] = useState<number | null>(null);
   const [error, setError] = useState('');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [category, setCategory] = useState<Category>('attraction');
@@ -129,7 +141,7 @@ export function AgentWorkbench() {
   const plan = visible?.plan;
   const places = new Map(visible?.places.map(place => [place.place_id, place]) ?? []);
   const name = (id: string) => places.get(id)?.name ?? '地点待重新查询';
-  const refreshing = !!snapshot && (running || !!state?.plan_needs_refresh || !state?.current_plan);
+  const refreshing = !!snapshot && (busy || running || !!state?.plan_needs_refresh || !state?.current_plan);
   const say = (text: string, role: Message['role'] = 'assistant') =>
     setMessages(items => [...items, { id: crypto.randomUUID(), role, text }]);
 
@@ -171,6 +183,18 @@ export function AgentWorkbench() {
     timer = setTimeout(poll, 1000);
     return () => { active = false; clearTimeout(timer); };
   }, [credential, running]);
+
+  useEffect(() => {
+    if (busy || running) {
+      if (updateStartedAt === null) { setUpdateStartedAt(Date.now()); setElapsedSeconds(0); return; }
+      const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - updateStartedAt) / 1000)), 1000);
+      return () => clearInterval(timer);
+    }
+    if (updateStartedAt !== null) {
+      setLastDuration(Math.floor((Date.now() - updateStartedAt) / 1000));
+      setUpdateStartedAt(null);
+    }
+  }, [busy, running, updateStartedAt]);
 
   useEffect(() => {
     if (state?.current_plan && state.status !== 'running' && !state.plan_needs_refresh) {
@@ -297,7 +321,7 @@ export function AgentWorkbench() {
         <div className="ta-chat-messages" aria-live="polite">
           {!messages.length && <p className="ta-empty-chat">例如：从上海去北京玩 5 天，喜欢古建筑，住宿交通便利，饮食清淡。</p>}
           {messages.map(message => <div className={`ta-message ${message.role}`} key={message.id}>{message.text}</div>)}
-          {(running || busy) && <div className="ta-message assistant">正在整理地点与路线，右侧现有行程会继续显示。</div>}
+          {(running || busy) && <div className="ta-message assistant">正在整理地点与路线，已等待 {duration(elapsedSeconds)}；右侧现有行程会继续显示。</div>}
         </div>
         {state?.pending_questions[0]?.options.map(option => <button className="ta-option-answer" key={option.option_id}
           disabled={busy || running} onClick={() => void submit(option.label, option.option_id)}>{option.label}</button>)}
@@ -330,7 +354,7 @@ export function AgentWorkbench() {
               <article className="ta-option-card" key={`${offer.name}-${index}`}>
                 <strong>{offer.name ?? (offer.category === 'train' ? '火车候选' : '航班候选')}</strong>
                 <p>{offer.segments.map(segment => `${segment.origin_station ?? '出发地待确认'} → ${segment.destination_station ?? '目的地待确认'}`).join(' / ')}</p>
-                <small>{offer.price_display && offer.currency ? `${offer.price_display} ${offer.currency}` : '价格待查询'} · 候选班次，尚未预订</small>
+                <small>{offer.price_display ? `供应商显示 ${offer.price_display} ${offer.currency ?? '（币种待确认）'} · ${offer.price_scope === 'ticket' ? '每张票' : '计价范围待确认'}` : '价格待查询'} · 尚未预订</small>
               </article>)}
             {state?.candidates.filter(place => place.category === group).sort((a, b) => group === 'hotel' ?
               (hotelOrder.get(a.place_id) ?? 999) - (hotelOrder.get(b.place_id) ?? 999) : 0).slice(0, 24).map(place => {
@@ -339,6 +363,7 @@ export function AgentWorkbench() {
               return <article className={`ta-option-card ${selected ? 'selected' : ''}`} key={place.place_id}>
                 <strong>{place.name}</strong><p>{place.address ?? '地址待确认'}</p>
                 {hotelFit && <small>{hotelOrder.get(place.place_id) === 0 ? '当前行程优先推荐 · ' : '多日位置参考 · '}{hotelFit.reasons[0]}</small>}
+                {group === 'attraction' && spendReference(place) !== null && <small>高德人均消费参考 ¥{spendReference(place)}；不代表门票报价</small>}
                 <small>{group === 'hotel' ? '房价和空房需按日期查询' : group === 'attraction' ? '开放与预约信息待核实' : '出行方式待确认'}</small>
                 {group !== 'transport' && <button type="button" disabled={busy || running} onClick={() => void choose(place)}>
                   {selected ? '从行程移除' : '选入并更新行程'}</button>}
@@ -366,10 +391,12 @@ export function AgentWorkbench() {
         <section className="ta-plan-card">
           <header className="ta-panel-header"><span>旅行计划</span><h2>{plan ? `${plan.days.length} 天行程` : '等待行程'}</h2></header>
           {refreshing && <div className="ta-update-banner" role="status"><strong>{running ? '新行程正在更新' : '新行程尚未生成'}</strong>
-            <span>{running ? '下面仍是上一版，可继续查看；完成后自动替换。' : '下面仍是上一版，可调整选择后继续规划。'}</span></div>}
+            <span>{busy || running ? `已等待 ${duration(elapsedSeconds)}；下面仍是上一版，完成后自动替换。` : '下面仍是上一版，可调整选择后继续规划。'}</span></div>}
           {error && <div className="ta-error" role="alert">{error}</div>}
+          {state && <BudgetCard key={state.session_id} plan={plan ?? null} intent={state.intent_snapshot} sessionId={state.session_id} />}
           {!plan ? <p className="ta-plan-empty">选择景点或描述需求后，这里会展示每天的地点和交通。</p> : <>
-            <p className="ta-plan-context">{plan.status === 'verified' && !refreshing ? '已核实的行程草案' : '行程草案，部分信息待确认'} · 尚未预订</p>
+            <p className="ta-plan-context">{plan.status === 'verified' && !refreshing ? '已核实的行程草案' : '行程草案，部分信息待确认'} · 尚未预订
+              {!busy && !running && lastDuration !== null && ` · 上次处理用时 ${duration(lastDuration)}`}</p>
             {selectedDay && <div className="ta-day-plan"><h3>第 {selectedDay.day_index} 天 {selectedDay.date ?? '日期待定'}</h3>
               {selectedDay.stops.map((stop, index) => {
                 const before = selectedDay.stops[index - 1];
