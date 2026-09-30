@@ -1,4 +1,5 @@
 from math import isfinite
+from statistics import median
 
 from app.planning.clustering import meters
 from app.schemas.itinerary import Recommendation
@@ -64,7 +65,9 @@ def hotel_ranking(places, day_groups, intent):
             continue
         average = sum(daily_meters) / len(daily_meters)
         worst = max(daily_meters)
-        distance_proxy = average * 0.8 + worst * 0.2
+        # A single required outlying day should not pull the base away from
+        # the main stay area used on most days.
+        distance_proxy = median(daily_meters) * 0.7 + average * 0.3
         quality = item.score_components["provider_rating"]
         item.score_components = {"multi_day_proximity": 1 / (1 + distance_proxy / 1000),
             "provider_rating": quality * 0.02}
