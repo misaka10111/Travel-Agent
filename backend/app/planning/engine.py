@@ -59,7 +59,13 @@ def compute(state, provider, route_limit, previous=None):
         raise PlanningError("multiple_locked_hotels_require_explicit_stay_assignment", 422)
     override = by_id.get(previous.days[0].hotel_place_id) if previous and previous.days else None
     hotel = forced_hotels[0] if forced_hotels else (override or (by_id[hotel_ranks[0].place_id] if hotel_ranks else None))
-    router = RoutePlanner(provider, intent, route_limit)
+    food_candidates = [p for p in state.candidates if p.category == "restaurant" and p.place_id not in excluded and p.coordinates]
+    # Establish meal coverage before spending the route budget. A preliminary
+    # draft exposes exact missing anchors to Plan/Validate for targeted search.
+    meal_coverage = all(sum(meters(food, anchor) <= 2000 for food in food_candidates) >= 2
+        for group in assignments for anchor in group)
+    prior_legs = [r for d in state.current_plan.days for r in d.routes] if state.current_plan else []
+    router = RoutePlanner(provider, intent, route_limit if meal_coverage else 0, prior_legs)
     zone = ZoneInfo(intent.dates.timezone or intent.destination.timezone or "Asia/Shanghai")
     reference_departure = datetime.combine(intent.dates.start_date or utc_now().astimezone(zone).date(), time(9), zone)
     if not forced_hotels and not override and hotel_ranks:

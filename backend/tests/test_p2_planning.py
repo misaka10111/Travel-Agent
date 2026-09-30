@@ -39,6 +39,21 @@ def test_model_projection_preserves_route_evidence_without_polyline_payload():
     assert "geometry" in route
 
 
+def test_unchanged_routes_reuse_only_live_same_session_observations():
+    from app.planning.routing import RoutePlanner
+    from app.schemas.common import utc_now
+    from datetime import timedelta
+    session, provider = state(), Routes()
+    first, second = session.candidates[:2]
+    departure = utc_now()
+    route = RoutePlanner(provider, session.intent_snapshot, 2).leg(first, second, departure)
+    reused = RoutePlanner(provider, session.intent_snapshot, 2, [route])
+    assert reused.leg(first, second, departure).status == "ok"
+    assert len(provider.calls) == 1
+    reused.leg(first, second, departure + timedelta(minutes=1))
+    assert len(provider.calls) == 2
+
+
 def test_transfer_times_constrain_first_and_last_day_and_reject_stale_quotes():
     from app.schemas.common import utc_now
     from datetime import timedelta
@@ -81,8 +96,10 @@ def test_far_restaurants_are_missing_coverage_not_forced_detours():
     session = state()
     session.candidates = [p for p in session.candidates if p.category != "restaurant"] + [
         place("far-food", category="restaurant", lon=117.0)]
-    plan = compute(session, Routes(), 60)
+    provider = Routes()
+    plan = compute(session, provider, 60)
     assert not any(s.category == "restaurant" for d in plan.days for s in d.stops)
+    assert provider.calls == []
     issues = validate(plan, session).issues
     assert sum(i.code == "meals_missing" for i in issues) == 5
     assert all(i.place_ids for i in issues if i.code == "meals_missing")

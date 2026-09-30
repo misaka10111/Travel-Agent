@@ -1,13 +1,17 @@
 from app.planning.clustering import meters
 from app.providers.maps.base import MapError, RouteQuery, route_result
+from app.schemas.common import utc_now
 
 
 class RoutePlanner:
-    def __init__(self, provider, intent, limit):
+    def __init__(self, provider, intent, limit, prior_legs=()):
         self.provider, self.intent, self.limit = provider, intent, limit
         self.calls = 0
         self.failed_code = None
-        self.memo = {}  # Current tool invocation only; never persisted.
+        # Same-session, in-memory reuse only. Identical endpoints, mode and
+        # departure conditions are required; errors and stale estimates expire.
+        self.memo = {(r.from_place_id, r.to_place_id, r.mode, r.requested_departure_at.isoformat()): r
+            for r in prior_legs if r.status == "ok" and 0 <= (utc_now() - r.queried_at).total_seconds() < 3600}
 
     def leg(self, origin, destination, departure):
         allowed = self.intent.preferences.travel_modes or ["walking", "transit"]
