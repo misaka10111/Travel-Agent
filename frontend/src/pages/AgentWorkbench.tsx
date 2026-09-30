@@ -315,6 +315,7 @@ export function AgentWorkbench() {
                     <span>{time(stop.start_minute)} · {stop.category === 'attraction' ? '景点' : stop.category === 'restaurant' ? '用餐' : stop.category === 'hotel' ? '住宿' : '交通'}</span>
                     <strong>{name(stop.place_id)} {stop.locked ? '✓' : ''}</strong>
                     <small>{places.get(stop.place_id)?.address ?? '地点详情待确认'}</small>
+                    {!!stop.child_place_ids.length && <small>同一景区内：{stop.child_place_ids.map(name).join('、')}</small>}
                   </button>
                 </div>;
               })}

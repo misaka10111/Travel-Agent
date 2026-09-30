@@ -2,7 +2,7 @@ from datetime import datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from app.planning.clustering import allocate, identity_groups, meters, same_named_place
+from app.planning.clustering import allocate, identity_groups, meters, same_visit_area
 from app.planning.ranking import nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
 from app.planning.scheduling import schedule
@@ -65,7 +65,7 @@ def compute(state, provider, route_limit, previous=None):
                 place = by_id.get(stop.place_id)
                 if stop.category != "attraction" or not place or place.place_id in excluded:
                     continue
-                if place.place_id in {p.place_id for p in retained} or any(same_named_place(place, p) for p in retained):
+                if place.place_id in {p.place_id for p in retained} or any(same_visit_area(place, p) for p in retained):
                     continue
                 retained.append(place)
                 group.append(place)

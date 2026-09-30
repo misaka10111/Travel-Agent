@@ -1,4 +1,5 @@
 from math import asin, cos, radians, sin, sqrt
+import re
 import unicodedata
 
 
@@ -12,12 +13,19 @@ def meters(a, b):
     return 6371000 * 2 * asin(sqrt(min(1, h)))
 
 
-def same_named_place(a, b):
-    """Collapse duplicate provider entries, never merely nearby attractions."""
+def same_visit_area(a, b):
+    """A repeated POI or two local points inside one named attraction complex."""
     def key(name):
         return "".join(char for char in unicodedata.normalize("NFKC", name).casefold()
                        if char.isalnum())
-    return a.category == b.category == "attraction" and key(a.name) == key(b.name) and meters(a, b) <= 1500
+    def complex_key(name):
+        root = re.split(r"[-—·]", unicodedata.normalize("NFKC", name), maxsplit=1)[0].strip()
+        return key(root) if root.endswith(("公园", "景区", "博物馆", "博物院", "遗址", "寺", "宫", "园")) else None
+    if a.category != "attraction" or b.category != "attraction":
+        return False
+    distance = meters(a, b)
+    return ((key(a.name) == key(b.name) and distance <= 1500) or
+            (complex_key(a.name) and complex_key(a.name) == complex_key(b.name) and distance <= 2000))
 
 
 def identity_groups(places):
@@ -40,7 +48,7 @@ def identity_groups(places):
         for main in places:
             if child.place_id == main.place_id or main.category != "attraction":
                 continue
-            if same_named_place(child, main) and child.place_id > main.place_id:
+            if same_visit_area(child, main) and child.place_id > main.place_id:
                 parent.setdefault(child.place_id, main.place_id)
             root = main.name.removesuffix("博物馆").removesuffix("博物院")
             if len(root) >= 3 and child.name.startswith(root + "-") and meters(main, child) < 1500:

@@ -2,7 +2,7 @@
 
 from datetime import timedelta
 
-from app.planning.clustering import same_named_place
+from app.planning.clustering import same_visit_area
 from app.schemas.common import utc_now
 from app.schemas.itinerary import DraftAudit, PlanningIssue
 
@@ -72,7 +72,7 @@ def validate(plan, state):
                 scheduled.setdefault(child, []).append((day, stop))
             if stop.category == "attraction":
                 if (stop.place_id in seen or any(pid in seen for pid in stop.child_place_ids)
-                        or any(same_named_place(by_id[stop.place_id], prior) for prior in seen_attractions)):
+                        or any(same_visit_area(by_id[stop.place_id], prior) for prior in seen_attractions)):
                     issue("duplicate_attraction", "blocking", "景点或内部点位重复占用行程", day.day_index, [stop.place_id])
                 seen.update([stop.place_id] + stop.child_place_ids)
                 seen_attractions.append(by_id[stop.place_id])
