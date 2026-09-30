@@ -76,6 +76,12 @@ async def run_session(session_id: str, body: VersionCommand, runtime=Depends(own
     return runtime.store.view(session_id)
 
 
+@router.post("/{session_id}/retry", response_model=CreatedSession, status_code=201)
+async def retry_session(session_id: str, body: VersionCommand, runtime=Depends(owned_session)):
+    child_id, token = runtime.store.retry_with_context(session_id, body.base_state_version)
+    return CreatedSession(**runtime.store.view(child_id).model_dump(), access_token=token)
+
+
 @router.post("/{session_id}/answers", response_model=SessionView)
 async def answer_session(session_id: str, body: AnswerSession, runtime=Depends(owned_session)):
     answer = body.answer

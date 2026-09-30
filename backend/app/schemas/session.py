@@ -16,6 +16,7 @@ class SearchRecipe(ContractModel):
     queries: list[str]
     categories: list[str]
     limit: int
+    new_count: int | None = None
 
 
 class IntakeState(ContractModel):
@@ -98,6 +99,8 @@ class SessionState(ContractModel):
     session_id: Identifier
     owner_ref: Identifier
     trip_ref: Identifier | None = None
+    retry_child_ref: Identifier | None = None
+    retry_generation: int = Field(default=0, ge=0, le=1)
     state_version: int = Field(ge=0)
     intent_snapshot: TripIntent
     candidates: list[Place] = Field(default_factory=list)

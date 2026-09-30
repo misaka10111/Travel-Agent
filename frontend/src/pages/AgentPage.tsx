@@ -9,6 +9,13 @@ const SAVED = 'travelPlanningSession';
 const STATUS: Record<string, string> = { draft: '待规划', running: '规划中', waiting_user: '等待回答', needs_attention: '需要处理', completed: '草案已交付', cancelled: '已取消', failed: '失败' };
 const CATEGORIES: Record<string, string> = { attraction: '景点', restaurant: '餐饮', hotel: '住宿', transport: '交通' };
 const MODES: Record<string, string> = { walking: '步行', transit: '公共交通', driving: '驾车' };
+const ATTENTION: Record<string, string> = {
+  no_progress_repeated_action: '候选检索没有新增地点，系统已停止重复搜索。',
+  search_stalled_no_new_candidates: '地点检索仍无新增结果，请调整条件或改用景点附近搜索。',
+  budget_exhausted_or_obsolete: '本次调用额度已用完。',
+  model_request_failed: '模型服务本次请求失败，请稍后重试。',
+  plan_paused: '规划暂时停下，请查看具体缺口。',
+};
 function clock(value: number | null) { return value === null ? '待确认' : `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`; }
 function saved<T>(key: string, fallback: T): T { try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; } catch { return fallback; } }
 
@@ -24,6 +31,10 @@ export function AgentPage() {
   const observed = useRef('');
   const state = view?.state;
   const running = state?.status === 'running';
+  const lowBudget = !!view && (view.usage.model_limit - view.usage.model_calls < 3 ||
+    view.usage.step_limit - view.usage.steps < 3 ||
+    (state?.candidates_need_refresh && view.usage.map_limit - view.usage.map_calls < 10));
+  const canRetry = state?.status === 'needs_attention' && state.retry_generation === 0 && !state.retry_child_ref;
   const plan = state?.current_plan;
   const places = new Map(state?.candidates.map(p => [p.place_id, p]) ?? []);
   const name = (id: string) => places.get(id)?.name ?? `地点待刷新 (${id.slice(0, 8)})`;
@@ -105,10 +116,23 @@ export function AgentPage() {
   }
 
   async function resume() {
-    if (!credential || !state || busy) return;
+    if (!credential || !state || busy || lowBudget) return;
     setBusy(true); setError('');
     try { setView(await planning.run(credential, state.state_version)); }
     catch (e) { setError(String(e)); } finally { setBusy(false); }
+  }
+  async function retry() {
+    if (!credential || !state || busy || !canRetry) return;
+    setBusy(true); setError('');
+    try {
+      const created = await planning.retry(credential, state.state_version);
+      const nextCredential = { id: created.state.session_id, token: created.access_token };
+      sessionStorage.setItem(SAVED, JSON.stringify(nextCredential));
+      setCredential(nextCredential); setView(created); observed.current = '';
+      say('已保留本次需求和锁定地点，开始一个新的有界尝试；旧会话的用量记录仍保留。');
+      setView(await planning.run(nextCredential, created.state.state_version));
+    } catch (e) { setError(String(e)); }
+    finally { setBusy(false); }
   }
   async function cancel() {
     if (!credential || !state) return;
@@ -146,11 +170,13 @@ export function AgentPage() {
           <div className="agent-search-footer"><span>Ctrl / ⌘ + Enter 发送</span><button type="submit" className="agent-primary-button" disabled={busy || running || !draft.trim()}>发送</button></div>
         </form>
         <div className="planning-controls">
-          {state && (['draft', 'needs_attention'].includes(state.status) || state.plan_needs_refresh) && !running && <button className="profile-option" disabled={busy} onClick={() => void resume()}>继续规划</button>}
+          {state && (['draft', 'needs_attention'].includes(state.status) || state.plan_needs_refresh) && !running && <button className="profile-option" disabled={busy || lowBudget} onClick={() => void resume()}>继续规划</button>}
+          {canRetry && !running && <button className="profile-option" disabled={busy} onClick={() => void retry()}>保留需求和锁定地点，重新尝试（新会话）</button>}
           {running && <button className="profile-option" onClick={() => void cancel()}>取消执行</button>}
           {!running && <button className="profile-option" disabled={busy} onClick={newTrip}>新旅行</button>}
         </div>
         {view && <p className="planning-muted">本次地图调用 {view.usage.map_calls}/{view.usage.map_limit} · 模型及检索服务调用 {view.usage.model_calls}/{view.usage.model_limit}</p>}
+        {lowBudget && !running && <p className="planning-notice">本会话剩余额度不足以完成规划与检查。可建立一次新尝试；旧会话的用量不会清零。</p>}
       </section>
       <section className="agent-search-card agent-plan-panel">
         <div className="agent-search-heading"><h2>{state ? `${state.intent_snapshot.destination.label} 的行程` : '旅行草案'}</h2>
@@ -187,7 +213,7 @@ export function AgentPage() {
           <p>候选已检索：景点 {state.coverage.attraction ?? 0} · 餐饮 {state.coverage.restaurant ?? 0} · 酒店 {state.coverage.hotel ?? 0}。候选数量不代表完整行程已完成。</p>
           <div className="agent-recommendation-grid">{state.candidates.slice(0, 24).map(p => <div className="planning-candidate" key={p.place_id}><strong>{p.name}</strong><p>{CATEGORIES[p.category] ?? p.category} · {p.address}</p><button className="profile-option" disabled={busy || running} onClick={() => void toggleLock(p.place_id)}>{state.selections.some(s => s.place_id === p.place_id && s.decision === 'lock') ? '解除锁定' : '锁定地点'}</button></div>)}</div>
         </> : <div className="agent-plan-empty"><h3>计划会出现在这里</h3><p>会展示每天的景点、食宿、交通和待确认条件。</p></div>}
-        {state?.attention_reason && <p className="planning-muted">状态原因：{state.attention_reason}</p>}
+        {state?.attention_reason && <p className="planning-muted">{ATTENTION[state.attention_reason] ?? `状态原因：${state.attention_reason}`}</p>}
       </section>
     </div>
   </section>;

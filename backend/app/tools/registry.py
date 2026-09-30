@@ -89,10 +89,18 @@ class ToolRegistry:
                     for place in provider.search_places(keyword, action.region, min(action.limit, 25)):
                         if place.category in action.categories and place.place_id not in excluded:
                             found[place.place_id] = place
+                # Amap keyword search does not enforce our category filter. A
+                # descriptive hotel query can return zero hotel POIs. Try one
+                # canonical query before reporting the category unavailable.
+                if not found and action.categories == ["hotel"] and "酒店" not in keywords:
+                    for place in provider.search_places("酒店", action.region, min(action.limit, 25)):
+                        if place.category == "hotel" and place.place_id not in excluded:
+                            found[place.place_id] = place
                 return list(found.values())[:action.limit]
 
             places = await asyncio.to_thread(self._map, search, reserve_map)
             # Merge newly retrieved identities; explicit user selections remain independent.
+            before_ids = {p.place_id for p in state.candidates}
             merged = {p.place_id: p for p in state.candidates}
             merged.update({p.place_id: p for p in places})
             if len(merged) > 100:
@@ -102,11 +110,14 @@ class ToolRegistry:
             state.candidates_need_refresh = len(merged) != len(state.candidate_ids)
             state.coverage = {c: sum(p.category == c and p.coordinates is not None for p in state.candidates)
                 for c in ("attraction", "restaurant", "hotel", "transport")}
-            recipe = SearchRecipe(queries=keywords, categories=action.categories, limit=action.limit)
+            new_count = len(set(merged) - before_ids)
+            recipe = SearchRecipe(queries=keywords, categories=action.categories, limit=action.limit, new_count=new_count)
             if recipe not in state.search_recipes:
                 state.search_recipes = (state.search_recipes + [recipe])[-12:]
             state.candidates_stale = False
             warnings = ["provider_identity_candidates_not_confirmed"]
+            if not new_count:
+                warnings.append("no_new_candidates_change_search_strategy")
             if action.filters.max_price is not None or action.filters.accessible is not None:
                 warnings.append("price_accessibility_filters_not_verified_by_provider")
             return state, {"status": "success" if places else "partial", "kind": "places",

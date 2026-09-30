@@ -30,6 +30,7 @@ export interface Draft {
 export interface SessionView {
   state: {
     session_id: string; state_version: number; status: string; attention_reason: string | null;
+    retry_generation: number; retry_child_ref: string | null;
     agent_message: string | null; candidates: Place[]; candidates_need_refresh: boolean; candidates_stale: boolean;
     plan_needs_refresh: boolean; current_plan: Draft | null; current_plan_ref: { plan_id: string; version: number } | null;
     coverage: Record<string, number>; supplier_status: Record<string, string>;
@@ -38,7 +39,7 @@ export interface SessionView {
     selections: Array<{ selection_id: string; place_id: string; decision: string; evidence: { source: string; source_ref: string; confirmation: string } }>;
     plan_history: Array<{ plan_id: string; version: number; change_reason: string }>;
   };
-  usage: { model_calls: number; map_calls: number; steps: number; model_limit: number; map_limit: number };
+  usage: { model_calls: number; map_calls: number; steps: number; model_limit: number; map_limit: number; step_limit: number };
 }
 export interface SessionCredential { id: string; token: string }
 
@@ -59,6 +60,7 @@ export const planning = {
   create: (message: string, profile: unknown) => call<SessionView & { access_token: string }>('', undefined, { message, profile, task_scope: 'itinerary' }, 'POST'),
   get: (c: SessionCredential) => call<SessionView>(`/${c.id}`, c.token),
   run: (c: SessionCredential, version: number) => call<SessionView>(`/${c.id}/run`, c.token, { request_id: crypto.randomUUID(), base_state_version: version }, 'POST'),
+  retry: (c: SessionCredential, version: number) => call<SessionView & { access_token: string }>(`/${c.id}/retry`, c.token, { request_id: crypto.randomUUID(), base_state_version: version }, 'POST'),
   edit: (c: SessionCredential, version: number, update: unknown) => call<SessionView>(`/${c.id}`, c.token, { request_id: crypto.randomUUID(), base_state_version: version, ...(update as object) }, 'PATCH'),
   answer: (c: SessionCredential, q: SessionView['state']['pending_questions'][number], text?: string, optionId?: string) => call<SessionView>(`/${c.id}/answers`, c.token, { answer: { request_id: crypto.randomUUID(), question_id: q.question_id, state_version: q.state_version, ...(text ? { text } : {}), option_ids: optionId ? [optionId] : [] } }, 'POST'),
   cancel: (c: SessionCredential, version: number) => call<SessionView>(`/${c.id}/cancel`, c.token, { request_id: crypto.randomUUID(), base_state_version: version }, 'POST'),

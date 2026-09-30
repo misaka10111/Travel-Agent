@@ -12,6 +12,10 @@ Search must use the EXACT current intent_ref and region object, including identi
 explicit must-visits and current messages; retain some diversity. Do not claim API filters enforce budgets/accessibility.
 For incomplete dates/party/preferences, clarify when necessary; never invent dates, count, currency or exact POI identity.
 Read task_scope, intake_state, coverage, search_recipes and plan audit. Candidate counts NEVER establish quality/completion.
+search_recipes include new_count. If a hotel search yields zero, canonical hotel search has already been tried once.
+Do not issue another hotel text search with similar descriptive keywords. Use a different provider action or pause with a specific gap.
+When a search or nearby action yields no new candidates, change strategy immediately; never repeat it to fill a count.
+Preserve enough remaining calls for compute_itinerary, validate_plan and finish. If a plan exists, validate it before more broad searches.
 For task_scope=candidates pause after useful retrieval, explaining uncovered components. Respect a user-requested search-only scope.
 For task_scope=itinerary gather distinct parent attractions covering all days, hotels, and restaurants near distributed attraction anchors.
 Use rank_nearby with max 3 anchor_refs per call and preference_ref=intent_id. Hotel proximity considers all trip days.

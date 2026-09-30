@@ -12,7 +12,7 @@ from sqlalchemy import or_, select, update
 
 from app.models.planning import PlanningCommand, PlanningEvent, PlanningSession
 from app.runtime.guards import AVAILABLE_ACTIONS, PlanningError
-from app.schemas.planning_api import ProfileSnapshot, SessionView
+from app.schemas.planning_api import CreateSession, ProfileSnapshot, SessionView
 from app.schemas.session import CallBudget, SessionState
 from app.schemas.intent import TripIntent
 from app.services.intent_service import with_profile
@@ -67,6 +67,39 @@ class SessionStore:
             db.add(PlanningEvent(session_id=session_id, state_version=0, kind="created", data={}))
             db.commit()
         return session_id, token
+
+    def retry_with_context(self, session_id, expected_version):
+        """Create one user-requested attempt with a fresh bounded budget.
+
+        The original usage is untouched. Supplier places are copied only from
+        live memory; a process restart requires a fresh search.
+        """
+        source = self.load(session_id)
+        if source.state.state_version != expected_version:
+            raise PlanningError("stale_state")
+        if source.state.status != "needs_attention" or source.state.retry_generation or source.state.retry_child_ref:
+            raise PlanningError("retry_not_available")
+        if source.lease_id and source.lease_until > time.time():
+            raise PlanningError("session_already_running")
+        body = CreateSession(
+            intent=source.state.intent_snapshot, profile=source.profile, task_scope=source.state.task_scope)
+        child_id, token = self.create(body)
+        child = self.load(child_id).state
+        child.trip_ref = source.state.trip_ref or session_id
+        child.retry_generation = 1
+        child.selections = source.state.selections
+        child.search_recipes = source.state.search_recipes
+        child.intake_state = source.state.intake_state
+        child.candidates = source.state.candidates
+        child.candidate_ids = source.state.candidate_ids
+        child.candidates_need_refresh = len(child.candidates) != len(child.candidate_ids)
+        child.coverage = source.state.coverage if child.candidates else {}
+        child.candidates_stale = source.state.candidates_stale
+        self.save(child, expected=0, kind="retry_started", event_data={"source_session_id": session_id})
+        parent = source.state
+        parent.retry_child_ref = child_id
+        self.save(parent, expected=expected_version, kind="retry_child_created", event_data={"child_session_id": child_id})
+        return child_id, token
 
     def authorize(self, session_id, token):
         with self.factory() as db:

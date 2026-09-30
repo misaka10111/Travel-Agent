@@ -42,7 +42,8 @@ class PlanningRuntime:
         observation = None
         repairs_left = 1
         repeated_errors = {}
-        no_progress = {}
+        blocked_actions = set()
+        blocked_attempts = 0
         business_repairs = 2
         while True:
             snapshot = self.store.load(session_id)
@@ -92,15 +93,30 @@ class PlanningRuntime:
                 action = await self.plan.decide(snapshot, observation)
                 check_action(action, snapshot.state)
                 signature = fingerprint(action.kind, action.model_dump(mode="json", exclude={"action_id", "base_state_version", "purpose"}))
+                hotel_search_exhausted = (action.kind == "search_candidates" and action.categories == ["hotel"]
+                    and snapshot.state.coverage.get("hotel", 0) == 0
+                    and any(r.categories == ["hotel"] and r.new_count == 0 for r in snapshot.state.search_recipes))
+                if signature in blocked_actions or hotel_search_exhausted:
+                    blocked_attempts += 1
+                    observation = {"status": "error", "code": "search_already_tried_without_new_candidates",
+                        "action_kind": action.kind, "allowed_alternatives": ["rank_nearby", "compute_itinerary", "pause"]}
+                    self.store.diagnostic(session_id, lease_id, observation)
+                    if blocked_attempts >= 2:
+                        state = snapshot.state
+                        state.status, state.attention_reason = "needs_attention", "search_stalled_no_new_candidates"
+                        state.agent_message = "检索没有新增地点，请调整条件或用附近搜索；已停止重复调用。"
+                        self.store.save(state, expected=state.state_version, lease_id=lease_id,
+                            kind="stopped", event_data={"code": state.attention_reason})
+                        return
+                    continue
                 if signature in repeated_errors:
                     raise PlanningError(repeated_errors[signature])
                 state, observation = await self.registry.execute(action, snapshot, reserve_model, reserve_map)
                 progress = (tuple(state.candidate_ids), state.current_plan_ref.model_dump_json() if state.current_plan_ref else None)
                 if action.kind in {"search_candidates", "rank_nearby", "get_place_details"}:
-                    key = (signature, progress)
-                    no_progress[key] = no_progress.get(key, 0) + 1
-                    if no_progress[key] >= 3:
-                        raise PlanningError("no_progress_repeated_action")
+                    if progress == (tuple(snapshot.state.candidate_ids), snapshot.state.current_plan_ref.model_dump_json() if snapshot.state.current_plan_ref else None):
+                        blocked_actions.add(signature)
+                        observation["warnings"] = list(dict.fromkeys(observation.get("warnings", []) + ["no_new_candidates_change_strategy"]))
             except MapError as exc:
                 signature = fingerprint(action.kind, action.model_dump(mode="json", exclude={"action_id", "base_state_version", "purpose"}))
                 if signature in repeated_errors or exc.code in {"permission_denied", "missing_credentials"}:

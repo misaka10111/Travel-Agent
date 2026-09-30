@@ -30,6 +30,7 @@ from app.runtime.guards import check_action
 from app.schemas.action import AGENT_ACTION_ADAPTER
 from app.runtime.store import SessionStore
 from app.schemas.place import Coordinates, Place, ProviderRef
+from app.schemas.session import Selection
 from app.schemas.planning_api import CreateSession, IntentPatch, ProfileSnapshot
 from app.services.intent_service import apply_patch, with_profile
 from app.tools.registry import ToolRegistry
@@ -234,6 +235,64 @@ def test_budget_exhaustion_is_persistent_and_stops(harness, counter):
     run(client, url, headers, version)
     resumed = wait_state(client, url, headers)
     assert resumed["usage"][counter] == 1
+
+
+def test_repeat_search_stops_before_third_paid_map_request(harness):
+    client, _, model, _, _ = harness
+    model.mode = "repeat"
+    url, headers, _ = create(client)
+    assert run(client, url, headers, 0).status_code == 202
+    result = wait_state(client, url, headers)
+    assert result["state"]["attention_reason"] == "search_stalled_no_new_candidates"
+    assert result["usage"]["map_calls"] == 4  # two queries, twice
+    events = client.get(url + "/events", headers=headers).json()
+    assert any(e["data"].get("code") == "search_already_tried_without_new_candidates" for e in events)
+
+
+def test_one_retry_preserves_intent_and_locked_places_with_new_bounded_usage(harness):
+    client, runtime, _, _, _ = harness
+    url, headers, created = create(client)
+    state = runtime.store.load(created["state"]["session_id"]).state
+    point = FakeMap(lambda: None).search_places("豫园", state.intent_snapshot.destination, 1)[0]
+    state.candidates = [point]
+    state.candidate_ids = [point.place_id]
+    state.selections = [Selection(selection_id="lock-1", place_id=point.place_id, decision="lock",
+        evidence={"source": "selection", "source_ref": "card", "confirmation": "explicit"})]
+    state.status, state.attention_reason = "needs_attention", "search_stalled_no_new_candidates"
+    original = runtime.store.save(state, expected=0, kind="fixture")
+    response = client.post(url + "/retry", headers=headers,
+        json={"request_id": "retry-1", "base_state_version": original.state_version})
+    assert response.status_code == 201, response.text
+    child = response.json()
+    assert child["usage"]["model_calls"] == child["usage"]["map_calls"] == 0
+    assert child["state"]["selections"][0]["place_id"] == point.place_id
+    assert child["state"]["candidates"][0]["place_id"] == point.place_id
+    assert child["state"]["retry_generation"] == 1
+    assert client.post(url + "/retry", headers=headers,
+        json={"request_id": "retry-2", "base_state_version": original.state_version}).status_code == 409
+
+
+def test_hotel_search_uses_one_canonical_fallback_and_records_real_yield(harness):
+    client, runtime, _, _, _ = harness
+    calls = []
+    class HotelMap(FakeMap):
+        def search_places(self, query, region, limit):
+            calls.append(query)
+            if query != "酒店":
+                return []
+            return [Place(place_id="hotel-1", name="酒店", category="hotel", region=region,
+                coordinates=Coordinates(longitude=121.1, latitude=31.1, crs="GCJ02"), identity_status="candidate")]
+    runtime.registry.provider_factory = HotelMap
+    _, _, created = create(client)
+    snapshot = runtime.store.load(created["state"]["session_id"])
+    action = AGENT_ACTION_ADAPTER.validate_python({"kind": "search_candidates", "action_id": "hotel-search",
+        "base_state_version": 0, "purpose": "搜住宿", "intent_ref": snapshot.state.intent_snapshot.intent_id,
+        "region": snapshot.state.intent_snapshot.destination.model_dump(mode="json"),
+        "categories": ["hotel"], "filters": {"keywords": ["交通便利"]}, "limit": 5})
+    next_state, _ = asyncio.run(runtime.registry.execute(action, snapshot, lambda: None, lambda: None))
+    assert calls == ["交通便利", "酒店"]
+    assert next_state.coverage["hotel"] == 1
+    assert next_state.search_recipes[-1].new_count == 1
 
 
 def test_answer_ids_versions_options_and_field_scope(harness):

@@ -33,13 +33,13 @@ class Settings(BaseSettings):
     planning_max_output_tokens: int = Field(default=4096, ge=512, le=8192)
     planning_thinking_mode: Literal["enabled", "disabled"] = "disabled"
     planning_model_timeout_seconds: float = Field(default=45, gt=0, le=90)
-    planning_model_call_limit: int = Field(default=20, ge=1, le=50)
+    planning_model_call_limit: int = Field(default=40, ge=1, le=50)
     planning_map_call_limit: int = Field(default=12, ge=1, le=30)
     planning_step_limit: int = Field(default=12, ge=1, le=30)
     planning_run_timeout_seconds: float = Field(default=180, ge=1, le=600)
-    itinerary_map_call_limit: int = Field(default=80, ge=1, le=200)
+    itinerary_map_call_limit: int = Field(default=120, ge=1, le=200)
     itinerary_route_call_limit: int = Field(default=60, ge=1, le=100)
-    itinerary_step_limit: int = Field(default=24, ge=1, le=50)
+    itinerary_step_limit: int = Field(default=40, ge=1, le=50)
     itinerary_run_timeout_seconds: float = Field(default=420, ge=1, le=900)
     map_request_interval_seconds: float = Field(default=1.0, ge=0, le=5)
     tavily_api_key: SecretStr | None = None
