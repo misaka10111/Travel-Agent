@@ -143,9 +143,13 @@ export function AgentWorkbench() {
       mapUrlRef.current = next;
       setMapUrl(next);
       setMapNotice(result.total > result.shown ? '地图显示部分已查到的路线；全部交通段请看下方行程。' : '地图展示当天地点及已查到的实际路线。');
-    }).catch(() => { if (active) { setMapUrl(null); setMapNotice('地图暂时无法加载，地点与交通仍可在下方行程查看。'); } });
+    }).catch(() => { if (active) {
+      setMapUrl(null);
+      setMapNotice(state?.plan_needs_refresh ? '地点和路线正在重新查询，完成后地图会恢复。' :
+        '地图暂时无法加载，地点与交通仍可在下方行程查看。');
+    } });
     return () => { active = false; };
-  }, [credential, plan?.plan_id, plan?.version, dayIndex, running, snapshot]);
+  }, [credential, plan?.plan_id, plan?.version, dayIndex, running, snapshot, state?.plan_needs_refresh]);
 
   useEffect(() => () => { if (mapUrlRef.current) URL.revokeObjectURL(mapUrlRef.current); }, []);
 
@@ -320,7 +324,7 @@ export function AgentWorkbench() {
                 </div>;
               })}
               {!!warnings.length && <details className="ta-day-notes"><summary>这一天还需确认</summary>
-                {[...new Set(warnings.map(issue => ISSUE[issue.code] ?? issue.message).filter(text => !/[a-z]{3,}_/.test(text)))].map(text => <p key={text}>{text}</p>)}
+                {[...new Set(warnings.map(issue => ISSUE[issue.code] ?? '还有一项安排需要核实。'))].map(text => <p key={text}>{text}</p>)}
               </details>}
             </div>}
             {!!plan.missing_requirements.length && <details className="ta-day-notes"><summary>出发前还需确认</summary>
