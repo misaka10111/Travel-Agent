@@ -1,6 +1,7 @@
 """Relative-day drafts are distinct from dated, evidence-verified delivery."""
 
 from datetime import date as Date
+from decimal import Decimal
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -63,6 +64,16 @@ class Recommendation(ContractModel):
     unknowns: list[str] = Field(default_factory=list)
 
 
+class CostSummary(ContractModel):
+    """Observed POI spending references; never a complete trip quote."""
+    currency: Literal["CNY"] = "CNY"
+    planned_meals: int = Field(default=0, ge=0)
+    meals_with_reference: int = Field(default=0, ge=0)
+    food_reference_per_person: Decimal | None = Field(default=None, ge=0)
+    food_reference_for_party: Decimal | None = Field(default=None, ge=0)
+    party_count: int | None = Field(default=None, ge=1)
+
+
 class ItineraryDraft(ContractModel):
     schema_version: Literal["2.0"] = "2.0"
     plan_id: Identifier
@@ -72,6 +83,7 @@ class ItineraryDraft(ContractModel):
     status: Literal["draft", "partial", "verified"] = "draft"
     days: list[DraftDay]
     recommendations: list[Recommendation] = Field(default_factory=list)
+    cost_summary: CostSummary = Field(default_factory=CostSummary)
     assumptions: list[str] = Field(default_factory=list)
     missing_requirements: list[str] = Field(default_factory=list)
     supplier_status: dict[str, str] = Field(default_factory=dict)

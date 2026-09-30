@@ -2,6 +2,7 @@ from datetime import timedelta
 from uuid import uuid4
 
 from app.planning.clustering import allocate, identity_groups, meters, same_visit_area
+from app.planning.budgeting import summarize_costs
 from app.planning.ranking import hotel_ranking, nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
 from app.planning.scheduling import schedule
@@ -142,6 +143,7 @@ def compute(state, provider, route_limit, previous=None):
     return ItineraryDraft(plan_id=state.current_plan_ref.plan_id if state.current_plan_ref else str(uuid4()),
         version=version, base_state_version=state.state_version, intent_snapshot_ref=intent.intent_id,
         status="partial", days=days, recommendations=hotel_ranks[:5] + list({r.place_id: r for r in food_ranks}.values()),
+        cost_summary=summarize_costs(days, by_id, intent),
         assumptions=["分组与距离初筛使用地点坐标；路线耗时全部来自地图服务", "每天可用时段待抵离交通确认", "未推断房间数量、房价或余房"],
         missing_requirements=missing, supplier_status={"amap": "route_estimates", **state.supplier_status},
         travel_offers=state.travel_offers, selected_offer_ids=[t["offer_id"] for t in transfers.values()],
