@@ -62,7 +62,7 @@ async def run_session(session_id: str, body: VersionCommand, runtime=Depends(own
     signature, snapshot = command(runtime, session_id, body, "run")
     if snapshot is None:
         return runtime.store.view(session_id, replayed=True)
-    if snapshot.state.status in {"waiting_user", "cancelled", "completed", "failed"}:
+    if snapshot.state.status in {"waiting_user", "cancelled", "failed"} or (snapshot.state.status == "completed" and not snapshot.state.plan_needs_refresh):
         raise PlanningError("session_not_resumable")
     if snapshot.lease_id and snapshot.lease_until > time.time():
         raise PlanningError("session_already_running")
@@ -127,8 +127,14 @@ async def edit_session(session_id: str, body: EditSession, runtime=Depends(owned
         state.selections = body.selections
     state.status, state.attention_reason = "draft", None
     state.agent_message = None
-    state.pending_questions, state.current_plan_ref, state.current_plan = [], None, None
-    state.plan_needs_refresh = False
+    state.pending_questions = []
+    if body.intent_patch is not None or body.selections is not None:
+        state.current_plan_ref, state.current_plan = None, None
+        state.plan_needs_refresh = False
+    elif state.current_plan:
+        # A free-text local edit needs the previous plan/stop IDs in Plan's context.
+        state.current_plan.audit = None
+        state.current_plan.status = "draft"
     # A manual edit supersedes unanswered interpretation jobs from the previous intent.
     for message in snapshot.messages:
         if message.get("kind") in {"answer", "intake"} and not message.get("processed"):

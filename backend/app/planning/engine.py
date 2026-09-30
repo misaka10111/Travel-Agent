@@ -1,0 +1,119 @@
+from datetime import datetime, time, timedelta
+from uuid import uuid4
+from zoneinfo import ZoneInfo
+
+from app.planning.clustering import allocate, identity_groups, meters
+from app.planning.ranking import nearby_ranking, preference_score
+from app.planning.routing import RoutePlanner
+from app.planning.scheduling import schedule
+from app.runtime.guards import PlanningError
+from app.schemas.itinerary import ItineraryDraft
+from app.schemas.common import utc_now
+
+
+def compute(state, provider, route_limit, previous=None):
+    intent = state.intent_snapshot
+    count = intent.dates.duration_days
+    if count is None and intent.dates.start_date and intent.dates.end_date:
+        count = (intent.dates.end_date - intent.dates.start_date).days + 1
+    if not count or count > 30:
+        raise PlanningError("duration_required_or_exceeds_30_days", 422)
+    by_id = {p.place_id: p for p in state.candidates}
+    excluded = {s.place_id for s in state.selections if s.decision == "exclude"}
+    excluded |= {c.place_id for c in intent.constraints if c.kind == "exclude" and c.strength == "hard"}
+    required = {s.place_id for s in state.selections if s.decision in {"include", "lock"}}
+    required |= {c.place_id for c in intent.constraints if c.kind in {"must_visit", "reservation", "booked_hotel"} and c.strength == "hard"}
+    if required & excluded:
+        raise PlanningError("locked_or_required_place_is_excluded", 422)
+    if not required <= set(by_id):
+        raise PlanningError("locked_places_require_refresh", 422)
+    groups = identity_groups([p for p in state.candidates if p.category == "attraction" and p.place_id not in excluded and p.coordinates])
+    attractions, children = [], {}
+    mapped_required, fixed = set(), {}
+    for root, members in groups.items():
+        main = by_id[root] if root in by_id else members[0]
+        attractions.append(main)
+        children[main.place_id] = [p.place_id for p in members if p.place_id != main.place_id]
+        if any(p.place_id in required for p in members):
+            mapped_required.add(main.place_id)
+        dates = [s.date for s in state.selections if s.place_id in {p.place_id for p in members} and s.date]
+        dates += [c.time_window.start.date() for c in intent.constraints if c.kind == "reservation" and c.place_id in {p.place_id for p in members}]
+        if dates and intent.dates.start_date:
+            if len(set(dates)) > 1:
+                raise PlanningError("conflicting_parent_child_visit_dates", 422)
+            fixed[main.place_id] = (dates[0] - intent.dates.start_date).days + 1
+    if not attractions:
+        raise PlanningError("attraction_candidates_required", 422)
+    per_day = 2 if intent.preferences.pace == "relaxed" or "舒适" in intent.preferences.comfort_tags else 3
+    scores = {p.place_id: preference_score(p, intent) for p in attractions}
+    assignments = allocate(attractions, count, per_day, mapped_required, fixed, scores)
+    # Preserve untouched day assignments when editing a previous draft. Changes
+    # enter as explicit assignments, then routes/times are recomputed.
+    if previous:
+        assignments = [[by_id[s.place_id] for s in day.stops if s.category == "attraction" and s.place_id in by_id and s.place_id not in excluded] for day in previous.days]
+    anchors = [p for group in assignments for p in group]
+    hotel_ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded], anchors, "hotel", intent)
+    forced_hotels = [by_id[pid] for pid in required if by_id[pid].category == "hotel"]
+    if len(forced_hotels) > 1:
+        raise PlanningError("multiple_locked_hotels_require_explicit_stay_assignment", 422)
+    override = by_id.get(previous.days[0].hotel_place_id) if previous and previous.days else None
+    hotel = forced_hotels[0] if forced_hotels else (override or (by_id[hotel_ranks[0].place_id] if hotel_ranks else None))
+    router = RoutePlanner(provider, intent, route_limit)
+    zone = ZoneInfo(intent.dates.timezone or intent.destination.timezone or "Asia/Shanghai")
+    reference_departure = datetime.combine(intent.dates.start_date or utc_now().astimezone(zone).date(), time(9), zone)
+    if not forced_hotels and not override and hotel_ranks:
+        samples = [group[0] for group in assignments if group][:3]
+        choices = []
+        for rank in hotel_ranks[:2]:
+            node = by_id[rank.place_id]
+            observations = [router.leg(node, anchor, reference_departure) for anchor in samples if node.place_id != anchor.place_id]
+            if observations and all(r.status == "ok" for r in observations):
+                seconds = sum(r.duration_seconds for r in observations) / len(observations)
+                rank.score_components["sampled_commute"] = 1 / (1 + seconds / 1800)
+                rank.reasons.append("已比较多个日程锚点的真实去程耗时；回程仍逐日查询")
+                choices.append((seconds, node))
+        if choices:
+            hotel = min(choices, key=lambda p: p[0])[1]
+    days, food_ranks = [], []
+    version = max([p.version for p in state.plan_history], default=0) + 1
+    for i, assigned in enumerate(assignments, 1):
+        date = intent.dates.start_date + timedelta(days=i - 1) if intent.dates.start_date else None
+        if assigned:
+            # Spatial shortlist plus actual directed-time comparison for the two
+            # best starts; avoid a quadratic all-pairs route matrix.
+            if hotel:
+                assigned.sort(key=lambda p: meters(hotel, p))
+            ordered = []
+            remaining = assigned[:]
+            cursor = hotel or remaining[0]
+            while remaining:
+                short = sorted(remaining, key=lambda p: meters(cursor, p))[:2]
+                if cursor == short[0]:
+                    chosen = short[0]
+                else:
+                    departure = datetime.combine(date or utc_now().astimezone(zone).date(), time(9), zone)
+                    options = [(p, router.leg(cursor, p, departure)) for p in short]
+                    chosen = min(options, key=lambda pair: pair[1].duration_seconds if pair[1].status == "ok" else float("inf"))[0]
+                ordered.append(chosen)
+                remaining.remove(chosen)
+                cursor = chosen
+            assigned = ordered
+        ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded], assigned, "restaurant", intent)
+        food_ranks.extend(ranks[:2])
+        restaurants = [by_id[r.place_id] for r in ranks[:2]]
+        day = schedule(i, date, assigned, hotel, restaurants, router, intent, children)
+        for stop in day.stops:
+            stop.locked = stop.place_id in required or bool(set(stop.child_place_ids) & required)
+        days.append(day)
+    missing = ["开放时间与预约规则", "餐馆菜单与饮食偏好匹配", "酒店日期房价与余房", "完整费用覆盖"]
+    if not intent.dates.start_date:
+        missing.append("出发日期")
+    if not intent.budget.money:
+        missing.append("预算")
+    if intent.origin and intent.origin.label != intent.destination.label:
+        missing.append("往返城际交通与抵离接驳")
+    return ItineraryDraft(plan_id=state.current_plan_ref.plan_id if state.current_plan_ref else str(uuid4()),
+        version=version, base_state_version=state.state_version, intent_snapshot_ref=intent.intent_id,
+        status="partial", days=days, recommendations=hotel_ranks[:5] + list({r.place_id: r for r in food_ranks}.values()),
+        assumptions=["分组与距离初筛使用地点坐标；路线耗时全部来自地图服务", "每天可用时段待抵离交通确认", "未推断房间数量、房价或余房"],
+        missing_requirements=missing, supplier_status={"amap": "route_estimates", **state.supplier_status}, travel_offers=state.travel_offers)

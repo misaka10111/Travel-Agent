@@ -1,6 +1,6 @@
 """Whitelisted, discriminated actions and typed observations for Plan Agent."""
 
-from datetime import date
+from datetime import date as Date
 from typing import Annotated, Literal
 
 from pydantic import Field, TypeAdapter, model_validator
@@ -9,10 +9,11 @@ from app.schemas.common import ContractModel, Identifier, Money, RegionRef, Time
 from app.schemas.place import Place, ProviderRef
 from app.schemas.plan import PlanRef, PlanVersion, ValidationReport
 from app.schemas.session import Question
+from app.schemas.itinerary import DraftAudit, ItineraryDraft
 
 
 class ActionScope(ContractModel):
-    dates: list[date] = Field(default_factory=list)
+    dates: list[Date] = Field(default_factory=list)
     place_ids: list[Identifier] = Field(default_factory=list)
 
 
@@ -63,14 +64,14 @@ class RankNearbyAction(ActionBase):
     kind: Literal["rank_nearby"]
     anchor_refs: list[Identifier] = Field(min_length=1)
     category: Literal["restaurant", "hotel"]
-    time_window: TimeWindow
+    time_window: TimeWindow | None = None
     preference_ref: Identifier
 
 
 class AddVisitChange(ContractModel):
     kind: Literal["add_visit"]
     place_id: Identifier
-    date: date
+    date: Date
 
 
 class RemoveVisitChange(ContractModel):
@@ -81,7 +82,8 @@ class RemoveVisitChange(ContractModel):
 class MoveVisitChange(ContractModel):
     kind: Literal["move_visit"]
     visit_id: Identifier
-    date: date
+    date: Date | None = None
+    day_index: int | None = Field(default=None, ge=1)
 
 
 class ReplaceHotelChange(ContractModel):
@@ -115,9 +117,20 @@ class PauseAction(ActionBase):
     reason: Identifier
 
 
+class SupplierAction(ActionBase):
+    kind: Literal["query_travel"]
+    categories: list[Literal["hotel", "train", "flight"]] = Field(min_length=1, max_length=3)
+
+
+class EvidenceAction(ActionBase):
+    kind: Literal["search_evidence"]
+    place_ids: list[Identifier] = Field(min_length=1, max_length=3)
+    topic: Literal["opening_hours", "dietary"]
+
+
 AgentAction = Annotated[
     AskUserAction | SearchCandidatesAction | PlaceDetailsAction | ComputeItineraryAction |
-    RankNearbyAction | EditPlanAction | ValidatePlanAction | FinishAction | PauseAction,
+    RankNearbyAction | EditPlanAction | ValidatePlanAction | FinishAction | PauseAction | SupplierAction | EvidenceAction,
     Field(discriminator="kind"),
 ]
 AGENT_ACTION_ADAPTER = TypeAdapter(AgentAction)
@@ -135,12 +148,18 @@ class PlacesPayload(ContractModel):
 
 class PlanPayload(ContractModel):
     kind: Literal["plan"]
-    plan: PlanVersion
+    plan: PlanVersion | ItineraryDraft
 
 
 class AuditPayload(ContractModel):
     kind: Literal["audit"]
-    report: ValidationReport
+    report: ValidationReport | DraftAudit
+
+
+class StatePayload(ContractModel):
+    kind: Literal["state"]
+    state_status: str
+    reason: str | None = None
 
 
 class RankingItem(ContractModel):
@@ -155,7 +174,7 @@ class RankingPayload(ContractModel):
     items: list[RankingItem]
 
 
-ToolPayload = Annotated[QuestionsPayload | PlacesPayload | PlanPayload | AuditPayload | RankingPayload, Field(discriminator="kind")]
+ToolPayload = Annotated[QuestionsPayload | PlacesPayload | PlanPayload | AuditPayload | RankingPayload | StatePayload, Field(discriminator="kind")]
 
 
 class ToolError(ContractModel):

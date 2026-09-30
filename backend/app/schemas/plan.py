@@ -157,4 +157,9 @@ class PlanVersion(ContractModel):
                 raise ValueError("verified plan requires nonempty days and a passed report without issues")
             if any(leg.status != "ok" for day in self.days for leg in day.routes):
                 raise ValueError("verified plan cannot contain unverified routes")
+            for day in self.days:
+                places = [v.place_id for v in day.visits if v.place_id]
+                available = {(leg.from_place_id, leg.to_place_id) for leg in day.routes}
+                if any(a != b and (a, b) not in available for a, b in zip(places, places[1:])):
+                    raise ValueError("verified plan cannot omit required routes")
         return self

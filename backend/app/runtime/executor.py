@@ -42,6 +42,8 @@ class PlanningRuntime:
         observation = None
         repairs_left = 1
         repeated_errors = {}
+        no_progress = {}
+        business_repairs = 2
         while True:
             snapshot = self.store.load(session_id)
             if snapshot.lease_id != lease_id or snapshot.state.status != "running":
@@ -93,6 +95,12 @@ class PlanningRuntime:
                 if signature in repeated_errors:
                     raise PlanningError(repeated_errors[signature])
                 state, observation = await self.registry.execute(action, snapshot, reserve_model, reserve_map)
+                progress = (tuple(state.candidate_ids), state.current_plan_ref.model_dump_json() if state.current_plan_ref else None)
+                if action.kind in {"search_candidates", "rank_nearby", "get_place_details"}:
+                    key = (signature, progress)
+                    no_progress[key] = no_progress.get(key, 0) + 1
+                    if no_progress[key] >= 3:
+                        raise PlanningError("no_progress_repeated_action")
             except MapError as exc:
                 signature = fingerprint(action.kind, action.model_dump(mode="json", exclude={"action_id", "base_state_version", "purpose"}))
                 if signature in repeated_errors or exc.code in {"permission_denied", "missing_credentials"}:
@@ -102,6 +110,15 @@ class PlanningRuntime:
                 self.store.diagnostic(session_id, lease_id, observation)
                 continue
             except (ValidationError, PlanningError) as exc:
+                if isinstance(exc, PlanningError) and exc.code in {
+                    "duration_required_or_exceeds_30_days", "attraction_candidates_required", "locked_places_require_refresh",
+                    "locked_visit_edit_conflict", "locked_hotel_edit_conflict", "plan_not_deliverable",
+                    "conflicting_parent_child_visit_dates", "multiple_locked_hotels_require_explicit_stay_assignment",
+                    "question_already_unknown_or_declined"} and business_repairs:
+                    business_repairs -= 1
+                    observation = {"status": "error", "code": exc.code, "action_kind": action.kind}
+                    self.store.diagnostic(session_id, lease_id, observation)
+                    continue
                 repairable = self._repairable(exc)
                 if not repairable:
                     raise
@@ -134,7 +151,9 @@ class PlanningRuntime:
     async def run(self, session_id, lease_id):
         heartbeat = asyncio.create_task(self._heartbeat(session_id, lease_id))
         try:
-            await asyncio.wait_for(self._loop(session_id, lease_id), timeout=self.settings.planning_run_timeout_seconds)
+            snapshot = self.store.load(session_id)
+            timeout = self.settings.itinerary_run_timeout_seconds if snapshot.state.task_scope == "itinerary" else self.settings.planning_run_timeout_seconds
+            await asyncio.wait_for(self._loop(session_id, lease_id), timeout=timeout)
         except asyncio.CancelledError:
             self._stop(session_id, lease_id, "server_shutdown_resume_available")
             raise
@@ -144,7 +163,8 @@ class PlanningRuntime:
             self._stop(session_id, lease_id, exc.code)
         except ValidationError:
             self._stop(session_id, lease_id, "invalid_agent_contract")
-        except Exception:
+        except Exception as exc:
+            self.store.diagnostic(session_id, lease_id, {"code": "runtime_internal_error", "error_type": type(exc).__name__})
             self._stop(session_id, lease_id, "runtime_internal_error")
         finally:
             heartbeat.cancel()

@@ -44,6 +44,7 @@ class SessionStore:
         data["candidates"] = []
         data["agent_message"] = None  # Model summaries can repeat supplier content; keep them volatile too.
         data["current_plan"] = None
+        data["travel_offers"] = []
         data["plan_needs_refresh"] = bool(data["current_plan_ref"])
         data["candidates_need_refresh"] = bool(data["candidate_ids"])
         return data
@@ -52,16 +53,17 @@ class SessionStore:
         session_id, token = str(uuid4()), secrets.token_urlsafe(32)
         intent = body.intent or TripIntent(intent_id=str(uuid4()),
             destination={"label": "待确认", "identity_status": "unresolved"})
+        map_limit = self.settings.itinerary_map_call_limit if body.task_scope == "itinerary" else self.settings.planning_map_call_limit
+        step_limit = self.settings.itinerary_step_limit if body.task_scope == "itinerary" else self.settings.planning_step_limit
         state = SessionState(session_id=session_id, owner_ref="capability:" + session_id,
             state_version=0, intent_snapshot=with_profile(intent, body.profile), task_scope=body.task_scope,
-            budget_usage=CallBudget(limit=self.settings.planning_model_call_limit + self.settings.planning_map_call_limit))
+            budget_usage=CallBudget(limit=self.settings.planning_model_call_limit + map_limit))
         with self.factory() as db:
             db.add(PlanningSession(session_id=session_id, token_hash=hashlib.sha256(token.encode()).hexdigest(),
                 state_json=self._durable(state), profile_json=body.profile.model_dump(mode="json"),
                 messages_json=[{"kind": "user" if body.intent else "intake", "text": body.message,
                     "message_id": str(uuid4()), "processed": body.intent is not None}] if body.message else [],
-                model_limit=self.settings.planning_model_call_limit, map_limit=self.settings.planning_map_call_limit,
-                step_limit=self.settings.planning_step_limit))
+                model_limit=self.settings.planning_model_call_limit, map_limit=map_limit, step_limit=step_limit))
             db.add(PlanningEvent(session_id=session_id, state_version=0, kind="created", data={}))
             db.commit()
         return session_id, token
@@ -89,6 +91,7 @@ class SessionStore:
                 if len(memory) > 3:
                     data["current_plan"] = memory[3].model_dump(mode="json") if memory[3] else None
                     data["plan_needs_refresh"] = bool(data["current_plan_ref"] and not memory[3])
+                    data["travel_offers"] = memory[4] if len(memory) > 4 else []
             state = SessionState.model_validate(data)
             return Snapshot(state, ProfileSnapshot.model_validate(row.profile_json), list(row.messages_json),
                 {"model_calls": row.model_calls, "map_calls": row.map_calls, "steps": row.steps,
@@ -144,7 +147,7 @@ class SessionStore:
                 kind=kind, data=event_data or {}))
             db.commit()
         # Only publish supplier objects following a successful version check.
-        self._places[state.session_id] = (expected + 1, next_state.candidates, next_state.agent_message, next_state.current_plan)
+        self._places[state.session_id] = (expected + 1, next_state.candidates, next_state.agent_message, next_state.current_plan, next_state.travel_offers)
         return next_state
 
     def reserve(self, session_id, counter, *, lease_id=None, version=None):

@@ -115,6 +115,8 @@ class SessionState(ContractModel):
     search_recipes: list[SearchRecipe] = Field(default_factory=list)
     candidates_stale: bool = False
     intake_state: IntakeState = Field(default_factory=IntakeState)
+    travel_offers: list[dict] = Field(default_factory=list)
+    supplier_status: dict[str, str] = Field(default_factory=dict)
     pending_questions: list[Question] = Field(default_factory=list)
     budget_usage: CallBudget = Field(default_factory=CallBudget)
     status: Literal["draft", "running", "waiting_user", "needs_attention", "completed", "cancelled", "failed"] = "draft"

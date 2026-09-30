@@ -207,7 +207,7 @@ def test_command_replay_and_conflicting_request_id(harness):
     assert response.json()["code"] == "request_id_reused_with_different_payload"
 
 
-@pytest.mark.parametrize("mode,reason", [("finish", "capability_unavailable_finish"), ("stale", "stale_action"), ("invalid", "invalid_agent_contract")])
+@pytest.mark.parametrize("mode,reason", [("finish", "plan_requires_refresh_or_wrong_ref"), ("stale", "stale_action"), ("invalid", "invalid_agent_contract")])
 def test_untrusted_model_cannot_finish_or_bypass_contract(harness, mode, reason):
     client, _, model, _, _ = harness
     model.mode = mode

@@ -1,6 +1,8 @@
 """Bounded HTTP requests with sanitized failures; no retries or response caching."""
 
 from urllib.parse import urlsplit
+import threading
+import time
 
 import httpx
 
@@ -8,12 +10,16 @@ from app.providers.maps.base import MapError
 
 
 class MapTransport:
-    def __init__(self, *, max_calls: int = 12, timeout_seconds: float = 15, client: httpx.Client | None = None):
-        if not 1 <= max_calls <= 30 or not 0 < timeout_seconds <= 60:
+    _pace_lock = threading.Lock()
+    _last_request = 0.0
+
+    def __init__(self, *, max_calls: int = 12, timeout_seconds: float = 15, client: httpx.Client | None = None, interval_seconds: float = 0):
+        if not 1 <= max_calls <= 200 or not 0 < timeout_seconds <= 60:
             raise ValueError("invalid map request budget or timeout")
         self.max_calls = max_calls
         self.calls_used = 0
         self.timeout_seconds = timeout_seconds
+        self.interval_seconds = interval_seconds
         self._owns_client = client is None
         self._client = client or httpx.Client(follow_redirects=False)
 
@@ -28,6 +34,12 @@ class MapTransport:
         if self.calls_used >= self.max_calls:
             raise MapError("budget_exhausted", "Map request count limit reached.")
         self.calls_used += 1
+        if self.interval_seconds:
+            with self._pace_lock:
+                delay = self.interval_seconds - (time.monotonic() - MapTransport._last_request)
+                if delay > 0:
+                    time.sleep(delay)
+                MapTransport._last_request = time.monotonic()
         try:
             response = self._client.request(method, url, timeout=self.timeout_seconds, follow_redirects=False, **kwargs)
         except httpx.RequestError:

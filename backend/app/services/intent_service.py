@@ -60,8 +60,15 @@ def invalidate(state, previous):
     current = state.intent_snapshot
     if previous == current:
         return
+    if previous.model_dump(exclude={"notes", "field_evidence", "message_refs", "unresolved_questions"}) == current.model_dump(exclude={"notes", "field_evidence", "message_refs", "unresolved_questions"}):
+        if state.current_plan:
+            state.current_plan.audit = None
+            state.current_plan.status = "draft"
+        return
     state.current_plan_ref = None
     state.current_plan = None
+    state.travel_offers = []
+    state.supplier_status = {}
     state.plan_needs_refresh = False
     state.coverage = {}
     if previous.destination != current.destination:

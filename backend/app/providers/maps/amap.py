@@ -7,8 +7,8 @@ from pydantic import SecretStr, ValidationError
 
 from app.providers.maps.base import MapError, ProviderCapabilities, RouteQuery, route_result, validate_endpoints, normalize_response_errors
 from app.providers.maps.transport import MapTransport
-from app.schemas.common import RegionRef
-from app.schemas.place import Coordinates, Place, ProviderRef
+from app.schemas.common import RegionRef, utc_now
+from app.schemas.place import Coordinates, Fact, Place, ProviderRef
 from app.schemas.plan import RouteGeometry, RouteStep
 
 
@@ -87,11 +87,29 @@ class AmapProvider:
             raise MapError("invalid_response", "Amap POI is missing its ID or name.")
         coordinates = _coordinates(item.get("location"))
         # This deterministic ID identifies one provider entity, not a cross-provider merge.
+        facts = {}
+        source = "amap:poi:" + item["id"]
+        for name in ("citycode", "adcode", "type"):
+            if _text(item.get(name)):
+                facts[name] = Fact(value=item[name], source_ref=source, observed_at=utc_now())
+        business = item.get("business") or {}
+        if isinstance(business, dict):
+            for name in ("rating", "tag", "business_area", "opentime_week", "opentime_today"):
+                if _text(business.get(name)):
+                    facts[name] = Fact(value=business[name], source_ref=source, observed_at=utc_now())
+            # Amap 'cost' is POI average spend, NOT a dated room/ticket quote.
+            if _number(business.get("cost")) is not None:
+                facts["average_spend_cny"] = Fact(value=_number(business["cost"]), source_ref=source, observed_at=utc_now())
+        children = item.get("children") or []
+        if isinstance(children, list):
+            ids = [str(uuid5(NAMESPACE_URL, "amap:" + c["id"])) for c in children if isinstance(c, dict) and _text(c.get("id"))]
+            if ids:
+                facts["child_place_ids"] = Fact(value=ids, source_ref=source, observed_at=utc_now())
         return Place(place_id=str(uuid5(NAMESPACE_URL, "amap:" + item["id"])), name=item["name"],
             category=_category(str(item.get("typecode", ""))), region=region,
             provider_refs=[ProviderRef(provider="amap", provider_place_id=item["id"])],
             coordinates=coordinates, coordinate_unknown_reason=None if coordinates else "provider_missing_coordinates",
-            identity_status="candidate", address=_text(item.get("address")))
+            identity_status="candidate", address=_text(item.get("address")), facts=facts)
 
     @normalize_response_errors
     def search_places(self, query: str, region: RegionRef, limit: int = 5) -> list[Place]:
@@ -99,7 +117,7 @@ class AmapProvider:
         if not query.strip() or not 1 <= limit <= 25:
             raise MapError("invalid_request", "Amap search requires a query and limit between 1 and 25.")
         data = self._request("/v5/place/text", {"keywords": query, "region": region.label,
-            "city_limit": "true", "page_size": limit})
+            "city_limit": "true", "page_size": limit, "show_fields": "business,children"})
         pois = data.get("pois")
         if not isinstance(pois, list):
             raise MapError("invalid_response", "Amap search response is missing a POI list.")
@@ -108,7 +126,7 @@ class AmapProvider:
     @normalize_response_errors
     def get_place(self, provider_place_id: str, region: RegionRef) -> Place:
         self._region(region)
-        data = self._request("/v5/place/detail", {"id": provider_place_id})
+        data = self._request("/v5/place/detail", {"id": provider_place_id, "show_fields": "business,children"})
         pois = data.get("pois")
         if not isinstance(pois, list) or not pois:
             raise MapError("invalid_response", "Amap detail response did not contain a POI.")
@@ -123,7 +141,7 @@ class AmapProvider:
             raise MapError("invalid_request", "Amap nearby search needs GCJ02 coordinates and valid bounds.")
         data = self._request("/v5/place/around", {"location": self._coord_text(location),
             "keywords": query, "radius": radius_meters, "page_size": limit,
-            "region": region.label, "city_limit": "true"})
+            "region": region.label, "city_limit": "true", "show_fields": "business,children"})
         if not isinstance(data.get("pois"), list):
             raise MapError("invalid_response", "Amap nearby response is missing a POI list.")
         return [self._place(item, region) for item in data["pois"]]
@@ -139,11 +157,16 @@ class AmapProvider:
             "destination": self._coord_text(query.destination.coordinates), "show_fields": "cost,polyline"}
         transit = query.mode == "transit"
         if transit:
-            # P0 is the Shanghai same-city trial. Do not invent city codes for other cities.
-            if any(place.region.label not in ("上海", "上海市") for place in (query.origin, query.destination)):
-                raise MapError("unsupported", "P0 Amap transit probe is configured for Shanghai only.")
+            codes = []
+            for place in (query.origin, query.destination):
+                fact = place.facts.get("citycode")
+                code = fact.value if fact and isinstance(fact.value, str) else None
+                code = code or {"上海": "021", "上海市": "021", "北京": "010", "北京市": "010"}.get(place.region.label)
+                if not code or not code.isdigit() or len(code) not in (3, 4):
+                    raise MapError("unsupported", "Transit requires a provider citycode or a verified Beijing/Shanghai city.")
+                codes.append(code)
             local = query.departure_at.astimezone(timezone(timedelta(hours=8)))
-            params.update(city1="021", city2="021", date=local.strftime("%Y-%m-%d"),
+            params.update(city1=codes[0], city2=codes[1], date=local.strftime("%Y-%m-%d"),
                 time=local.strftime("%H-%M"), AlternativeRoute="1")
         path = "transit/integrated" if transit else query.mode
         data = self._request("/v5/direction/" + path, params)
