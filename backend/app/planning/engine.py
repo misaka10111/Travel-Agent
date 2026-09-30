@@ -2,7 +2,7 @@ from datetime import datetime, time, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from app.planning.clustering import allocate, identity_groups, meters
+from app.planning.clustering import allocate, identity_groups, meters, same_named_place
 from app.planning.ranking import nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
 from app.planning.scheduling import schedule
@@ -57,7 +57,19 @@ def compute(state, provider, route_limit, previous=None):
     # Preserve untouched day assignments when editing a previous draft. Changes
     # enter as explicit assignments, then routes/times are recomputed.
     if previous:
-        assignments = [[by_id[s.place_id] for s in day.stops if s.category == "attraction" and s.place_id in by_id and s.place_id not in excluded] for day in previous.days]
+        retained = []
+        assignments = []
+        for day in previous.days:
+            group = []
+            for stop in day.stops:
+                place = by_id.get(stop.place_id)
+                if stop.category != "attraction" or not place or place.place_id in excluded:
+                    continue
+                if place.place_id in {p.place_id for p in retained} or any(same_named_place(place, p) for p in retained):
+                    continue
+                retained.append(place)
+                group.append(place)
+            assignments.append(group)
     anchors = [p for group in assignments for p in group]
     hotel_ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded], anchors, "hotel", intent)
     forced_hotels = [by_id[pid] for pid in required if by_id[pid].category == "hotel"]

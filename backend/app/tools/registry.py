@@ -205,8 +205,7 @@ class ToolRegistry:
                         lambda provider: match_offers(offers, state.candidates, provider, state.intent_snapshot.destination), reserve_map)
                     state.candidate_ids = list(dict.fromkeys([p.place_id for p in state.candidates] + [s.place_id for s in state.selections]))
                 if state.current_plan:
-                    state.current_plan = None
-                    state.current_plan_ref = None
+                    state.plan_needs_refresh = True
                 return state, {"status": "partial", "kind": "state", "state_status": "supplier_observed", "warnings": list(statuses.values()) or ["no_inventory_verified"]}
             places = [p for p in state.candidates if p.place_id in action.place_ids]
             enriched = await asyncio.to_thread(service.evidence, places, action.topic, reserve_model)

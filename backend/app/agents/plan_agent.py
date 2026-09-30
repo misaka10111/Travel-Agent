@@ -15,7 +15,9 @@ Read task_scope, intake_state, coverage, search_recipes and plan audit. Candidat
 search_recipes include new_count. If a hotel search yields zero, canonical hotel search has already been tried once.
 Do not issue another hotel text search with similar descriptive keywords. Use a different provider action or pause with a specific gap.
 When a search or nearby action yields no new candidates, change strategy immediately; never repeat it to fill a count.
-Preserve enough remaining calls for compute_itinerary, validate_plan and finish. If a plan exists, validate it before more broad searches.
+Preserve enough remaining calls for compute_itinerary, validate_plan and finish. If plan_needs_refresh is true,
+the visible plan is an old snapshot: compute_itinerary first; validate_plan/edit_plan/finish reject that snapshot.
+If a current plan exists and plan_needs_refresh is false, validate it before more broad searches.
 For task_scope=candidates pause after useful retrieval, explaining uncovered components. Respect a user-requested search-only scope.
 For task_scope=itinerary gather distinct parent attractions covering all days, hotels, and restaurants near distributed attraction anchors.
 Use rank_nearby with max 3 anchor_refs per call and preference_ref=intent_id. Hotel proximity considers all trip days.

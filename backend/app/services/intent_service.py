@@ -62,19 +62,19 @@ def invalidate(state, previous):
         return
     if previous.model_dump(exclude={"notes", "field_evidence", "message_refs", "unresolved_questions"}) == current.model_dump(exclude={"notes", "field_evidence", "message_refs", "unresolved_questions"}):
         if state.current_plan:
-            state.current_plan.audit = None
-            state.current_plan.status = "draft"
+            state.plan_needs_refresh = True
         return
-    state.current_plan_ref = None
-    state.current_plan = None
+    # Keep the last delivered itinerary visible while a replacement is built.
+    # It is marked stale and cannot pass validation or finish guards.
+    state.plan_needs_refresh = state.current_plan is not None
     state.travel_offers = []
     state.supplier_status = {}
-    state.plan_needs_refresh = False
     state.coverage = {}
     if previous.destination != current.destination:
         if any(s.decision == "lock" for s in state.selections):
             raise PlanningError("destination_change_conflicts_with_locked_places", 422)
         state.candidates, state.candidate_ids, state.selections = [], [], []
+        state.current_plan_ref, state.current_plan, state.plan_needs_refresh = None, None, False
         state.search_recipes = []
         state.candidates_need_refresh = False
     state.candidates_stale = previous.preferences != current.preferences or previous.dates != current.dates

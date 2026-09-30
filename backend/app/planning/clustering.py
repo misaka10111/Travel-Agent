@@ -1,4 +1,5 @@
 from math import asin, cos, radians, sin, sqrt
+import unicodedata
 
 
 def meters(a, b):
@@ -9,6 +10,14 @@ def meters(a, b):
     dlat, dlon = radians(y.latitude - x.latitude), radians(y.longitude - x.longitude)
     h = sin(dlat / 2) ** 2 + cos(radians(x.latitude)) * cos(radians(y.latitude)) * sin(dlon / 2) ** 2
     return 6371000 * 2 * asin(sqrt(min(1, h)))
+
+
+def same_named_place(a, b):
+    """Collapse duplicate provider entries, never merely nearby attractions."""
+    def key(name):
+        return "".join(char for char in unicodedata.normalize("NFKC", name).casefold()
+                       if char.isalnum())
+    return a.category == b.category == "attraction" and key(a.name) == key(b.name) and meters(a, b) <= 1500
 
 
 def identity_groups(places):
@@ -31,6 +40,8 @@ def identity_groups(places):
         for main in places:
             if child.place_id == main.place_id or main.category != "attraction":
                 continue
+            if same_named_place(child, main) and child.place_id > main.place_id:
+                parent.setdefault(child.place_id, main.place_id)
             root = main.name.removesuffix("博物馆").removesuffix("博物院")
             if len(root) >= 3 and child.name.startswith(root + "-") and meters(main, child) < 1500:
                 parent.setdefault(child.place_id, main.place_id)

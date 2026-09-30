@@ -126,7 +126,7 @@ class SessionStore:
                 data["candidates_need_refresh"] = len(data["candidates"]) != len(data["candidate_ids"])
                 if len(memory) > 3:
                     data["current_plan"] = memory[3].model_dump(mode="json") if memory[3] else None
-                    data["plan_needs_refresh"] = bool(data["current_plan_ref"] and not memory[3])
+                    data["plan_needs_refresh"] = bool(data["plan_needs_refresh"] or (data["current_plan_ref"] and not memory[3]))
                     data["travel_offers"] = memory[4] if len(memory) > 4 else []
             state = SessionState.model_validate(data)
             return Snapshot(state, ProfileSnapshot.model_validate(row.profile_json), list(row.messages_json),

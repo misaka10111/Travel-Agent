@@ -2,6 +2,7 @@
 
 from datetime import timedelta
 
+from app.planning.clustering import same_named_place
 from app.schemas.common import utc_now
 from app.schemas.itinerary import DraftAudit, PlanningIssue
 
@@ -19,7 +20,7 @@ def validate(plan, state):
         expected = (intent.dates.end_date - intent.dates.start_date).days + 1
     if len(plan.days) != expected:
         issue("day_coverage", "blocking", "日程天数与需求不一致")
-    seen, scheduled = set(), {}
+    seen, scheduled, seen_attractions = set(), {}, []
     for day in plan.days:
         if not any(s.category == "attraction" for s in day.stops):
             issue("empty_day", "blocking", "该天没有景点安排，需要补搜或调整", day.day_index)
@@ -70,9 +71,11 @@ def validate(plan, state):
             for child in stop.child_place_ids:
                 scheduled.setdefault(child, []).append((day, stop))
             if stop.category == "attraction":
-                if stop.place_id in seen or any(pid in seen for pid in stop.child_place_ids):
+                if (stop.place_id in seen or any(pid in seen for pid in stop.child_place_ids)
+                        or any(same_named_place(by_id[stop.place_id], prior) for prior in seen_attractions)):
                     issue("duplicate_attraction", "blocking", "景点或内部点位重复占用行程", day.day_index, [stop.place_id])
                 seen.update([stop.place_id] + stop.child_place_ids)
+                seen_attractions.append(by_id[stop.place_id])
                 hours = by_id[stop.place_id].facts.get("opening_windows")
                 if hours and hours.value and day.date and isinstance(hours.value, list) and (not hours.valid_until or hours.valid_until >= utc_now()):
                     windows = [w for w in hours.value if isinstance(w, dict) and (w.get("date") == str(day.date) or w.get("weekday") == day.date.weekday())]

@@ -134,13 +134,8 @@ async def edit_session(session_id: str, body: EditSession, runtime=Depends(owned
     state.status, state.attention_reason = "draft", None
     state.agent_message = None
     state.pending_questions = []
-    if body.intent_patch is not None or body.selections is not None:
-        state.current_plan_ref, state.current_plan = None, None
-        state.plan_needs_refresh = False
-    elif state.current_plan:
-        # A free-text local edit needs the previous plan/stop IDs in Plan's context.
-        state.current_plan.audit = None
-        state.current_plan.status = "draft"
+    if state.current_plan:
+        state.plan_needs_refresh = True
     # A manual edit supersedes unanswered interpretation jobs from the previous intent.
     for message in snapshot.messages:
         if message.get("kind") in {"answer", "intake"} and not message.get("processed"):
