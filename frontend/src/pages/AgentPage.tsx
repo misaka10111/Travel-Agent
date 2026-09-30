@@ -15,6 +15,7 @@ const ATTENTION: Record<string, string> = {
   budget_exhausted_or_obsolete: '本次调用额度已用完。',
   model_request_failed: '模型服务本次请求失败，请稍后重试。',
   plan_paused: '规划暂时停下，请查看具体缺口。',
+  server_shutdown_resume_available: '后端重启中断了执行。地点和路线需要重新获取，可继续规划或保留需求建立新尝试。',
 };
 function clock(value: number | null) { return value === null ? '待确认' : `${String(Math.floor(value / 60)).padStart(2, '0')}:${String(value % 60).padStart(2, '0')}`; }
 function saved<T>(key: string, fallback: T): T { try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; } catch { return fallback; } }

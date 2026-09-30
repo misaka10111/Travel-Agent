@@ -116,6 +116,9 @@ class SessionStore:
             data = dict(row.state_json)
             data.update(state_version=row.state_version, status=row.status,
                 budget_usage={"used": row.model_calls + row.map_calls, "limit": row.model_limit + row.map_limit})
+            if row.status == "running" and row.lease_until <= time.time():
+                data["status"] = "needs_attention"
+                data["attention_reason"] = "server_shutdown_resume_available"
             memory = self._places.get(session_id)
             if memory and memory[0] == row.state_version:
                 data["agent_message"] = memory[2]

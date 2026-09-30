@@ -295,6 +295,19 @@ def test_hotel_search_uses_one_canonical_fallback_and_records_real_yield(harness
     assert next_state.search_recipes[-1].new_count == 1
 
 
+def test_expired_worker_lease_is_displayed_as_resumable(harness):
+    client, runtime, _, factory, _ = harness
+    url, headers, created = create(client)
+    with factory() as db:
+        row = db.get(PlanningSession, created["state"]["session_id"])
+        row.status, row.lease_id, row.lease_until = "running", "old-worker", time.time() - 1
+        db.commit()
+    view = client.get(url, headers=headers).json()
+    assert view["state"]["status"] == "needs_attention"
+    assert view["state"]["attention_reason"] == "server_shutdown_resume_available"
+    assert run(client, url, headers, view["state"]["state_version"]).status_code == 202
+
+
 def test_answer_ids_versions_options_and_field_scope(harness):
     client, _, _, _, _ = harness
     url, headers, _ = create(client, known=False)
