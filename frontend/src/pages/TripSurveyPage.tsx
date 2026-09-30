@@ -24,7 +24,7 @@ const PURPOSES = [
   '亲子游', '蜜月', '商务出行', '户外探险', '购物',
 ];
 
-type MultiKey = 'budget_tiers' | 'purposes';
+type MultiKey = 'purposes';
 type SingleKey =
   | 'destination'
   | 'origin'
@@ -191,14 +191,17 @@ export function TripSurveyPage() {
             </div>
           </TripField>
 
-          <TripField label="5. 预算档位（可多选）">
+          <TripField label="5. 预算档位（单选）">
             <div className="profile-options">
               {BUDGET_TIERS.map((o) => (
                 <button
                   key={o}
                   type="button"
                   className={`profile-option${form.budget_tiers.includes(o) ? ' active' : ''}`}
-                  onClick={() => toggleMulti('budget_tiers', o)}
+                  onClick={() => {
+                    setSaved(false);
+                    setForm((prev) => ({ ...prev, budget_tiers: [o] }));
+                  }}
                 >
                   {o}
                 </button>

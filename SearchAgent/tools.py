@@ -75,6 +75,16 @@ FOOD_FEATURE_PROMPT = (
     "只输出 JSON，不要任何多余文字或代码块。"
 )
 
+RESTAURANT_PROMPT = (
+    "你是美食餐厅提取助手。根据多个社交平台的搜索结果，提取当地美食的候选餐厅。"
+    "输出 JSON：{\"food\":[{\"category\":\"菜系或类型\",\"options\":["
+    "{\"name\":\"餐厅名\",\"link\":\"平台链接\",\"source\":\"抖音/大众点评/小红书\"},"
+    "{\"name\":\"餐厅名2\",\"link\":\"链接2\",\"source\":\"平台\"}]}]}。"
+    "每个 category 返回两个候选餐厅（options），链接优先来自抖音/大众点评/小红书的具体内容链接，"
+    "找不到对应平台链接就留空字符串。提取 4~5 个 category，共 8~10 个餐厅。"
+    "餐厅名和链接尽量来自搜索结果原文，不要编造。只输出 JSON，不要任何多余文字或代码块。"
+)
+
 
 FLYAI_BIN = Path(__file__).resolve().parent / "node_modules" / ".bin" / "flyai"
 
@@ -545,11 +555,68 @@ def _fetch_events(
     return _extract_item_features(items, EVENTS_FEATURE_PROMPT)
 
 
+def _extract_restaurants(platform_results: dict[str, list[dict]]) -> list[dict]:
+    """用 LLM 从多平台搜索结果提取餐厅列表（每个类别两个候选）。"""
+    client = OpenAI(
+        api_key=os.getenv("OPENAI_API_KEY"),
+        base_url=os.getenv("OPENAI_BASE_URL"),
+    )
+    brief: dict[str, list[dict]] = {}
+    for platform, items in platform_results.items():
+        brief[platform] = [
+            {"title": x.get("title") or "", "url": x.get("url") or ""}
+            for x in items
+        ]
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        messages=[
+            {"role": "system", "content": RESTAURANT_PROMPT},
+            {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=6000,
+        timeout=60,
+    )
+    content = (resp.choices[0].message.content or "{}").strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content).get("food") or []
+
+
 def _fetch_food(destination: str, max_results: int = 10) -> list[dict]:
-    """搜索当地美食（大众点评/小红书/抖音等平台），复用 Tavily。"""
-    query = f"{destination} 美食 必吃 餐厅 小吃 大众点评 小红书 抖音 探店"
-    items = _fetch_web_search(query, max_results=max_results)
-    return _extract_item_features(items, FOOD_FEATURE_PROMPT)
+    """搜索当地美食：多平台定向搜索 + LLM 提取候选餐厅（每个类别两个）。"""
+    queries = {
+        "抖音": f"{destination} 美食 探店 抖音",
+        "大众点评": f"{destination} 必吃 餐厅 大众点评",
+        "小红书": f"{destination} 美食 探店 小红书",
+    }
+    platform_results: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
+        futures = {p: executor.submit(_fetch_web_search, q, 6) for p, q in queries.items()}
+        for p, future in futures.items():
+            platform_results[p] = future.result()
+
+    try:
+        return _extract_restaurants(platform_results)
+    except Exception:
+        fallback = []
+        for platform, items in platform_results.items():
+            for x in items:
+                fallback.append(
+                    {
+                        "category": platform,
+                        "options": [
+                            {
+                                "name": x.get("title") or "",
+                                "link": x.get("url") or "",
+                                "source": platform,
+                            }
+                        ],
+                    }
+                )
+        return fallback
 
 
 # ================= 文本格式化（MCP 工具用） =================
