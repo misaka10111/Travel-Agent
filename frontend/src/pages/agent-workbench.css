@@ -31,6 +31,7 @@
 .ta-candidate-lane h3 { margin: 0 0 10px; font-size: 14px; color: #5c6880; }
 .ta-option-card { display: flex; flex-direction: column; gap: 7px; margin-bottom: 10px; padding: 15px 16px; border: 1px solid #e2e7f1; border-radius: 16px; background: #fff; }
 .ta-option-card.selected { border-color: #aeb9fb; background: #f8f9ff; }
+.ta-option-card.focused { border-color: #697bed; box-shadow: 0 0 0 2px rgba(105, 123, 237, .13); }
 .ta-option-card strong { font-size: 15px; color: #1d2c49; }
 .ta-option-card p { margin: 0; color: #5b6880; line-height: 1.45; font-size: 13px; }
 .ta-option-card small { color: #8a96aa; line-height: 1.45; }
@@ -49,8 +50,11 @@
 .ta-map-view-toggle button.active { border-color: #aebafa; background: #eef1ff; color: #4759c9; font-weight: 700; }
 .ta-map-image { display: block; width: calc(100% - 28px); height: 230px; margin: 0 14px; object-fit: contain; border-radius: 12px; background: #f2f4fa; }
 .ta-map-sketch { position: relative; margin: 0 14px; border-radius: 12px; overflow: hidden; background: #f5f7fb; }
-.ta-map-sketch svg { display: block; width: 100%; height: 230px; }
+.ta-map-sketch svg { display: block; width: 100%; height: 230px; touch-action: none; cursor: grab; }
+.ta-map-sketch svg:active { cursor: grabbing; }
 .ta-map-sketch span { position: absolute; left: 8px; bottom: 7px; padding: 4px 7px; border-radius: 6px; background: rgba(255,255,255,.9); color: #657289; font-size: 10px; }
+.ta-sketch-controls { position: absolute; z-index: 2; top: 8px; right: 8px; display: flex; gap: 4px; }
+.ta-sketch-controls button { min-width: 29px; height: 27px; padding: 0 6px; border: 1px solid #cbd5e8; border-radius: 7px; background: rgba(255,255,255,.94); color: #4058b7; cursor: pointer; font-size: 12px; }
 .ta-sketch-marker { cursor: pointer; }
 .ta-map-empty { display: grid; place-items: center; min-height: 200px; margin: 0 14px; padding: 16px; box-sizing: border-box; border-radius: 12px; background: #f2f5fa; color: #7c899e; text-align: center; font-size: 13px; }
 .ta-map-caption, .ta-map-focus { margin: 9px 17px 13px; color: #748096; font-size: 11px; line-height: 1.4; }
