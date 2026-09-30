@@ -43,7 +43,20 @@ function saved<T>(key: string, fallback: T): T {
   try { return JSON.parse(localStorage.getItem(key) ?? 'null') ?? fallback; } catch { return fallback; }
 }
 function routeLabel(route: Route) {
-  if (route.status !== 'ok') return '这段路线尚未查询成功';
+  if (route.status !== 'ok') {
+    const reasons: Record<string, string> = {
+      nearby_meal_coverage_required: '景点附近的用餐地点还没补齐，路线查询暂缓',
+      route_phase_budget_exhausted: '本次规划可用的地图查询次数已用完，路线待补查',
+      budget_exhausted: '本次规划可用的地图查询次数已用完，路线待补查',
+      rate_limited: '地图服务暂时限制查询，请稍后补查',
+      unavailable: '地图服务暂时不可用，请稍后补查',
+      permission_denied: '地图服务暂未授权这段路线',
+      provider_returned_no_route: '地图服务没有找到可用路线',
+      provider_missing_duration_or_distance: '地图服务未返回完整的耗时或距离',
+      unsupported: '当前交通方式暂不支持这段路线',
+    };
+    return reasons[route.unknown_reason ?? ''] ?? '这段路线缺少可核实的交通数据';
+  }
   const lines = route.steps.map(step => step.line_name).filter(Boolean).join(' → ');
   const minutes = Math.ceil((route.duration_seconds ?? 0) / 60);
   return `${MODE[route.mode] ?? '交通'}约 ${minutes} 分钟 · ${((route.distance_meters ?? 0) / 1000).toFixed(1)} 公里${lines ? ` · ${lines}` : ''}`;
