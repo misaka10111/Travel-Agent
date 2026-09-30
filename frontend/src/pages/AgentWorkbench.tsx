@@ -49,6 +49,48 @@ function routeLabel(route: Route) {
   return `${MODE[route.mode] ?? '交通'}约 ${minutes} 分钟 · ${((route.distance_meters ?? 0) / 1000).toFixed(1)} 公里${lines ? ` · ${lines}` : ''}`;
 }
 
+function RouteSketch({ plan, dayIndex, places, focusPlace, onFocus }: {
+  plan: Draft; dayIndex: number; places: Map<string, Place>; focusPlace: string | null; onFocus: (id: string) => void;
+}) {
+  const day = plan.days.find(item => item.day_index === dayIndex);
+  if (!day) return <div className="ta-map-empty">这一天还没有可显示的地点。</div>;
+  const stops = day.stops.map(stop => ({ stop, place: places.get(stop.place_id) }))
+    .filter((entry): entry is { stop: typeof day.stops[number]; place: Place } =>
+      !!entry.place?.coordinates && entry.place.coordinates.crs === 'GCJ02');
+  if (!stops.length) return <div className="ta-map-empty">这些地点的坐标还需要重新查询。</div>;
+  const traces = day.routes.filter(route => route.status === 'ok' && route.geometry?.crs === 'GCJ02' && route.geometry.encoding === 'points')
+    .map(route => route.geometry!.points).filter(points => points.length > 1);
+  const points = [...stops.map(item => item.place.coordinates!), ...traces.flat()];
+  const middleLatitude = points.reduce((sum, point) => sum + point.latitude, 0) / points.length;
+  const cosine = Math.cos(middleLatitude * Math.PI / 180);
+  const xs = points.map(point => point.longitude * cosine);
+  const ys = points.map(point => point.latitude);
+  const minX = Math.min(...xs); const maxX = Math.max(...xs);
+  const minY = Math.min(...ys); const maxY = Math.max(...ys);
+  const scale = Math.min(560 / Math.max(maxX - minX, .002), 250 / Math.max(maxY - minY, .002));
+  const offsetX = (640 - (maxX - minX) * scale) / 2;
+  const offsetY = (330 - (maxY - minY) * scale) / 2;
+  const position = (point: { longitude: number; latitude: number }) => ({
+    x: offsetX + (point.longitude * cosine - minX) * scale,
+    y: offsetY + (maxY - point.latitude) * scale,
+  });
+  return <div className="ta-map-sketch"><svg viewBox="0 0 640 330" role="img" aria-label={`第 ${dayIndex} 天的地点位置示意图`}>
+    <defs><pattern id="trip-map-grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M 40 0 L 0 0 0 40" fill="none" stroke="#e5eaf3" strokeWidth="1" /></pattern></defs>
+    <rect width="640" height="330" fill="#f5f7fb" /><rect width="640" height="330" fill="url(#trip-map-grid)" />
+    {traces.map((trace, index) => <polyline key={index} points={trace.map(point => {
+      const at = position(point); return `${at.x},${at.y}`;
+    }).join(' ')} fill="none" stroke="#697be8" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />)}
+    {stops.map(({ stop, place }, index) => {
+      const at = position(place.coordinates!);
+      const focused = focusPlace === place.place_id;
+      return <g key={stop.stop_id} onClick={() => onFocus(place.place_id)} className="ta-sketch-marker">
+        <title>{place.name}</title><circle cx={at.x} cy={at.y} r={focused ? 15 : 12} fill={stop.category === 'hotel' ? '#5969d6' : '#e97856'} stroke="white" strokeWidth="3" />
+        <text x={at.x} y={at.y + 4} textAnchor="middle" fill="white" fontSize="11" fontWeight="700">{stop.category === 'hotel' ? 'H' : index + 1}</text>
+      </g>;
+    })}
+  </svg><span>位置示意 · 仅蓝线为已查到的真实路线</span></div>;
+}
+
 export function AgentWorkbench() {
   const location = useLocation();
   const [draft, setDraft] = useState('');
@@ -145,8 +187,8 @@ export function AgentWorkbench() {
       setMapNotice(result.total > result.shown ? '地图显示部分已查到的路线；全部交通段请看下方行程。' : '地图展示当天地点及已查到的实际路线。');
     }).catch(() => { if (active) {
       setMapUrl(null);
-      setMapNotice(state?.plan_needs_refresh ? '地点和路线正在重新查询，完成后地图会恢复。' :
-        '地图暂时无法加载，地点与交通仍可在下方行程查看。');
+      setMapNotice(state?.plan_needs_refresh ? '底图和路线正在重新查询；当前显示已知地点的位置示意。' :
+        '底图暂时无法加载；当前显示已知地点的位置示意。');
     } });
     return () => { active = false; };
   }, [credential, plan?.plan_id, plan?.version, dayIndex, running, snapshot, state?.plan_needs_refresh]);
@@ -295,8 +337,9 @@ export function AgentWorkbench() {
           <header className="ta-panel-header"><span>行程地图</span><h2>{state?.intent_snapshot.destination.label ?? '目的地'} · 第 {dayIndex} 天</h2></header>
           {plan && <div className="ta-day-tabs">{plan.days.map(day => <button key={day.day_index}
             className={dayIndex === day.day_index ? 'active' : ''} onClick={() => { setDayIndex(day.day_index); setFocusPlace(null); setMapUrl(null); }}>{day.day_index}</button>)}</div>}
-          {mapUrl ? <img className="ta-map-image" src={mapUrl} alt={`第 ${dayIndex} 天的高德地点与路线地图`} /> :
-            <div className="ta-map-empty">{plan ? '正在加载当天地图…' : '行程生成后会显示地点与路线地图。'}</div>}
+          {mapUrl ? <img className="ta-map-image" src={mapUrl} alt={`第 ${dayIndex} 天的高德地点与路线地图`} /> : plan ?
+            <RouteSketch plan={plan} dayIndex={dayIndex} places={places} focusPlace={focusPlace} onFocus={setFocusPlace} /> :
+            <div className="ta-map-empty">行程生成后会显示地点与路线地图。</div>}
           <p className="ta-map-caption">{mapNotice}</p>
           {focusPlace && <p className="ta-map-focus">当前关注：{name(focusPlace)}</p>}
         </section>
