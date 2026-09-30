@@ -135,6 +135,7 @@ export function AgentWorkbench() {
   const initialized = useRef(false);
   const observed = useRef('');
   const state = view?.state;
+  const timerKey = credential ? `travelPlanStarted:${credential.id}` : null;
   const running = state?.status === 'running';
   const canRetry = state?.status === 'needs_attention' && state.retry_generation === 0 && !state.retry_child_ref;
   const visible = snapshot ?? (state?.current_plan ? { plan: state.current_plan, places: state.candidates } : null);
@@ -186,15 +187,24 @@ export function AgentWorkbench() {
 
   useEffect(() => {
     if (busy || running) {
-      if (updateStartedAt === null) { setUpdateStartedAt(Date.now()); setElapsedSeconds(0); return; }
+      if (updateStartedAt === null) {
+        const savedStart = timerKey ? Number(sessionStorage.getItem(timerKey)) : NaN;
+        const start = Number.isFinite(savedStart) && savedStart > 0 && Date.now() - savedStart < 3600000 ? savedStart : Date.now();
+        setUpdateStartedAt(start); setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+        if (timerKey) sessionStorage.setItem(timerKey, String(start));
+        return;
+      }
+      if (timerKey) sessionStorage.setItem(timerKey, String(updateStartedAt));
       const timer = setInterval(() => setElapsedSeconds(Math.floor((Date.now() - updateStartedAt) / 1000)), 1000);
       return () => clearInterval(timer);
     }
+    if (!state) return;
+    if (timerKey) sessionStorage.removeItem(timerKey);
     if (updateStartedAt !== null) {
       setLastDuration(Math.floor((Date.now() - updateStartedAt) / 1000));
       setUpdateStartedAt(null);
     }
-  }, [busy, running, updateStartedAt]);
+  }, [busy, running, updateStartedAt, timerKey, !!state]);
 
   useEffect(() => {
     if (state?.current_plan && state.status !== 'running' && !state.plan_needs_refresh) {
@@ -269,10 +279,13 @@ export function AgentWorkbench() {
   }
   async function retry() {
     if (!credential || !state || busy || !canRetry) return;
+    const started = Date.now();
     setBusy(true); setError('');
     try {
       const created = await planning.retry(credential, state.state_version);
       const access = { id: created.state.session_id, token: created.access_token };
+      if (timerKey) sessionStorage.removeItem(timerKey);
+      setUpdateStartedAt(started); setElapsedSeconds(0);
       sessionStorage.setItem(SAVED, JSON.stringify(access)); setCredential(access); setView(created);
       say('已保留本次需求与选择，正在重新生成行程。');
       await run(access, created);
@@ -301,7 +314,9 @@ export function AgentWorkbench() {
     catch (cause) { setError(friendlyError(cause)); }
   }
   function newTrip() {
+    if (timerKey) sessionStorage.removeItem(timerKey);
     sessionStorage.removeItem(SAVED); setCredential(null); setView(null); setSnapshot(null);
+    setUpdateStartedAt(null); setElapsedSeconds(0); setLastDuration(null);
     setMessages([]); setError(''); setMapUrl(null); observed.current = '';
   }
   function onSubmit(event: FormEvent) { event.preventDefault(); void submit(draft); }
