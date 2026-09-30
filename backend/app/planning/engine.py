@@ -1,7 +1,7 @@
 from datetime import timedelta
 from uuid import uuid4
 
-from app.planning.clustering import allocate, identity_groups, meters, same_visit_area
+from app.planning.clustering import allocate, identity_groups, meters, order_day_visits, same_visit_area
 from app.planning.budgeting import summarize_costs
 from app.planning.ranking import hotel_ranking, nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
@@ -104,19 +104,11 @@ def compute(state, provider, route_limit, previous=None):
     for i, assigned in enumerate(assignments, 1):
         date = intent.dates.start_date + timedelta(days=i - 1) if intent.dates.start_date else None
         if assigned:
-            # Use spatial ordering as a shortlist heuristic. Only the final
-            # scheduled legs may consume map route calls.
-            if hotel:
-                assigned.sort(key=lambda p: meters(hotel, p))
-            ordered = []
-            remaining = assigned[:]
-            cursor = hotel or remaining[0]
-            while remaining:
-                chosen = min(remaining, key=lambda p: meters(cursor, p))
-                ordered.append(chosen)
-                remaining.remove(chosen)
-                cursor = chosen
-            assigned = ordered
+            # Include the actual arrival/departure station in the shortlist
+            # geometry. Only the chosen order consumes directed map calls.
+            start = transfers["outbound"]["place"] if i == 1 and "outbound" in transfers else hotel
+            end = transfers["inbound"]["place"] if i == count and "inbound" in transfers else hotel
+            assigned = order_day_visits(assigned, start, end)
         restaurants = []
         for anchor in ([assigned[0], assigned[-1]] if assigned else []):
             ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded

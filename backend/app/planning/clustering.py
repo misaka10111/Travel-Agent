@@ -1,3 +1,4 @@
+from itertools import permutations
 from math import asin, cos, radians, sin, sqrt
 import re
 import unicodedata
@@ -108,3 +109,46 @@ def allocate(places, count, per_day, required_ids, fixed_days, scores, spread_se
         chosen = min(possible, key=lambda i: (min((meters(place, p) for p in days[i]), default=0), len(days[i])))
         days[chosen].append(place)
     return days
+
+
+def order_day_visits(places, start=None, end=None):
+    """Choose a short visit order without spending route API calls.
+
+    The endpoints are the actual arrival/departure station when known, otherwise
+    the selected hotel. This is a straight-line shortlist heuristic; schedule()
+    still obtains directed travel times from the map provider.
+    """
+    if len(places) < 2:
+        return list(places)
+
+    def length(path):
+        chain = ([start] if start else []) + list(path) + ([end] if end else [])
+        return sum(meters(a, b) for a, b in zip(chain, chain[1:]))
+
+    # Normal days have 2-3 attractions. A bounded exact search also handles
+    # extra explicitly required visits without an all-pairs map request.
+    if len(places) <= 6:
+        return list(min(permutations(places), key=lambda path: (length(path), tuple(p.place_id for p in path))))
+
+    remaining = list(places)
+    ordered = []
+    cursor = start or remaining[0]
+    while remaining:
+        chosen = min(remaining, key=lambda p: (meters(cursor, p), p.place_id))
+        ordered.append(chosen)
+        remaining.remove(chosen)
+        cursor = chosen
+    # For unusually large required groups, improve the return leg as well.
+    for _ in range(len(ordered)):
+        best = ordered
+        best_length = length(best)
+        for i in range(len(ordered) - 1):
+            for j in range(i + 1, len(ordered)):
+                candidate = ordered[:i] + list(reversed(ordered[i:j + 1])) + ordered[j + 1:]
+                cost = length(candidate)
+                if cost < best_length:
+                    best, best_length = candidate, cost
+        if best is ordered:
+            break
+        ordered = best
+    return ordered
