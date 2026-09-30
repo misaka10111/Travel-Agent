@@ -134,12 +134,21 @@ def plan_node(state: State) -> dict:
     return {"plan": result, "iteration": state.get("iteration", 0) + 1}
 
 
+def _plan_for_validate(plan: dict | None) -> dict | None:
+    """折线只给前端画图用，送审时去掉，只保留每段路线的方式和耗时。"""
+    if not isinstance(plan, dict) or not plan.get("legs"):
+        return plan
+    trimmed = dict(plan)
+    trimmed["legs"] = [{k: v for k, v in leg.items() if k != "polyline"} for leg in plan["legs"]]
+    return trimmed
+
+
 def validate_node(state: State) -> dict:
     result = _call(
         VALIDATE_PYTHON,
         VALIDATE_PY,
         {
-            "plan": state.get("plan"),
+            "plan": _plan_for_validate(state.get("plan")),
             "profile": state.get("profile"),
             "search": state.get("search"),
             "basic": state.get("basic"),

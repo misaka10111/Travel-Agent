@@ -1,5 +1,8 @@
 import { useMemo, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import { api } from '../api/client';
+import { TripMap } from '../components/TripMap';
+import type { RouteBlock, RouteLeg } from '../components/TripMap';
 
 type ChatMessage = {
   id: string;
@@ -51,6 +54,13 @@ type SpotOption = BaseOption & {
 };
 
 type OptionItem = FlightOption | HotelOption | SpotOption;
+
+type RoutePlan = {
+  destination: string;
+  styles: string[];
+  blocks: RouteBlock[];
+  legs: RouteLeg[];
+};
 
 const flights: FlightOption[] = [
   {
@@ -251,6 +261,23 @@ export function AgentPage() {
   const [activeTab, setActiveTab] = useState<OptionType>('flight');
   const [planItemIds, setPlanItemIds] = useState<string[]>([]);
   const [detailItem, setDetailItem] = useState<OptionItem | null>(null);
+  const [routePlan, setRoutePlan] = useState<RoutePlan | null>(null);
+  const [activeStyle, setActiveStyle] = useState('');
+  const [activeDay, setActiveDay] = useState<number | 'all'>('all');
+  const [planning, setPlanning] = useState(false);
+
+  const styleBlocks = useMemo(
+    () => routePlan?.blocks.filter((b) => b.plan_style === activeStyle) ?? [],
+    [routePlan, activeStyle],
+  );
+  const styleLegs = useMemo(
+    () => routePlan?.legs.filter((leg) => leg.plan_style === activeStyle) ?? [],
+    [routePlan, activeStyle],
+  );
+  const planDays = useMemo(
+    () => Array.from(new Set(styleBlocks.map((b) => b.day))).sort((a, b) => a - b),
+    [styleBlocks],
+  );
 
   const visibleOptions: OptionItem[] = useMemo(() => {
     if (activeTab === 'flight') return flights;
@@ -274,9 +301,51 @@ export function AgentPage() {
     [travelPlan],
   );
 
+  function addAssistantMessage(content: string) {
+    setMessages((prev) => [...prev, { id: buildId(), role: 'assistant', content }]);
+  }
+
+  async function requestPlan(query: string) {
+    setPlanning(true);
+    try {
+      const raw = await api.plan({ query });
+      if (typeof raw.error === 'string') {
+        addAssistantMessage(`规划失败：${raw.error}`);
+        return;
+      }
+      const plan = (raw.plan ?? {}) as {
+        destination?: string;
+        plans?: Array<{ style?: string }>;
+        blocks?: RouteBlock[];
+        legs?: RouteLeg[];
+        error?: string;
+      };
+      if (plan.error) {
+        addAssistantMessage(`规划失败：${plan.error}`);
+        return;
+      }
+      const styles = (plan.plans ?? []).map((p) => p.style ?? '').filter(Boolean);
+      const blocks = plan.blocks ?? [];
+      const legs = plan.legs ?? [];
+      setRoutePlan({ destination: plan.destination ?? '', styles, blocks, legs });
+      setActiveStyle(styles[0] ?? '');
+      setActiveDay('all');
+      const located = blocks.filter((b) => b.lng != null).length;
+      addAssistantMessage(
+        legs.length > 0
+          ? `已为「${plan.destination}」生成 ${styles.length} 个方案，右上地图展示了 ${located} 个地点和 ${legs.length} 段真实路线。`
+          : `已为「${plan.destination}」生成 ${styles.length} 个方案，但没有拿到地图路线（检查 PlanAgent 的 AMAP_KEY）。`,
+      );
+    } catch (err) {
+      addAssistantMessage(`规划失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPlanning(false);
+    }
+  }
+
   function handleSend() {
     const content = draft.trim();
-    if (!content) return;
+    if (!content || planning) return;
 
     setMessages((prev) => [
       ...prev,
@@ -288,12 +357,12 @@ export function AgentPage() {
       {
         id: buildId(),
         role: 'assistant',
-        content:
-          '已收到你的补充需求。当前先用 Mock 数据展示交互；接入后端后，这里会根据对话动态更新右侧的候选行程。',
+        content: '正在搜索并规划行程，通常需要 1~2 分钟…',
       },
     ]);
 
     setDraft('');
+    void requestPlan(content);
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -393,7 +462,7 @@ export function AgentPage() {
               type="button"
               className="ta-send-button"
               onClick={handleSend}
-              disabled={!draft.trim()}
+              disabled={!draft.trim() || planning}
             >
               发送
             </button>
@@ -498,14 +567,57 @@ export function AgentPage() {
             <div className="ta-panel-header ta-compact-header">
               <div>
                 <span className="ta-section-kicker">MAP</span>
-                <h2>地图</h2>
+                <h2>{routePlan?.destination ? `${routePlan.destination} 路线` : '地图'}</h2>
               </div>
+
+              {routePlan && routePlan.styles.length > 1 && (
+                <div className="ta-tabs">
+                  {routePlan.styles.map((style) => (
+                    <button
+                      key={style}
+                      type="button"
+                      className={style === activeStyle ? 'active' : ''}
+                      onClick={() => {
+                        setActiveStyle(style);
+                        setActiveDay('all');
+                      }}
+                    >
+                      {style}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
-            <div className="ta-map-placeholder">
-              <span>地图区域</span>
-              <p>当前阶段预留</p>
-            </div>
+            {routePlan ? (
+              <>
+                <div className="ta-tabs ta-map-days">
+                  <button
+                    type="button"
+                    className={activeDay === 'all' ? 'active' : ''}
+                    onClick={() => setActiveDay('all')}
+                  >
+                    全部
+                  </button>
+                  {planDays.map((day) => (
+                    <button
+                      key={day}
+                      type="button"
+                      className={activeDay === day ? 'active' : ''}
+                      onClick={() => setActiveDay(day)}
+                    >
+                      D{day}
+                    </button>
+                  ))}
+                </div>
+                <TripMap blocks={styleBlocks} legs={styleLegs} day={activeDay} />
+              </>
+            ) : (
+              <div className="ta-map-placeholder">
+                <span>{planning ? '正在规划路线…' : '地图区域'}</span>
+                <p>{planning ? '生成后会在这里显示每天的路线' : '在左侧描述你的行程，例如「宁波 10月1日到10月3日」'}</p>
+              </div>
+            )}
           </section>
 
           <section className="ta-plan-card">

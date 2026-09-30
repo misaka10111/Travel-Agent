@@ -9,6 +9,7 @@ venv/
 .mypy_cache/
 .ruff_cache/
 SearchAgent/cache/
+PlanAgent/route_cache.json
 *.db
 *.sqlite3
 .env

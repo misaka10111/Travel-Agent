@@ -4171,3 +4171,28 @@ button:disabled {
   align-items: center;
   text-align: center;
 }
+/* Trip route map */
+.ta-map-canvas {
+  flex: 1 1 0;
+  min-height: 200px;
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.ta-map-days {
+  margin-bottom: 8px;
+}
+
+.ta-map-marker span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(20, 30, 50, 0.35);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
