@@ -3,7 +3,9 @@
 import time
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import Response
 
 from app.agents.client import JsonModelClient
 from app.agents.plan_agent import PlanAgent
@@ -55,6 +57,56 @@ async def create_session(body: CreateSession, runtime=Depends(get_runtime)):
 @router.get("/{session_id}", response_model=SessionView)
 async def get_session(session_id: str, runtime=Depends(owned_session)):
     return runtime.store.view(session_id)
+
+
+@router.get("/{session_id}/map")
+async def day_map(session_id: str, day_index: int = Query(ge=1, le=30), runtime=Depends(owned_session)):
+    """Proxy one authenticated static map; the Web Service key stays server-side."""
+    state = runtime.store.load(session_id).state
+    day = next((d for d in state.current_plan.days if d.day_index == day_index), None) if state.current_plan else None
+    if day is None:
+        raise PlanningError("map_day_unavailable", 404)
+    by_id = {p.place_id: p for p in state.candidates}
+    nodes = []
+    for stop in day.stops:
+        point = by_id.get(stop.place_id)
+        if point and point.coordinates and point.coordinates.crs == "GCJ02" and point.place_id not in {p.place_id for p in nodes}:
+            nodes.append(point)
+    if not nodes:
+        raise PlanningError("map_coordinates_unavailable", 422)
+    key = get_settings().amap_web_service_key
+    if not key:
+        raise PlanningError("map_service_unavailable", 503)
+    coord = lambda point: f"{point.longitude:.6f},{point.latitude:.6f}"
+    markers = []
+    for index, point in enumerate(nodes[:10], 1):
+        label = "H" if point.category == "hotel" else str(index % 10)
+        color = "0x5667E9" if point.category == "hotel" else "0xEE7651"
+        markers.append(f"mid,{color},{label}:{coord(point.coordinates)}")
+    paths = []
+    eligible = [leg for leg in day.routes if leg.status == "ok" and leg.geometry and
+                leg.geometry.crs == "GCJ02" and leg.geometry.encoding == "points"]
+    for leg in eligible[:4]:
+        points = leg.geometry.points
+        stride = max(1, len(points) // 40)
+        sample = points[::stride]
+        if sample[-1] != points[-1]:
+            sample.append(points[-1])
+        if len(sample) >= 2:
+            paths.append("5,0x5667E9,0.85,," + ":" + ";".join(coord(point) for point in sample))
+    params = {"key": key.get_secret_value(), "size": "640*330", "markers": "|".join(markers)}
+    if paths:
+        params["paths"] = "|".join(paths)
+    try:
+        async with httpx.AsyncClient(follow_redirects=False, timeout=get_settings().map_request_timeout_seconds) as client:
+            response = await client.get("https://restapi.amap.com/v3/staticmap", params=params)
+    except httpx.RequestError:
+        raise PlanningError("map_service_unavailable", 503) from None
+    if response.status_code != 200 or not response.headers.get("content-type", "").startswith("image/") or len(response.content) > 3_000_000:
+        raise PlanningError("map_service_unavailable", 503)
+    return Response(content=response.content, media_type=response.headers["content-type"],
+        headers={"Cache-Control": "private, max-age=120", "X-Route-Segments-Shown": str(len(paths)),
+                 "X-Route-Segments-Total": str(len(eligible))})
 
 
 @router.post("/{session_id}/run", response_model=SessionView, status_code=202)
