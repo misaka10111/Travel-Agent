@@ -27,8 +27,16 @@ def validate(plan, state):
             issue("hotel_missing", "blocking", "多日行程缺少住宿候选", day.day_index)
         if sum(s.category == "restaurant" for s in day.stops) < 2:
             issue("meals_missing", "blocking", "缺少午餐或晚餐候选", day.day_index)
-        if day.hotel_place_id and (not day.stops or day.stops[0].place_id != day.hotel_place_id or day.stops[-1].place_id != day.hotel_place_id):
+        if day.hotel_place_id and (not day.stops or
+                (day.stops[0].place_id != day.hotel_place_id and not (day.day_index == 1 and day.stops[0].category == "transport" and plan.selected_offer_ids)) or
+                (day.stops[-1].place_id != day.hotel_place_id and not (day.day_index == len(plan.days) and day.stops[-1].category == "transport" and plan.selected_offer_ids))):
             issue("hotel_roundtrip_missing", "blocking", "缺少住宿出发或返回节点", day.day_index)
+        if day.departure_deadline_minute is not None and day.stops:
+            last = day.stops[-1]
+            if last.end_minute is None:
+                issue("departure_connection_unknown", "unknown", "返程接驳耗时尚未确定", day.day_index)
+            elif last.end_minute > day.departure_deadline_minute:
+                issue("departure_connection_missed", "blocking", "无法在返程班次出发前完成接驳及候车缓冲", day.day_index)
         pairs = [(a, b) for a, b in zip(day.stops, day.stops[1:]) if a.place_id != b.place_id]
         # Match each occurrence, not just a set of endpoints: repeated directed
         # edges at different times each need their own route observation.

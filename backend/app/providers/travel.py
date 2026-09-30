@@ -13,9 +13,11 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 import httpx
+from pydantic import ValidationError
 
 from app.schemas.common import utc_now
 from app.schemas.place import Fact
+from app.schemas.travel import TravelOffer
 
 
 def _time(value):
@@ -40,8 +42,15 @@ def normalize_offers(data, category, direction):
         if not isinstance(item, dict):
             continue
         segments = []
-        for journey in item.get("journeys") or []:
+        journeys = item.get("journeys") or []
+        if not isinstance(journeys, list):
+            continue
+        for journey in journeys:
+            if not isinstance(journey, dict) or not isinstance(journey.get("segments", []), list):
+                continue
             for segment in journey.get("segments") or []:
+                if not isinstance(segment, dict):
+                    continue
                 segments.append({"service_no": segment.get("marketingTransportNo"),
                     "origin_city": segment.get("depCityName"), "destination_city": segment.get("arrCityName"),
                     "origin_station": segment.get("depStationName"), "destination_station": segment.get("arrStationName"),
@@ -51,13 +60,17 @@ def normalize_offers(data, category, direction):
         url = item.get("detailUrl", item.get("jumpUrl"))
         if not isinstance(url, str) or urlsplit(url).scheme != "https":
             url = None
-        offers.append({"category": category, "direction": direction, "name": item.get("name"),
-            "supplier_offer_id": str(item.get("id")) if item.get("id") else None,
+        candidate = {"category": category, "direction": direction, "name": item.get("name"),
+            "supplier_offer_id": str(item.get("id") or item.get("shId")) if item.get("id") or item.get("shId") else None,
             "address": item.get("address"), "segments": segments,
             "price_display": str(price) if price is not None else None,
             "currency": item.get("currency") if isinstance(item.get("currency"), str) and len(item["currency"]) == 3 else None,
             "price_scope": "unknown", "observed_at": utc_now().isoformat(), "url": url,
-            "identity_match": "unresolved", "availability": "supplier_observed_not_booked"})
+            "identity_match": "unresolved", "availability": "supplier_observed_not_booked"}
+        try:
+            offers.append(TravelOffer.model_validate(candidate).model_dump(mode="json"))
+        except ValidationError:
+            continue
     return offers, "observed" if offers else "no_results"
 
 
@@ -113,8 +126,16 @@ class TravelServices:
                 # Do not accept a returned connection to the wrong destination.
                 if category != "hotel":
                     target = intent.destination.label if direction == "outbound" else intent.origin.label
-                    found = [o for o in found if o["segments"] and (o["segments"][-1].get("destination_city") or "").removesuffix("市") == target.removesuffix("市")]
+                    source = intent.origin.label if direction == "outbound" else intent.destination.label
+                    requested = start if direction == "outbound" else end
+                    found = [o for o in found if o["segments"]
+                        and (o["segments"][-1].get("destination_city") or "").removesuffix("市") == target.removesuffix("市")
+                        and (o["segments"][0].get("origin_city") or "").removesuffix("市") == source.removesuffix("市")
+                        and (o["segments"][0].get("departure_at") or "").startswith(str(requested))]
                     status = status if found or status != "observed" else "destination_unconfirmed"
+                for offer in found:
+                    offer["query_start_date"] = str(start if direction != "inbound" else end)
+                    offer["query_end_date"] = str(end) if category == "hotel" else None
                 offers.extend(found)
                 observations.append(status)
             statuses[category] = ",".join(observations)

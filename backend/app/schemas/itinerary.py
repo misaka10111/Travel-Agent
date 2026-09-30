@@ -35,6 +35,7 @@ class DraftDay(ContractModel):
     stops: list[Stop] = Field(default_factory=list)
     routes: list[RouteLeg] = Field(default_factory=list)
     hotel_place_id: str | None = None
+    departure_deadline_minute: int | None = Field(default=None, ge=0, le=1439)
     notes: list[str] = Field(default_factory=list)
 
 
@@ -75,6 +76,7 @@ class ItineraryDraft(ContractModel):
     missing_requirements: list[str] = Field(default_factory=list)
     supplier_status: dict[str, str] = Field(default_factory=dict)
     travel_offers: list[dict] = Field(default_factory=list)
+    selected_offer_ids: list[str] = Field(default_factory=list)
     audit: DraftAudit | None = None
 
     @model_validator(mode="after")

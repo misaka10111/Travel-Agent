@@ -6,6 +6,7 @@ from app.planning.clustering import allocate, identity_groups, meters
 from app.planning.ranking import nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
 from app.planning.scheduling import schedule
+from app.planning.transfers import choose_transfers
 from app.runtime.guards import PlanningError
 from app.schemas.itinerary import ItineraryDraft
 from app.schemas.common import utc_now
@@ -74,7 +75,8 @@ def compute(state, provider, route_limit, previous=None):
                 choices.append((seconds, node))
         if choices:
             hotel = min(choices, key=lambda p: p[0])[1]
-    days, food_ranks = [], []
+    transfers = choose_transfers(state.travel_offers, intent, state.candidates)
+    days, food_ranks, used_restaurants = [], [], set()
     version = max([p.version for p in state.plan_history], default=0) + 1
     for i, assigned in enumerate(assignments, 1):
         date = intent.dates.start_date + timedelta(days=i - 1) if intent.dates.start_date else None
@@ -98,10 +100,22 @@ def compute(state, provider, route_limit, previous=None):
                 remaining.remove(chosen)
                 cursor = chosen
             assigned = ordered
-        ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded], assigned, "restaurant", intent)
-        food_ranks.extend(ranks[:2])
-        restaurants = [by_id[r.place_id] for r in ranks[:2]]
-        day = schedule(i, date, assigned, hotel, restaurants, router, intent, children)
+        restaurants = []
+        for anchor in ([assigned[0], assigned[-1]] if assigned else []):
+            ranks = nearby_ranking([p for p in state.candidates if p.place_id not in excluded
+                and p.place_id not in {r.place_id for r in restaurants}], [anchor], "restaurant", intent)
+            # Diversity is a tie-break within a local shortlist, never a reason
+            # to cross the city for an unused restaurant.
+            local = [r for r in ranks if meters(by_id[r.place_id], anchor) <= 2000]
+            pool = local or ranks[:2]
+            if pool:
+                chosen = next((r for r in pool if r.place_id not in used_restaurants), pool[0])
+                food_ranks.append(chosen)
+                restaurants.append(by_id[chosen.place_id])
+                used_restaurants.add(chosen.place_id)
+        day = schedule(i, date, assigned, hotel, restaurants, router, intent, children,
+            arrival=transfers.get("outbound") if i == 1 else None,
+            departure=transfers.get("inbound") if i == count else None)
         for stop in day.stops:
             stop.locked = stop.place_id in required or bool(set(stop.child_place_ids) & required)
         days.append(day)
@@ -110,10 +124,11 @@ def compute(state, provider, route_limit, previous=None):
         missing.append("出发日期")
     if not intent.budget.money:
         missing.append("预算")
-    if intent.origin and intent.origin.label != intent.destination.label:
+    if intent.origin and intent.origin.label != intent.destination.label and len(transfers) != 2:
         missing.append("往返城际交通与抵离接驳")
     return ItineraryDraft(plan_id=state.current_plan_ref.plan_id if state.current_plan_ref else str(uuid4()),
         version=version, base_state_version=state.state_version, intent_snapshot_ref=intent.intent_id,
         status="partial", days=days, recommendations=hotel_ranks[:5] + list({r.place_id: r for r in food_ranks}.values()),
         assumptions=["分组与距离初筛使用地点坐标；路线耗时全部来自地图服务", "每天可用时段待抵离交通确认", "未推断房间数量、房价或余房"],
-        missing_requirements=missing, supplier_status={"amap": "route_estimates", **state.supplier_status}, travel_offers=state.travel_offers)
+        missing_requirements=missing, supplier_status={"amap": "route_estimates", **state.supplier_status},
+        travel_offers=state.travel_offers, selected_offer_ids=[t["offer_id"] for t in transfers.values()])

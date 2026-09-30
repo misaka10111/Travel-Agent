@@ -7,12 +7,14 @@ from app.schemas.common import utc_now
 from app.schemas.itinerary import DraftDay, Stop
 
 
-def schedule(index, date, attractions, hotel, restaurants, routes, intent, children=None):
+def schedule(index, date, attractions, hotel, restaurants, routes, intent, children=None, arrival=None, departure=None):
     zone = ZoneInfo(intent.dates.timezone or intent.destination.timezone or "Asia/Shanghai")
     reference = date or utc_now().astimezone(zone).date()
-    current = 9 * 60
+    current = arrival["minute"] if arrival else 9 * 60
     chain = []
-    if hotel:
+    if arrival:
+        chain.append((arrival["place"], arrival["buffer"], None))
+    elif hotel:
         chain.append((hotel, 1, None))
     for i, place in enumerate(attractions):
         chain.append((place, 120, None))
@@ -20,7 +22,9 @@ def schedule(index, date, attractions, hotel, restaurants, routes, intent, child
             chain.append((restaurants[0], 60, 12 * 60))
     if len(restaurants) > 1:
         chain.append((restaurants[1], 60, 18 * 60))
-    if hotel:
+    if departure:
+        chain.append((departure["place"], departure["buffer"], None))
+    elif hotel:
         chain.append((hotel, 1, None))
     day = DraftDay(day_index=index, date=date, hotel_place_id=hotel.place_id if hotel else None)
     known = True
@@ -36,12 +40,15 @@ def schedule(index, date, attractions, hotel, restaurants, routes, intent, child
         if earliest:
             current = max(current, earliest)
         start, end = (current, current + dwell) if known and current + dwell <= 1440 else (None, None)
-        locked = any(s.place_id == place.place_id and s.decision == "lock" for s in getattr(intent, "_selections", []))
         day.stops.append(Stop(stop_id=str(uuid4()), place_id=place.place_id, category=place.category,
-            start_minute=start, end_minute=end, dwell_minutes=dwell, locked=locked,
+            start_minute=start, end_minute=end, dwell_minutes=dwell,
             child_place_ids=(children or {}).get(place.place_id, []),
             reason="停留时长为可调整的草案假设" if place.category == "attraction" else "食宿候选，具体服务信息待核实"))
         current += dwell + (15 if place.category == "attraction" else 0)
+    if departure:
+        day.departure_deadline_minute = departure["minute"]
+    if arrival or departure:
+        day.notes.append("抵离时刻来自候选班次，尚未预订；火车预留60分钟、飞机预留120分钟缓冲")
     if date is None:
         day.notes.append("日期待定；路线查询日期仅为参考，时刻表不是旅行日确认结果")
     day.notes.append("09:00 开始、景点停留120分钟、景点间休息15分钟、交通缓冲10分钟均为草案假设")

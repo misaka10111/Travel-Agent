@@ -183,8 +183,13 @@ class ToolRegistry:
             if action.kind == "query_travel":
                 # Supplier calls share the model/service budget, never create an unbounded third allowance.
                 offers, statuses = await asyncio.to_thread(service.query, state.intent_snapshot, action.categories, reserve_model)
-                state.travel_offers = offers
+                state.travel_offers = [o for o in state.travel_offers if o.get("category") not in action.categories] + offers
                 state.supplier_status.update(statuses)
+                if offers:
+                    from app.planning.transfers import match_offers
+                    state.candidates = await asyncio.to_thread(self._map,
+                        lambda provider: match_offers(offers, state.candidates, provider, state.intent_snapshot.destination), reserve_map)
+                    state.candidate_ids = list(dict.fromkeys([p.place_id for p in state.candidates] + [s.place_id for s in state.selections]))
                 if state.current_plan:
                     state.current_plan = None
                     state.current_plan_ref = None

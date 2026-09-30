@@ -29,6 +29,43 @@ from tests.test_p1_runtime import harness, run, wait_state
 REGION = {"label": "北京", "country_code": "CN", "timezone": "Asia/Shanghai"}
 
 
+def test_transfer_times_constrain_first_and_last_day_and_reject_stale_quotes():
+    from app.schemas.common import utc_now
+    from datetime import timedelta
+    session = state()
+    session.intent_snapshot.dates.start_date = datetime(2026, 10, 1).date()
+    station = place("station", "北京南站", "transport")
+    session.candidates.append(station)
+    session.travel_offers = [{"offer_id": direction, "category": "train", "direction": direction,
+        "observed_at": utc_now().isoformat(),
+        "destination_place_id": "station", "origin_place_id": "station",
+        "segments": [{"departure_at": dep, "arrival_at": arr}]} for direction, dep, arr in [
+        ("outbound", "2026-10-01T06:00:00+08:00", "2026-10-01T11:00:00+08:00"),
+        ("inbound", "2026-10-05T17:00:00+08:00", "2026-10-05T22:00:00+08:00")]]
+    plan = compute(session, Routes(), 60)
+    assert plan.days[0].stops[0].place_id == "station"
+    assert plan.days[0].stops[0].start_minute == 660
+    assert plan.days[-1].stops[-1].place_id == "station"
+    assert plan.days[-1].departure_deadline_minute == 1020
+    issues = validate(plan, session).issues
+    assert any(i.code == "departure_connection_missed" for i in issues)
+    assert not any(i.code == "hotel_roundtrip_missing" for i in issues)
+    for offer in session.travel_offers:
+        offer["observed_at"] = (utc_now() - timedelta(hours=2)).isoformat()
+    assert compute(session, Routes(), 60).selected_offer_ids == []
+
+
+def test_meals_follow_separate_attraction_anchors():
+    session = state()
+    session.intent_snapshot.dates.duration_days = 1
+    session.candidates = [place("a", lon=116.3), place("b", lon=116.5),
+        place("r1", category="restaurant", lon=116.301),
+        place("r2", category="restaurant", lon=116.501)]
+    plan = compute(session, Routes(), 60)
+    stops = plan.days[0].stops
+    assert [s.place_id for s in stops] == ["a", "r1", "b", "r2"]
+
+
 def place(pid, name=None, category="attraction", lon=116.4, lat=39.9):
     return Place(place_id=pid, name=name or pid, category=category, region=REGION,
         coordinates={"longitude": lon, "latitude": lat, "crs": "GCJ02"}, identity_status="candidate")
