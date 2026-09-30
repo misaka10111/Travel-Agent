@@ -77,6 +77,7 @@ class ItineraryDraft(ContractModel):
     supplier_status: dict[str, str] = Field(default_factory=dict)
     travel_offers: list[dict] = Field(default_factory=list)
     selected_offer_ids: list[str] = Field(default_factory=list)
+    retrieval_gaps: list[str] = Field(default_factory=list)
     audit: DraftAudit | None = None
 
     @model_validator(mode="after")

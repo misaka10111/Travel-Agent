@@ -12,6 +12,8 @@ def validate(plan, state):
         issues.append(PlanningIssue(code=code, severity=severity, message=message, day_index=day, place_ids=ids or []))
     by_id = {p.place_id: p for p in state.candidates}
     intent = state.intent_snapshot
+    if plan.retrieval_gaps:
+        issue("nearby_meals_required", "blocking", "路线计算前需要围绕这些景点补齐附近餐馆候选", ids=plan.retrieval_gaps)
     expected = intent.dates.duration_days
     if expected is None and intent.dates.start_date and intent.dates.end_date:
         expected = (intent.dates.end_date - intent.dates.start_date).days + 1

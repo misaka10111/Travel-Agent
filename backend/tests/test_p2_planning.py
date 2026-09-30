@@ -88,6 +88,8 @@ def test_meals_follow_separate_attraction_anchors():
         place("r2", category="restaurant", lon=116.501)]
     plan = compute(session, Routes(), 60)
     stops = plan.days[0].stops
+    assert not plan.retrieval_gaps
+    assert all(r.status == "ok" for r in plan.days[0].routes)
     visits = [s.place_id for s in stops]
     assert visits in (["a", "r1", "b", "r2"], ["b", "r2", "a", "r1"])
 

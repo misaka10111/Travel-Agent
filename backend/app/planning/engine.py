@@ -62,10 +62,18 @@ def compute(state, provider, route_limit, previous=None):
     food_candidates = [p for p in state.candidates if p.category == "restaurant" and p.place_id not in excluded and p.coordinates]
     # Establish meal coverage before spending the route budget. A preliminary
     # draft exposes exact missing anchors to Plan/Validate for targeted search.
-    meal_coverage = all(sum(meters(food, anchor) <= 2000 for food in food_candidates) >= 2
-        for group in assignments for anchor in group)
+    retrieval_gaps = []
+    for group in assignments:
+        nearby = [{food.place_id for food in food_candidates if meters(food, anchor) <= 2000} for anchor in group]
+        retrieval_gaps.extend(anchor.place_id for anchor, found in zip(group, nearby) if not found)
+        if group and len(set().union(*nearby)) < 2:
+            retrieval_gaps.extend(anchor.place_id for anchor in group)
+    retrieval_gaps = list(dict.fromkeys(retrieval_gaps))
+    meal_coverage = not retrieval_gaps
     prior_legs = [r for d in state.current_plan.days for r in d.routes] if state.current_plan else []
     router = RoutePlanner(provider, intent, route_limit if meal_coverage else 0, prior_legs)
+    if not meal_coverage:
+        router.failed_code = "nearby_meal_coverage_required"
     zone = ZoneInfo(intent.dates.timezone or intent.destination.timezone or "Asia/Shanghai")
     reference_departure = datetime.combine(intent.dates.start_date or utc_now().astimezone(zone).date(), time(9), zone)
     if not forced_hotels and not override and hotel_ranks:
@@ -137,4 +145,5 @@ def compute(state, provider, route_limit, previous=None):
         status="partial", days=days, recommendations=hotel_ranks[:5] + list({r.place_id: r for r in food_ranks}.values()),
         assumptions=["分组与距离初筛使用地点坐标；路线耗时全部来自地图服务", "每天可用时段待抵离交通确认", "未推断房间数量、房价或余房"],
         missing_requirements=missing, supplier_status={"amap": "route_estimates", **state.supplier_status},
-        travel_offers=state.travel_offers, selected_offer_ids=[t["offer_id"] for t in transfers.values()])
+        travel_offers=state.travel_offers, selected_offer_ids=[t["offer_id"] for t in transfers.values()],
+        retrieval_gaps=retrieval_gaps)
