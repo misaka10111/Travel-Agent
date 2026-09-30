@@ -29,6 +29,16 @@ from tests.test_p1_runtime import harness, run, wait_state
 REGION = {"label": "北京", "country_code": "CN", "timezone": "Asia/Shanghai"}
 
 
+def test_model_projection_preserves_route_evidence_without_polyline_payload():
+    from app.agents.client import model_context
+    route = {"geometry": {"points": [1, 2, 3]}, "duration_seconds": 123,
+        "status": "ok", "from_place_id": "a", "to_place_id": "b"}
+    reduced = model_context({"routes": [route]})
+    assert "geometry" not in reduced["routes"][0]
+    assert reduced["routes"][0]["duration_seconds"] == 123
+    assert "geometry" in route
+
+
 def test_transfer_times_constrain_first_and_last_day_and_reject_stale_quotes():
     from app.schemas.common import utc_now
     from datetime import timedelta

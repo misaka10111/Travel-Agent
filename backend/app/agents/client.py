@@ -8,6 +8,19 @@ import httpx
 from app.runtime.guards import PlanningError
 
 
+def model_context(value):
+    """Route geometry belongs to rendering, not language-model decisions.
+
+    Keep identity, coordinates, constraints, times, evidence and errors intact.
+    This is a projection only; the UI still receives full route geometry.
+    """
+    if isinstance(value, list):
+        return [model_context(item) for item in value]
+    if isinstance(value, dict):
+        return {key: model_context(item) for key, item in value.items() if key != "geometry"}
+    return value
+
+
 class JsonModelClient:
     def __init__(self, settings):
         self.settings = settings
@@ -24,7 +37,7 @@ class JsonModelClient:
             "max_tokens": self.settings.planning_max_output_tokens,
             "response_format": {"type": "json_object"},
             "messages": [{"role": "system", "content": system + "\nReturn one JSON object following this JSON schema:\n" + json.dumps(schema, ensure_ascii=False)},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)}]}
+                {"role": "user", "content": json.dumps(model_context(context), ensure_ascii=False)}]}
         if parsed.hostname == "api.deepseek.com":
             # The provider defaults to thinking=enabled; keep small action emissions explicit.
             body["thinking"] = {"type": self.settings.planning_thinking_mode}
