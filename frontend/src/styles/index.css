@@ -4171,3 +4171,473 @@ button:disabled {
   align-items: center;
   text-align: center;
 }
+/* Trip route map */
+.ta-map-canvas {
+  flex: 1 1 0;
+  min-height: 200px;
+  border-radius: 12px;
+  overflow: hidden;
+  z-index: 0;
+}
+
+.ta-map-days {
+  margin-bottom: 8px;
+}
+
+.ta-map-marker span {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(20, 30, 50, 0.35);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+}
+/* =========================
+   Agent Workbench v7
+   Left chat | Middle travel plan | Right options
+   Floating draggable map above all panels
+   ========================= */
+
+/* Three fixed-height columns; internal areas scroll instead of the page. */
+.travel-agent-layout {
+  display: grid;
+  grid-template-columns:
+    minmax(270px, 0.86fr)
+    minmax(330px, 1fr)
+    minmax(390px, 1.2fr);
+  gap: 18px;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+}
+
+.ta-chat-panel,
+.ta-plan-column,
+.ta-options-panel.ta-options-column {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Middle travel plan becomes a full-height column. */
+.ta-plan-card.ta-plan-column {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: 14px 15px;
+}
+
+.ta-plan-column .ta-panel-header {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+}
+
+.ta-plan-column .ta-plan-timeline {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ta-plan-column .ta-plan-empty {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Right option column keeps its own scroll. */
+.ta-options-panel.ta-options-column {
+  display: flex;
+  flex-direction: column;
+  padding: 14px;
+}
+
+.ta-options-column .ta-options-header {
+  flex: 0 0 auto;
+}
+
+.ta-options-column .ta-option-list {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* The old right-side split panel is no longer used by AgentPage. */
+.ta-right-panel {
+  display: none;
+}
+
+/* =========================
+   Floating draggable map
+   ========================= */
+.ta-floating-map {
+  position: fixed;
+  z-index: 120;
+  display: flex;
+  flex-direction: column;
+  width: min(520px, calc(100vw - 32px));
+  height: min(390px, calc(100dvh - 96px));
+  min-height: 270px;
+  overflow: hidden;
+  border: 1px solid rgba(218, 224, 236, 0.96);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow:
+    0 22px 58px rgba(30, 42, 72, 0.18),
+    0 4px 14px rgba(30, 42, 72, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.ta-floating-map-handle {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 54px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #edf0f5;
+  background: #fff;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.ta-floating-map-handle:active {
+  cursor: grabbing;
+}
+
+.ta-floating-map-handle > div {
+  min-width: 0;
+}
+
+.ta-floating-map-handle strong {
+  display: block;
+  overflow: hidden;
+  margin-top: 2px;
+  color: #202b42;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ta-map-drag-hint {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  background: #f0f3f9;
+  color: #7b8497;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.ta-floating-map-style-tabs {
+  flex: 0 0 auto;
+  margin: 8px 12px 0;
+}
+
+.ta-floating-map-days {
+  flex: 0 0 auto;
+  margin: 8px 12px;
+}
+
+.ta-floating-map .ta-map-canvas {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 0 10px 10px;
+  border-radius: 12px;
+}
+
+.ta-floating-map-placeholder {
+  flex: 1 1 0;
+  min-height: 0;
+  margin: 10px;
+  border-radius: 12px;
+}
+
+/* Keep Leaflet controls above the map, but below the detail modal. */
+.ta-floating-map .leaflet-control-container {
+  position: relative;
+  z-index: 2;
+}
+
+/* Detail modal should always appear above the floating map. */
+.ta-modal-backdrop {
+  z-index: 999;
+}
+
+/* Slightly more compact plan rows in the middle column. */
+.ta-plan-column .ta-plan-row {
+  grid-template-columns: 25px 76px minmax(0, 1fr) 22px;
+  min-height: 44px;
+  padding: 7px 4px;
+}
+
+@media (max-width: 1320px) and (min-width: 1101px) {
+  .travel-agent-layout {
+    grid-template-columns:
+      minmax(250px, 0.84fr)
+      minmax(300px, 0.98fr)
+      minmax(350px, 1.18fr);
+    gap: 14px;
+  }
+
+  .ta-floating-map {
+    width: min(470px, calc(100vw - 28px));
+    height: min(350px, calc(100dvh - 92px));
+  }
+}
+
+@media (max-width: 1100px) {
+  .travel-agent-layout {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+
+  .ta-chat-panel,
+  .ta-plan-card.ta-plan-column,
+  .ta-options-panel.ta-options-column {
+    height: 430px;
+  }
+
+  .ta-floating-map {
+    width: min(460px, calc(100vw - 24px));
+    height: min(340px, calc(100dvh - 84px));
+  }
+}
+
+
+/* =========================
+   Floating map v2
+   Smaller default size + softer shadow + expandable view
+   ========================= */
+.ta-floating-map {
+  width: min(380px, calc(100vw - 32px));
+  height: min(280px, calc(100dvh - 96px));
+  min-height: 220px;
+  border-radius: 16px;
+  box-shadow:
+    0 8px 24px rgba(30, 42, 72, 0.11),
+    0 2px 8px rgba(30, 42, 72, 0.055);
+  transition:
+    width 0.22s ease,
+    height 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+.ta-floating-map.expanded {
+  width: min(900px, calc(100vw - 80px));
+  height: min(650px, calc(100dvh - 92px));
+  min-height: 420px;
+  box-shadow:
+    0 12px 34px rgba(30, 42, 72, 0.14),
+    0 3px 10px rgba(30, 42, 72, 0.06);
+}
+
+.ta-floating-map-handle {
+  min-height: 46px;
+  padding: 8px 11px;
+}
+
+.ta-floating-map-handle strong {
+  font-size: 14px;
+}
+
+.ta-floating-map-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+}
+
+.ta-map-drag-hint {
+  padding: 4px 7px;
+  font-size: 9px;
+}
+
+.ta-map-expand-button {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid #dfe4ef;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #5267a8;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.ta-map-expand-button:hover {
+  border-color: #cfd7ea;
+  background: #f6f8fd;
+  color: #4259b8;
+}
+
+.ta-floating-map-style-tabs {
+  margin: 6px 9px 0;
+}
+
+.ta-floating-map-days {
+  margin: 6px 9px;
+}
+
+.ta-floating-map .ta-map-canvas {
+  margin: 0 8px 8px;
+  border-radius: 10px;
+}
+
+.ta-floating-map-placeholder {
+  margin: 8px;
+  border-radius: 10px;
+}
+
+@media (max-width: 1320px) and (min-width: 1101px) {
+  .ta-floating-map:not(.expanded) {
+    width: min(350px, calc(100vw - 28px));
+    height: min(260px, calc(100dvh - 92px));
+  }
+}
+
+@media (max-width: 1100px) {
+  .ta-floating-map:not(.expanded) {
+    width: min(340px, calc(100vw - 24px));
+    height: min(250px, calc(100dvh - 84px));
+  }
+
+  .ta-floating-map.expanded {
+    width: min(760px, calc(100vw - 32px));
+    height: min(560px, calc(100dvh - 84px));
+  }
+}
+
+/* =========================
+   Agent small text refinements
+   ========================= */
+
+.ta-plan-empty {
+  text-align: center;
+}
+
+.ta-plan-helper {
+  margin: 7px 0 0;
+  color: #9aa2b0;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+/* =========================
+   Travel plan readability + bottom-right map refinements
+   Append AFTER current index.css
+   ========================= */
+
+/* 旅行计划里的文字略微放大，仍保持紧凑 */
+.ta-plan-time {
+  font-size: 10.5px;
+}
+
+.ta-plan-content strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.ta-plan-content span {
+  margin-top: 3px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+/* 图标略微放大一点，和文字比例更协调 */
+.ta-plan-type {
+  width: 27px;
+  height: 27px;
+  font-size: 12px;
+}
+
+/* 行高略增加，避免放大字体后显得拥挤 */
+.ta-plan-row {
+  min-height: 45px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+}
+/* =========================
+   Floating map size refinement
+   ========================= */
+
+.ta-floating-map {
+  width: min(360px, calc(100vw - 32px));
+  height: min(330px, calc(100dvh - 96px));
+  min-height: 250px;
+}
+
+/* 展开状态继续保持大地图 */
+.ta-floating-map.expanded {
+  width: min(900px, calc(100vw - 48px));
+  height: min(650px, calc(100dvh - 92px));
+}
+
+/* =========================
+   Floating map v3
+   Keep map content size, reduce title bar, prevent bottom overflow
+   Append AFTER current map CSS.
+   ========================= */
+
+.ta-floating-map:not(.expanded) {
+  width: min(360px, calc(100vw - 32px));
+  height: min(318px, calc(100dvh - 96px));
+  min-height: 250px;
+}
+
+/* 标题栏更矮，地图内容区域基本保持不变 */
+.ta-floating-map-handle {
+  min-height: 34px;
+  padding: 5px 9px;
+}
+
+.ta-floating-map-handle strong {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.ta-map-drag-hint {
+  padding: 3px 6px;
+  font-size: 8.5px;
+}
+
+.ta-map-expand-button {
+  padding: 4px 8px;
+  font-size: 9.5px;
+  border-radius: 8px;
+}
+
+/* 让标题栏压缩掉的高度留给地图内容 */
+.ta-floating-map-style-tabs {
+  margin-top: 5px;
+}
+
+.ta-floating-map-days {
+  margin-top: 5px;
+  margin-bottom: 5px;
+}
+
+/* 更短的屏幕进一步收紧，避免底部越界 */
+@media (max-height: 760px) and (min-width: 761px) {
+  .ta-floating-map:not(.expanded) {
+    height: min(300px, calc(100dvh - 88px));
+  }
+}
+
+/* 小屏幕也确保不会贴出底部 */
+@media (max-width: 760px) {
+  .ta-floating-map:not(.expanded) {
+    width: min(340px, calc(100vw - 24px));
+    height: min(292px, calc(100dvh - 84px));
+  }
+}

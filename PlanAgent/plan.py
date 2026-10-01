@@ -23,6 +23,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
+from route_map import attach_routes, geocode_blocks, strip_geo
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -603,6 +605,10 @@ def main() -> None:
                 data.get("profile"),
                 data.get("basic"),
             )
+            # 改过的块重新定位，前端据此重画路线
+            if isinstance(result, dict) and isinstance(result.get("blocks"), list):
+                geocode_blocks(result["blocks"], (data.get("search") or {}).get("destination") or "")
+                strip_geo(result["blocks"])
         else:
             if isinstance(data, dict) and any(k in data for k in ("search", "profile", "basic", "answers", "feedback", "modify")):
                 search_result = data.get("search") or {}
@@ -621,6 +627,7 @@ def main() -> None:
             result = build_plan(search_result, profile, basic, answers, feedback, modify)
             if isinstance(result, dict) and "error" not in result:
                 result["blocks"] = blockify(result)
+                attach_routes(result, result.get("destination") or "")
     except Exception as exc:  # noqa: BLE001
         result = {"error": str(exc)}
 

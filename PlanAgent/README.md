@@ -9,8 +9,10 @@ cd PlanAgent
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # 填入 DeepSeek key
+cp .env.example .env   # 填入 DeepSeek key 和高德 AMAP_KEY
 ```
+
+`AMAP_KEY` 为高德「Web服务」类型的 key，用于给每个地点补坐标、计算相邻地点间的真实路线（输出里的 `blocks[].lng/lat` 和 `legs`）。不填则跳过这一步，计划照常生成。
 
 ## 使用
 
