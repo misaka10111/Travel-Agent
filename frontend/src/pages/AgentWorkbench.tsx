@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
 import { useLocation } from 'react-router-dom';
 import { planning } from '../api/planning';
 import type { Draft, Place, Route, SessionCredential, SessionView } from '../api/planning';
 import { BudgetCard } from '../components/BudgetCard';
+import { AmapTripMap } from '../components/AmapTripMap';
 import { ScheduleControls } from '../components/ScheduleControls';
 import type { SchedulePatch } from '../components/ScheduleControls';
 import './agent-workbench.css';
@@ -213,7 +214,9 @@ export function AgentWorkbench() {
   const [dayIndex, setDayIndex] = useState(1);
   const [focusPlace, setFocusPlace] = useState<string | null>(null);
   const [mapUrl, setMapUrl] = useState<string | null>(null);
-  const [mapMode, setMapMode] = useState<'basemap' | 'routes'>('basemap');
+  const [mapMode, setMapMode] = useState<'interactive' | 'basemap' | 'routes'>(
+    import.meta.env.VITE_AMAP_JS_KEY ? 'interactive' : 'basemap');
+  const [mapFailed, setMapFailed] = useState(false);
   const [mapNotice, setMapNotice] = useState('选择一天，查看地点与已查到的路线。');
   const mapUrlRef = useRef<string | null>(null);
   const initialized = useRef(false);
@@ -224,7 +227,7 @@ export function AgentWorkbench() {
   const canRetry = state?.status === 'needs_attention' && state.retry_generation === 0 && !state.retry_child_ref;
   const visible = snapshot ?? (state?.current_plan ? { plan: state.current_plan, places: state.candidates } : null);
   const plan = visible?.plan;
-  const places = new Map(visible?.places.map(place => [place.place_id, place]) ?? []);
+  const places = useMemo(() => new Map(visible?.places.map(place => [place.place_id, place]) ?? []), [visible?.places]);
   const name = (id: string) => places.get(id)?.name ?? '地点待重新查询';
   const refreshing = !!snapshot && (busy || running || !!state?.plan_needs_refresh || !state?.current_plan);
   const say = (text: string, role: Message['role'] = 'assistant') =>
@@ -233,7 +236,7 @@ export function AgentWorkbench() {
   function focusOnPlace(placeId: string, day?: number) {
     if (day) setDayIndex(day);
     setFocusPlace(placeId);
-    setMapMode('routes');
+    setMapMode(import.meta.env.VITE_AMAP_JS_KEY && !mapFailed ? 'interactive' : 'routes');
     const place = places.get(placeId) ?? state?.candidates.find(item => item.place_id === placeId);
     if (place?.category === 'hotel' || place?.category === 'attraction') setCategory(place.category);
   }
@@ -341,6 +344,8 @@ export function AgentWorkbench() {
   }, [credential, plan?.plan_id, plan?.version, dayIndex, mapMode, running, snapshot, state?.plan_needs_refresh]);
 
   useEffect(() => () => { if (mapUrlRef.current) URL.revokeObjectURL(mapUrlRef.current); }, []);
+
+  useEffect(() => { setMapFailed(false); }, [plan?.plan_id, plan?.version, dayIndex]);
 
   async function run(access: SessionCredential, current: SessionView) {
     setView(await planning.run(access, current.state.state_version));
@@ -518,15 +523,22 @@ export function AgentWorkbench() {
           <header className="ta-panel-header"><span>行程地图</span><h2>{state?.intent_snapshot.destination.label ?? '目的地'} · 第 {dayIndex} 天</h2></header>
           {plan && <div className="ta-day-tabs">{plan.days.map(day => <button key={day.day_index}
             className={dayIndex === day.day_index ? 'active' : ''} onClick={() => { setDayIndex(day.day_index); setFocusPlace(null); setMapUrl(null); }}>{day.day_index}</button>)}</div>}
-          {plan && <div className="ta-map-view-toggle"><button type="button" className={mapMode === 'basemap' ? 'active' : ''}
+          {plan && <div className="ta-map-view-toggle">{import.meta.env.VITE_AMAP_JS_KEY && <button type="button"
+            className={mapMode === 'interactive' ? 'active' : ''} onClick={() => setMapMode('interactive')}>交互地图</button>}
+            <button type="button" className={mapMode === 'basemap' ? 'active' : ''}
             onClick={() => setMapMode('basemap')}>高德底图</button><button type="button" className={mapMode === 'routes' ? 'active' : ''}
               onClick={() => setMapMode('routes')}>路线关系图</button></div>}
-          {mapMode === 'basemap' && mapUrl ? <img className="ta-map-image" src={mapUrl} alt={`第 ${dayIndex} 天的高德地点与路线地图`} /> : plan ?
+          {mapMode === 'interactive' && plan && !mapFailed ? <AmapTripMap plan={plan} dayIndex={dayIndex} places={places}
+            alternatives={visible?.places ?? []} focusPlace={focusPlace} onFocus={focusOnPlace}
+            onUnavailable={() => setMapFailed(true)} /> : mapMode === 'basemap' && mapUrl ?
+            <img className="ta-map-image" src={mapUrl} alt={`第 ${dayIndex} 天的高德地点与路线地图`} /> : plan ?
             <RouteSketch key={`${plan.plan_id}:${plan.version}:${dayIndex}`} plan={plan} dayIndex={dayIndex} places={places}
               alternatives={state?.candidates ?? []}
               focusPlace={focusPlace} onFocus={focusOnPlace} /> :
             <div className="ta-map-empty">行程生成后会显示地点与路线地图。</div>}
           {mapMode === 'basemap' && <p className="ta-map-caption">{mapNotice}</p>}
+          {mapMode === 'interactive' && <p className="ta-map-caption">{mapFailed ? '交互地图暂时无法加载，已显示路线关系图。' :
+            '可拖动、缩放并点击地点；灰色虚线表示这段交通路线尚未查到。'}</p>}
           {focusPlace && <p className="ta-map-focus">当前关注：{name(focusPlace)}</p>}
         </section>
         <section className="ta-plan-card">
