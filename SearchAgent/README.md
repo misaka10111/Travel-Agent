@@ -15,7 +15,7 @@
 
 - `tools.py`：MCP **服务端**，暴露上述工具
 - `agent.py`：LangGraph **ReAct agent**，通过 `langchain-mcp-adapters` 把 MCP 工具桥接成
-  LangChain 工具，用 DeepSeek（`deepseek-v4-pro`）做数据检索，并把结果返回给其他 agent 处理
+  LangChain 工具，用 DeepSeek（`deepseek-flash`）做数据检索，并把结果返回给其他 agent 处理
 
 ## 安装
 

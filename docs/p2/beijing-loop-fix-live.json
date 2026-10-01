@@ -1,0 +1,35 @@
+{
+  "session_id": "292bd95f-71b1-4c11-97b9-98b5539840c9",
+  "input_path": "natural_language",
+  "status": "needs_attention",
+  "attention_reason": "search_stalled_no_new_candidates",
+  "usage": {
+    "model_calls": 12,
+    "map_calls": 16,
+    "steps": 10,
+    "model_limit": 40,
+    "map_limit": 120,
+    "step_limit": 40
+  },
+  "coverage": {
+    "attraction": 18,
+    "restaurant": 39,
+    "hotel": 6,
+    "transport": 0
+  },
+  "days": 5,
+  "plan_status": "partial",
+  "audit": {
+    "hard_status": "failed",
+    "experience_status": "failed",
+    "issue_codes": [
+      "evidence_missing",
+      "experience",
+      "meals_missing",
+      "nearby_meals_required",
+      "opening_unknown",
+      "route_unavailable",
+      "schedule_unknown"
+    ]
+  }
+}

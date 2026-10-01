@@ -2,7 +2,7 @@
 
 用 LangGraph 的 create_react_agent 构建 ReAct agent，
 通过 langchain-mcp-adapters 把 tools.py 里的 MCP 工具桥接为 LangChain 工具，
-LLM 使用 DeepSeek（OpenAI 兼容接口，模型 deepseek-v4-pro）。
+LLM 使用 DeepSeek（OpenAI 兼容接口，模型 deepseek-flash）。
 
 运行前请在 ``.env`` 中配置（参考 ``.env.example``）。
 """
@@ -50,7 +50,7 @@ def _build_model() -> ChatOpenAI:
             "并填入你的 API Key（以及可选的 OPENAI_BASE_URL、OPENAI_MODEL）。"
         )
     kwargs: dict[str, Any] = {
-        "model": os.getenv("OPENAI_MODEL", "deepseek-v4-pro"),
+        "model": os.getenv("OPENAI_MODEL", "deepseek-flash"),
         "api_key": api_key,
         "temperature": 0,
         "request_timeout": 120,

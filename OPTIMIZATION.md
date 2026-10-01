@@ -22,8 +22,7 @@
 
 ### 1. 全部换成 deepseek-flash
 
-4 个 Agent（SearchAgent / PlanAgent / ValidateAgent / QuestionnaireAgent）的模型从
-`deepseek-v4-pro` 换成 `deepseek-flash`。
+4 个 Agent（SearchAgent / PlanAgent / ValidateAgent / QuestionnaireAgent）默认统一使用 `deepseek-flash`。
 
 ### 2. 去掉 `reasoning_effort="low"`
 
