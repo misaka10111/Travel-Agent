@@ -126,7 +126,10 @@ class SessionStore:
                 data["candidates_need_refresh"] = len(data["candidates"]) != len(data["candidate_ids"])
                 if len(memory) > 3:
                     data["current_plan"] = memory[3].model_dump(mode="json") if memory[3] else None
-                    data["plan_needs_refresh"] = bool(data["plan_needs_refresh"] or (data["current_plan_ref"] and not memory[3]))
+                    # The durable snapshot deliberately requests refresh after
+                    # process restart. In this process, use the live state:
+                    # an audited draft can only proceed if it is current.
+                    data["plan_needs_refresh"] = bool(memory[5] or (data["current_plan_ref"] and not memory[3]))
                     data["travel_offers"] = memory[4] if len(memory) > 4 else []
             state = SessionState.model_validate(data)
             return Snapshot(state, ProfileSnapshot.model_validate(row.profile_json), list(row.messages_json),
@@ -183,7 +186,8 @@ class SessionStore:
                 kind=kind, data=event_data or {}))
             db.commit()
         # Only publish supplier objects following a successful version check.
-        self._places[state.session_id] = (expected + 1, next_state.candidates, next_state.agent_message, next_state.current_plan, next_state.travel_offers)
+        self._places[state.session_id] = (expected + 1, next_state.candidates, next_state.agent_message,
+            next_state.current_plan, next_state.travel_offers, next_state.plan_needs_refresh)
         return next_state
 
     def reserve(self, session_id, counter, *, lease_id=None, version=None):

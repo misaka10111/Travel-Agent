@@ -101,7 +101,9 @@ def test_far_restaurants_are_missing_coverage_not_forced_detours():
     provider = Routes()
     plan = compute(session, provider, 60)
     assert not any(s.category == "restaurant" for d in plan.days for s in d.stops)
-    assert provider.calls == []
+    assert provider.calls  # Known non-meal legs should still be routed.
+    assert all(query.origin.place_id != "far-food" and query.destination.place_id != "far-food"
+        for query in provider.calls)
     issues = validate(plan, session).issues
     assert sum(i.code == "meals_missing" for i in issues) == 5
     assert all(i.place_ids for i in issues if i.code == "meals_missing")
