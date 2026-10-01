@@ -12,6 +12,7 @@ from app.api.routes import (
     health,
     plan,
     profile,
+    search,
     trip_memory,
     trips,
 )
@@ -55,3 +56,4 @@ app.include_router(profile.router, prefix=api_prefix)
 app.include_router(trip_memory.router, prefix=api_prefix)
 app.include_router(behavior_signal.router, prefix=api_prefix)
 app.include_router(plan.router, prefix=api_prefix)
+app.include_router(search.router, prefix=api_prefix)

@@ -95,4 +95,15 @@ export const api = {
     feedback?: string;
   }) =>
     request('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
+  search: (payload: {
+    query?: string;
+    destination?: string;
+    start_date?: string;
+    end_date?: string;
+    origin?: string;
+  }) =>
+    request<Record<string, unknown>>('/search', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
 };

@@ -24,6 +24,7 @@ class PlanRequest(BaseModel):
     profile: dict | None = None
     basic: dict | None = None
     answers: list | None = None
+    plan: dict | None = None
     modify: dict | None = None
 
 
@@ -94,6 +95,59 @@ def _local_modify(
         return {"error": str(exc)}
 
 
+def _modify_plan(
+    destination: str,
+    start_date: str,
+    end_date: str,
+    plan: dict,
+    modify: dict,
+    profile: dict | None,
+    basic: dict | None,
+) -> dict:
+    """完整计划修改：全局修改（global）或 block 修改（block），基于上一版 plan。"""
+    search_result: dict = {}
+    if destination and start_date:
+        search_payload = {
+            "destination": destination,
+            "start_date": start_date,
+            "end_date": end_date,
+        }
+        if basic and basic.get("origin"):
+            search_payload["origin"] = basic["origin"]
+        try:
+            proc = subprocess.run(
+                [str(SEARCH_PYTHON), str(SEARCH_PY)],
+                input=json.dumps(search_payload, ensure_ascii=False),
+                capture_output=True,
+                text=True,
+                timeout=120,
+            )
+            search_result = json.loads(proc.stdout)
+        except Exception:
+            search_result = {}
+
+    plan_payload = {
+        "plan": plan,
+        "modify": modify,
+        "search": search_result,
+        "profile": profile,
+        "basic": basic,
+    }
+    try:
+        proc = subprocess.run(
+            [str(PLAN_PYTHON), str(PLAN_PY)],
+            input=json.dumps(plan_payload, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        return json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {"error": (proc.stdout or proc.stderr).strip()}
+    except Exception as exc:  # noqa: BLE001
+        return {"error": str(exc)}
+
+
 @router.post("")
 def create_plan(payload: PlanRequest) -> dict:
     destination = payload.destination
@@ -132,6 +186,18 @@ def create_plan(payload: PlanRequest) -> dict:
         data["basic"] = basic
     if payload.answers:
         data["answers"] = payload.answers
+
+    # 完整计划修改：modify 含 mode（global/block），且带上一版 plan
+    if payload.modify and payload.plan and payload.modify.get("mode"):
+        return _modify_plan(
+            destination,
+            start_date,
+            end_date,
+            payload.plan,
+            payload.modify,
+            payload.profile,
+            basic,
+        )
 
     # 局部修改：modify 含 blocks，只改选中块，不走完整 orchestrator
     if payload.modify and payload.modify.get("blocks"):

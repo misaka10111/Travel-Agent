@@ -67,6 +67,30 @@ MODIFY_PROMPT = (
     "只输出 JSON，不要任何多余文字或代码块。"
 )
 
+MODIFY_PLAN_PROMPT = (
+    "你是旅行计划修改助手。根据用户指令修改完整的旅行计划。"
+    "输入 plan（完整计划，含 destination/start_date/end_date/days/weather_summary/plans，"
+    "每个 plan 含 style/summary/itinerary，itinerary 每天含 schedule）和 modify（修改指令）。"
+    "modify 含 mode 和 instruction："
+    "1) mode='global'：全局修改。按 instruction 整体调整计划（例如「行程太紧了」→减少每天景点数量、"
+    "放慢节奏、增加休息或自由活动时间；「预算太高」→换成更便宜的选择）；"
+    "2) mode='block'：block 修改。只修改或删除 modify.targets 指定的那些活动块"
+    "（targets 是列表，每项含 name/type/day，例如「我不想去这里」→删除 target 对应的块，"
+    "并合理顺延或填补后续安排），其余块尽量保持不变。"
+    "输出修改后的完整 plan JSON，保持原结构（destination/start_date/end_date/days/weather_summary/plans/...）。"
+    "每个 schedule 项含 time/type/name/note/link，type 取值 交通/美食/景点/酒店/活动。"
+    "只输出 JSON，不要任何多余文字或代码块。"
+)
+
+BLOCK_MODIFY_PROMPT = (
+    "你是旅行计划修改助手。根据 instruction 修改某几天的行程。"
+    "输入 days（需要修改的几天 itinerary，每天含 day/date/theme/hotel/schedule）和 modify"
+    "（targets=要操作的块列表，每项含 name/type/day；instruction=指令）。"
+    "只修改或删除 targets 对应的块，必要时顺延当天后续块的时间或填补空档；未涉及的块和天保持不变。"
+    "输出 JSON：{\"days\":[修改后的 day itinerary...]}，每天结构保持 day/date/theme/hotel/schedule。"
+    "schedule 项含 time/type/name/note/link。只输出 JSON，不要任何多余文字或代码块。"
+)
+
 
 def _build_meta(search_result: dict) -> dict:
     """从搜索结果本地提取行程元数据，省掉 LLM 生成外层字段。"""
@@ -323,6 +347,145 @@ def modify_blocks(
     return json.loads(content)
 
 
+def _modify_block_local(
+    plan: dict,
+    modify: dict,
+    search_result: dict | None = None,
+    profile: dict | None = None,
+    basic: dict | None = None,
+) -> dict:
+    """block 修改：只处理受影响的 day，LLM 局部输出（快），再合并回原 plan。"""
+    block_map = {b.get("id"): b for b in (plan.get("blocks") or [])}
+    affected: set[tuple] = set()
+    for bid in modify.get("block_ids") or []:
+        b = block_map.get(bid) or {}
+        if b.get("plan_style") and b.get("day") is not None:
+            affected.add((b.get("plan_style"), b.get("day")))
+
+    if not affected:
+        return plan
+
+    days_to_modify: list[dict] = []
+    for p in plan.get("plans") or []:
+        style = p.get("style")
+        for it in p.get("itinerary") or []:
+            if (style, it.get("day")) in affected:
+                days_to_modify.append(it)
+
+    targets = []
+    for bid in modify.get("block_ids") or []:
+        b = block_map.get(bid) or {}
+        targets.append(
+            {"name": b.get("name"), "type": b.get("type"), "day": b.get("day")}
+        )
+
+    kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
+    if os.getenv("OPENAI_BASE_URL"):
+        kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
+    client = OpenAI(**kwargs)
+    context: dict = {
+        "days": days_to_modify,
+        "modify": {"targets": targets, "instruction": modify.get("instruction", "")},
+    }
+    if search_result:
+        context["search"] = _trim_search(search_result)
+    if profile:
+        context["user_profile"] = profile
+    if basic:
+        context["basic"] = basic
+
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        messages=[
+            {"role": "system", "content": BLOCK_MODIFY_PROMPT},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=4000,
+        timeout=120,
+    )
+    content = (resp.choices[0].message.content or "{}").strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    modified_days = json.loads(content).get("days") or []
+
+    # 按顺序合并回 plan
+    modified_idx = 0
+    for p in plan.get("plans") or []:
+        style = p.get("style")
+        new_itinerary = []
+        for it in p.get("itinerary") or []:
+            if (style, it.get("day")) in affected:
+                if modified_idx < len(modified_days):
+                    new_itinerary.append(modified_days[modified_idx])
+                    modified_idx += 1
+                else:
+                    new_itinerary.append(it)
+            else:
+                new_itinerary.append(it)
+        p["itinerary"] = new_itinerary
+    return plan
+
+
+def modify_plan(
+    plan: dict,
+    modify: dict,
+    search_result: dict | None = None,
+    profile: dict | None = None,
+    basic: dict | None = None,
+) -> dict:
+    """基于上一版完整计划做修改，支持全局修改（global）和 block 修改（block）。"""
+    if (modify or {}).get("mode") == "block":
+        return _modify_block_local(plan, modify, search_result, profile, basic)
+
+    kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
+    if os.getenv("OPENAI_BASE_URL"):
+        kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
+    client = OpenAI(**kwargs)
+
+    # 把 block_ids 转成要操作的块内容（名称/类型/天），方便 LLM 定位
+    modify = dict(modify or {})
+    if modify.get("mode") == "block" and modify.get("block_ids"):
+        block_map = {b.get("id"): b for b in (plan.get("blocks") or [])}
+        targets = []
+        for bid in modify["block_ids"]:
+            b = block_map.get(bid) or {}
+            targets.append(
+                {"name": b.get("name"), "type": b.get("type"), "day": b.get("day")}
+            )
+        modify["targets"] = targets
+
+    # 传给 LLM 的 plan 只保留嵌套 plans，去掉扁平 blocks，避免结构混淆
+    llm_plan = {k: v for k, v in plan.items() if k != "blocks"}
+
+    context: dict = {"plan": llm_plan, "modify": modify}
+    if search_result:
+        context["search"] = _trim_search(search_result)
+    if profile:
+        context["user_profile"] = profile
+    if basic:
+        context["basic"] = basic
+
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        messages=[
+            {"role": "system", "content": MODIFY_PLAN_PROMPT},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=16000,
+        timeout=300,
+    )
+    content = (resp.choices[0].message.content or "{}").strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    return json.loads(content)
+
+
 TYPE_KEYWORDS = (
     ("交通", ["交通", "地铁", "打车", "乘车", "前往", "返回", "接送", "出发", "抵达", "步行", "自驾", "专线", "换乘", "车站", "车程", "高铁"]),
     ("美食", ["早餐", "午餐", "晚餐", "餐厅", "饭店", "美食", "小吃", "菜馆", "面馆"]),
@@ -420,8 +583,19 @@ def main() -> None:
 
     try:
         data = json.loads(raw)
+        # 完整计划修改：输入含 plan + modify（支持全局修改 / block 修改）
+        if isinstance(data, dict) and data.get("plan") is not None and data.get("modify"):
+            result = modify_plan(
+                data.get("plan") or {},
+                data.get("modify") or {},
+                data.get("search"),
+                data.get("profile"),
+                data.get("basic"),
+            )
+            if isinstance(result, dict) and "error" not in result:
+                result["blocks"] = blockify(result)
         # 局部修改模式：输入含 blocks + instruction，只改选中块
-        if isinstance(data, dict) and data.get("blocks") is not None and data.get("instruction"):
+        elif isinstance(data, dict) and data.get("blocks") is not None and data.get("instruction"):
             result = modify_blocks(
                 data.get("blocks") or [],
                 data.get("instruction") or "",

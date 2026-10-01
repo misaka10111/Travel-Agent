@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { KeyboardEvent } from 'react';
+import { api } from '../api/client';
 
 type ChatMessage = {
   id: string;
@@ -52,171 +53,75 @@ type SpotOption = BaseOption & {
 
 type OptionItem = FlightOption | HotelOption | SpotOption;
 
-const flights: FlightOption[] = [
-  {
-    id: 'flight-1',
+function parsePrice(value: unknown): number {
+  const n = parseFloat(String(value ?? '').replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function mapFlights(items: unknown): FlightOption[] {
+  return ((items as unknown[]) || []).map((f: any, i: number) => ({
+    id: `flight-${i}`,
     type: 'flight',
-    title: '国泰航空 CX420',
-    subtitle: '香港 → 首尔',
-    from: '香港 HKG',
-    to: '首尔 ICN',
-    departTime: '11/05 09:10',
-    arriveTime: '11/05 13:35',
-    airline: 'Cathay Pacific',
-    duration: '3h 25m',
-    price: 2180,
-    scheduleAt: '2026-11-05T09:10:00',
-    scheduleLabel: '11/05 · 09:10',
-    location: '仁川国际机场',
-    tags: ['直飞', '早班机', '推荐'],
-    description: '直飞航班，时间友好，适合作为当前首选方案。',
-  },
-  {
-    id: 'flight-2',
-    type: 'flight',
-    title: '大韩航空 KE608',
-    subtitle: '香港 → 首尔',
-    from: '香港 HKG',
-    to: '首尔 GMP',
-    departTime: '11/05 13:40',
-    arriveTime: '11/05 18:05',
-    airline: 'Korean Air',
-    duration: '3h 25m',
-    price: 1950,
-    scheduleAt: '2026-11-05T13:40:00',
-    scheduleLabel: '11/05 · 13:40',
-    location: '金浦国际机场',
-    tags: ['直飞', '性价比'],
-    description: '价格更低，适合预算优先的路线选择。',
-  },
-  {
-    id: 'flight-3',
-    type: 'flight',
-    title: '韩亚航空 OZ746',
-    subtitle: '香港 → 首尔',
-    from: '香港 HKG',
-    to: '首尔 ICN',
-    departTime: '11/06 08:20',
-    arriveTime: '11/06 12:50',
-    airline: 'Asiana Airlines',
-    duration: '3h 30m',
-    price: 2280,
-    scheduleAt: '2026-11-06T08:20:00',
-    scheduleLabel: '11/06 · 08:20',
-    location: '仁川国际机场',
-    tags: ['直飞', '时间稳定'],
-    description: '到达时间早，便于第一天安排更多活动。',
-  },
-];
+    title: `${f?.airline ?? ''}${f?.flight_no ?? ''}`,
+    subtitle: `${f?.dep_station ?? ''} → ${f?.arr_station ?? ''}`,
+    from: f?.dep_station ?? '',
+    to: f?.arr_station ?? '',
+    departTime: f?.dep_time ?? '',
+    arriveTime: f?.arr_time ?? '',
+    airline: f?.airline ?? '',
+    duration: f?.duration ?? '',
+    price: parsePrice(f?.price),
+    scheduleAt: f?.dep_time ?? '',
+    scheduleLabel: f?.dep_time ?? '',
+    location: f?.arr_station ?? '',
+    tags: f?.seat ? [f.seat] : [],
+    description: `${f?.airline ?? ''}${f?.flight_no ?? ''}，${f?.dep_station ?? ''} → ${f?.arr_station ?? ''}`,
+  }));
+}
 
-const hotels: HotelOption[] = [
-  {
-    id: 'hotel-1',
-    type: 'hotel',
-    title: 'L7 弘大酒店',
-    subtitle: '首尔 · 弘大',
-    district: '弘大商圈',
-    checkIn: '11/05 15:00',
-    checkOut: '11/09 11:00',
-    roomType: '标准双床房',
-    rating: 4.6,
-    nightlyPrice: 680,
-    totalPrice: 2720,
-    scheduleAt: '2026-11-05T15:00:00',
-    scheduleLabel: '11/05 · 15:00',
-    location: '首尔市麻浦区',
-    tags: ['交通方便', '年轻氛围', '推荐'],
-    description: '靠近地铁和演出活动区域，适合喜欢 live music 的用户。',
-  },
-  {
-    id: 'hotel-2',
-    type: 'hotel',
-    title: '九树明洞 2 号店',
-    subtitle: '首尔 · 明洞',
-    district: '明洞商圈',
-    checkIn: '11/05 15:00',
-    checkOut: '11/09 11:00',
-    roomType: '标准大床房',
-    rating: 4.5,
-    nightlyPrice: 720,
-    totalPrice: 2880,
-    scheduleAt: '2026-11-05T15:00:00',
-    scheduleLabel: '11/05 · 15:00',
-    location: '首尔市中区',
-    tags: ['购物方便', '热门区域'],
-    description: '更适合喜欢市中心商圈、购物与餐饮的行程搭配。',
-  },
-  {
-    id: 'hotel-3',
-    type: 'hotel',
-    title: '首尔花园酒店',
-    subtitle: '首尔 · 麻浦',
-    district: '麻浦区',
-    checkIn: '11/05 15:00',
-    checkOut: '11/09 11:00',
-    roomType: '高级房',
-    rating: 4.4,
-    nightlyPrice: 610,
-    totalPrice: 2440,
-    scheduleAt: '2026-11-05T15:00:00',
-    scheduleLabel: '11/05 · 15:00',
-    location: '首尔市麻浦区',
-    tags: ['预算友好', '安静'],
-    description: '总价更低，适合成本更敏感的方案。',
-  },
-];
+function mapHotels(items: unknown): HotelOption[] {
+  return ((items as unknown[]) || []).map((h: any, i: number) => {
+    const price = parsePrice(h?.price);
+    return {
+      id: `hotel-${i}`,
+      type: 'hotel',
+      title: h?.name ?? '',
+      subtitle: h?.location ?? '',
+      district: h?.location ?? '',
+      checkIn: '',
+      checkOut: '',
+      roomType: h?.star ?? '',
+      rating: parseFloat(String(h?.score ?? 0)) || 0,
+      nightlyPrice: price,
+      totalPrice: price,
+      scheduleAt: '',
+      scheduleLabel: '',
+      location: h?.location ?? '',
+      tags: h?.star ? [h.star] : [],
+      description: `${h?.name ?? ''}，${h?.star ?? ''}，${h?.location ?? ''}`,
+    };
+  });
+}
 
-const spots: SpotOption[] = [
-  {
-    id: 'spot-1',
+function mapSpots(items: unknown): SpotOption[] {
+  return ((items as unknown[]) || []).map((p: any, i: number) => ({
+    id: `spot-${i}`,
     type: 'spot',
-    title: '景福宫 + 北村韩屋村',
-    subtitle: '城市观光',
-    area: '钟路区',
-    openHours: '09:00 - 18:00',
-    recommendedDuration: '半天',
-    ticketPrice: 60,
-    scheduleAt: '2026-11-06T10:00:00',
-    scheduleLabel: '11/06 · 10:00',
-    location: '首尔钟路区',
-    tags: ['文化体验', '经典景点'],
-    description: '适合首次到首尔的经典路线，可作为白天行程。',
-  },
-  {
-    id: 'spot-2',
-    type: 'spot',
-    title: 'Seoul Music Week',
-    subtitle: '音乐活动',
-    area: '弘大',
-    openHours: '19:00 - 22:30',
-    recommendedDuration: '半天',
-    ticketPrice: 320,
-    scheduleAt: '2026-11-06T19:00:00',
-    scheduleLabel: '11/06 · 19:00',
-    location: '首尔弘大 Live House',
-    tags: ['演唱会', '高度匹配', '推荐'],
-    description: '与你的“现场音乐 / 演唱会”偏好高度匹配，是当前最推荐的活动。',
-  },
-  {
-    id: 'spot-3',
-    type: 'spot',
-    title: '汉江夜游',
-    subtitle: '城市夜景',
-    area: '汝矣岛',
-    openHours: '18:00 - 22:00',
-    recommendedDuration: '2-3 小时',
-    ticketPrice: 120,
-    scheduleAt: '2026-11-07T18:30:00',
-    scheduleLabel: '11/07 · 18:30',
-    location: '首尔汝矣岛',
-    tags: ['夜景', '轻松行程'],
-    description: '节奏更轻松，适合行程后半段放松。',
-  },
-];
+    title: p?.name ?? '',
+    subtitle: p?.category ?? '',
+    area: p?.category ?? '',
+    openHours: '',
+    recommendedDuration: '',
+    ticketPrice: 0,
+    scheduleAt: '',
+    scheduleLabel: '',
+    location: '',
+    tags: p?.rank ? [p.rank] : [],
+    description: p?.description ?? '',
+  }));
+}
 
-const allOptions: OptionItem[] = [...flights, ...hotels, ...spots];
-
-const formatPrice = (price: number) => `HKD ${price.toLocaleString()}`;
+const formatPrice = (price: number) => `¥ ${price.toLocaleString()}`;
 const buildId = () => `${Date.now()}-${Math.random()}`;
 
 function getOptionPrice(item: OptionItem) {
@@ -243,7 +148,7 @@ export function AgentPage() {
       id: buildId(),
       role: 'assistant',
       content:
-        '你好，我已经准备了一组可选择的机票、酒店和景点。你可以在右侧查看详情，并把喜欢的项目添加到“旅行计划”中。',
+        '你好，告诉我你想去哪里、什么时候出发，我会为你搜索机票、酒店和景点。',
     },
   ]);
 
@@ -251,22 +156,24 @@ export function AgentPage() {
   const [activeTab, setActiveTab] = useState<OptionType>('flight');
   const [planItemIds, setPlanItemIds] = useState<string[]>([]);
   const [detailItem, setDetailItem] = useState<OptionItem | null>(null);
+  const [options, setOptions] = useState<OptionItem[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const visibleOptions: OptionItem[] = useMemo(() => {
-    if (activeTab === 'flight') return flights;
-    if (activeTab === 'hotel') return hotels;
-    return spots;
-  }, [activeTab]);
+    if (activeTab === 'flight') return options.filter((o) => o.type === 'flight');
+    if (activeTab === 'hotel') return options.filter((o) => o.type === 'hotel');
+    return options.filter((o) => o.type === 'spot');
+  }, [activeTab, options]);
 
   const travelPlan = useMemo(
     () =>
-      allOptions
+      options
         .filter((item) => planItemIds.includes(item.id))
         .sort(
           (a, b) =>
             new Date(a.scheduleAt).getTime() - new Date(b.scheduleAt).getTime(),
         ),
-    [planItemIds],
+    [planItemIds, options],
   );
 
   const totalBudget = useMemo(
@@ -274,26 +181,44 @@ export function AgentPage() {
     [travelPlan],
   );
 
-  function handleSend() {
+  async function handleSend() {
     const content = draft.trim();
-    if (!content) return;
-
-    setMessages((prev) => [
-      ...prev,
-      {
-        id: buildId(),
-        role: 'user',
-        content,
-      },
-      {
-        id: buildId(),
-        role: 'assistant',
-        content:
-          '已收到你的补充需求。当前先用 Mock 数据展示交互；接入后端后，这里会根据对话动态更新右侧的候选行程。',
-      },
-    ]);
+    if (!content || loading) return;
 
     setDraft('');
+    setLoading(true);
+    setMessages((prev) => [...prev, { id: buildId(), role: 'user', content }]);
+
+    try {
+      const raw = await api.search({ query: content });
+      if (raw.error) throw new Error(String(raw.error));
+      const data = raw as Record<string, unknown>;
+      const flights = mapFlights(data.flights);
+      const hotels = mapHotels(data.hotels);
+      const spots = mapSpots(data.poi);
+      setOptions([...flights, ...hotels, ...spots]);
+      setPlanItemIds([]);
+      setDetailItem(null);
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: buildId(),
+          role: 'assistant',
+          content: `已为你找到 ${flights.length} 个航班、${hotels.length} 家酒店、${spots.length} 个景点，在右侧查看并加入旅行计划吧。`,
+        },
+      ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: buildId(),
+          role: 'assistant',
+          content: `搜索失败：${err instanceof Error ? err.message : String(err)}`,
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
