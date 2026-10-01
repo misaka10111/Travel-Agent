@@ -1,7 +1,7 @@
 from datetime import timedelta
 from uuid import uuid4
 
-from app.planning.clustering import allocate, identity_groups, meters, order_day_visits, same_visit_area
+from app.planning.clustering import allocate, area_key, identity_groups, meters, order_day_visits, same_visit_area
 from app.planning.budgeting import summarize_costs
 from app.planning.ranking import hotel_ranking, nearby_ranking, preference_score
 from app.planning.routing import RoutePlanner
@@ -44,12 +44,11 @@ def compute(state, provider, route_limit, previous=None):
             fixed[main.place_id] = (dates[0] - intent.dates.start_date).days + 1
     if not attractions:
         raise PlanningError("attraction_candidates_required", 422)
-    excluded_food = {s.place_id for s in state.selections if s.decision == "exclude"}
-    food_pool = [p for p in state.candidates if p.category == "restaurant" and p.coordinates and p.place_id not in excluded_food]
-    supported = [p for p in attractions if p.place_id in mapped_required or
-        any(meters(p, food) <= 2000 for food in food_pool)]
-    if len(supported) >= count:
-        attractions = supported
+    detailed_areas = {area_key(p) for p in attractions if any(mark in p.name for mark in ("-", "—", "·"))}
+    attractions = [p for p in attractions if p.place_id in mapped_required or
+        not (area_key(p) in detailed_areas and p.name.endswith(("风景名胜区", "风景区", "景区")))]
+    # Meal coverage is an independent retrieval gap. Dropping attractions here
+    # made districts without nearby restaurant candidates disappear entirely.
     per_day = 3 if intent.preferences.compact_nearby else (2 if intent.preferences.pace == "relaxed" or "舒适" in intent.preferences.comfort_tags else 3)
     scores = {p.place_id: preference_score(p, intent) for p in attractions}
     assignments = allocate(attractions, count, per_day, mapped_required, fixed, scores,

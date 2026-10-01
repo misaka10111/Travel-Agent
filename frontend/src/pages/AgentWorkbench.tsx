@@ -347,14 +347,15 @@ export function AgentWorkbench() {
 
   useEffect(() => { setMapFailed(false); }, [plan?.plan_id, plan?.version, dayIndex]);
 
-  async function run(access: SessionCredential, current: SessionView) {
-    setView(await planning.run(access, current.state.state_version));
+  async function run(access: SessionCredential, current: SessionView, trigger: 'message' | 'answer' | 'selection' | 'schedule' | 'manual_resume' | 'retry') {
+    setView(await planning.run(access, current.state.state_version, trigger));
   }
   async function submit(text: string, optionId?: string) {
     if (busy || running || !text.trim()) return;
     setBusy(true); setError(''); say(text, 'user'); setDraft('');
     try {
       let current = view;
+      const trigger = current?.state.pending_questions[0] ? 'answer' : 'message';
       let access = credential;
       if (!current || !access) {
         const raw = saved<Record<string, unknown>>('userProfile', {});
@@ -369,7 +370,7 @@ export function AgentWorkbench() {
         current = await planning.edit(access, current.state.state_version, { message: text });
       }
       setView(current);
-      await run(access, current);
+      await run(access, current, trigger);
     } catch (cause) {
       setError(friendlyError(cause));
       if (credential) planning.get(credential).then(setView).catch(() => undefined);
@@ -378,7 +379,7 @@ export function AgentWorkbench() {
   async function resume() {
     if (!credential || !state || busy || running) return;
     setBusy(true); setError('');
-    try { await run(credential, view!); } catch (cause) { setError(friendlyError(cause)); }
+    try { await run(credential, view!, 'manual_resume'); } catch (cause) { setError(friendlyError(cause)); }
     finally { setBusy(false); }
   }
   async function retry() {
@@ -392,7 +393,7 @@ export function AgentWorkbench() {
       setUpdateStartedAt(started); setElapsedSeconds(0);
       sessionStorage.setItem(SAVED, JSON.stringify(access)); setCredential(access); setView(created);
       say('已保留本次需求与选择，正在重新生成行程。');
-      await run(access, created);
+      await run(access, created, 'retry');
     } catch (cause) { setError(friendlyError(cause)); }
     finally { setBusy(false); }
   }
@@ -408,7 +409,7 @@ export function AgentWorkbench() {
       const edited = await planning.edit(credential, state.state_version, { selections });
       setView(edited);
       say(selected ? `已移除${place.name}，正在调整行程。` : `已选择${place.name}，正在调整行程。`);
-      await run(credential, edited);
+      await run(credential, edited, 'selection');
     } catch (cause) { setError(friendlyError(cause)); planning.get(credential).then(setView).catch(() => undefined); }
     finally { setBusy(false); }
   }
@@ -419,7 +420,7 @@ export function AgentWorkbench() {
       const edited = await planning.edit(credential, state.state_version, { intent_patch: { preferences } });
       setView(edited);
       say('已更新每日时间、早餐、就近安排与出行方式，正在调整行程。');
-      await run(credential, edited);
+      await run(credential, edited, 'schedule');
     } catch (cause) { setError(friendlyError(cause)); planning.get(credential).then(setView).catch(() => undefined); }
     finally { setBusy(false); }
   }

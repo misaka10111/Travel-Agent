@@ -15,7 +15,7 @@ from app.db import SessionLocal
 from app.runtime.executor import PlanningRuntime
 from app.runtime.guards import PlanningError
 from app.runtime.store import SessionStore, fingerprint
-from app.schemas.planning_api import AnswerSession, CreatedSession, CreateSession, EditSession, SessionEvent, SessionView, VersionCommand
+from app.schemas.planning_api import AnswerSession, CreatedSession, CreateSession, EditSession, RunSession, SessionEvent, SessionView, VersionCommand
 from app.services.intent_service import apply_patch, invalidate
 from app.tools.registry import ToolRegistry
 
@@ -110,7 +110,7 @@ async def day_map(session_id: str, day_index: int = Query(ge=1, le=30), runtime=
 
 
 @router.post("/{session_id}/run", response_model=SessionView, status_code=202)
-async def run_session(session_id: str, body: VersionCommand, runtime=Depends(owned_session)):
+async def run_session(session_id: str, body: RunSession, runtime=Depends(owned_session)):
     signature, snapshot = command(runtime, session_id, body, "run")
     if snapshot is None:
         return runtime.store.view(session_id, replayed=True)
@@ -123,7 +123,7 @@ async def run_session(session_id: str, body: VersionCommand, runtime=Depends(own
     state.status, state.attention_reason = "running", None
     state.agent_message = None
     runtime.store.save(state, expected=state.state_version, kind="run_requested",
-        command=(body.request_id, signature), new_lease=lease_id)
+        command=(body.request_id, signature), new_lease=lease_id, event_data={"trigger": body.trigger})
     runtime.start(session_id, lease_id)
     return runtime.store.view(session_id)
 

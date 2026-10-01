@@ -64,6 +64,10 @@ class VersionCommand(ContractModel):
     base_state_version: int = Field(ge=0)
 
 
+class RunSession(VersionCommand):
+    trigger: Literal["message", "answer", "selection", "schedule", "manual_resume", "retry"] = "manual_resume"
+
+
 class EditSession(VersionCommand):
     intent_patch: IntentPatch | None = None
     selections: list[Selection] | None = Field(default=None, max_length=50)

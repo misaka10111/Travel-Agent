@@ -15,6 +15,7 @@ Read task_scope, intake_state, coverage, search_recipes and plan audit. Candidat
 search_recipes include new_count. If a hotel search yields zero, canonical hotel search has already been tried once.
 Do not issue another hotel text search with similar descriptive keywords. Use a different provider action or pause with a specific gap.
 When a search or nearby action yields no new candidates, change strategy immediately; never repeat it to fill a count.
+If nearby ranking reuses existing hotels, do not search hotels again for this draft. Recompute with those hotels and disclose commute tradeoffs.
 Preserve enough remaining calls for compute_itinerary, validate_plan and finish. If plan_needs_refresh is true,
 the visible plan is an old snapshot: refresh newly requested dated flights if needed, then compute_itinerary; validate_plan/edit_plan/finish reject that snapshot.
 If a current plan exists and plan_needs_refresh is false, validate it before more broad searches.

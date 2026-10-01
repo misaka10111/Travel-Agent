@@ -29,6 +29,19 @@ def same_visit_area(a, b):
             (complex_key(a.name) and complex_key(a.name) == complex_key(b.name) and distance <= 2000))
 
 
+def area_key(place):
+    """Named large complex for day grouping, not a POI identity equivalence."""
+    name = unicodedata.normalize("NFKC", place.name).strip()
+    root = re.split(r"[-—·]", name, maxsplit=1)[0].strip()
+    city = place.region.label
+    if city and root.startswith(city):
+        root = root[len(city):]
+    for suffix in ("风景名胜区", "风景区", "景区"):
+        if root.endswith(suffix):
+            return root[:-len(suffix)] or None
+    return None
+
+
 def identity_groups(places):
     by_id = {p.place_id: p for p in places}
     parent = {}
@@ -79,23 +92,41 @@ def allocate(places, count, per_day, required_ids, fixed_days, scores, spread_se
     center = min(places, key=lambda p: sum(meters(p, q) for q in places)) if places else None
     ordered = sorted(remaining, key=lambda p: (p.place_id not in required_ids,
         -(scores[p.place_id] - (meters(p, center) / 10000 if center else 0)), p.place_id))
-    remaining = ordered[:max(count * per_day - sum(map(len, days)), len(required_ids & {p.place_id for p in ordered}))]
+    capacity = max(count * per_day - sum(map(len, days)), len(required_ids & {p.place_id for p in ordered}))
+    groups = {}
+    for place in ordered:
+        groups.setdefault(area_key(place) or place.place_id, []).append(place)
+    remaining = [place for place in ordered if place.place_id in required_ids]
+    while len(remaining) < capacity and any(groups.values()):
+        for group in groups.values():
+            while group and group[0] in remaining:
+                group.pop(0)
+            if group and len(remaining) < capacity:
+                remaining.append(group.pop(0))
     for index, day in enumerate(days):
         if not day and remaining:
             seeded = [place for group in days for place in group]
+            occupied_areas = {area_key(place) for place in seeded if area_key(place)}
+            distinct = [place for place in remaining if not area_key(place) or area_key(place) not in occupied_areas]
+            seed_pool = distinct or remaining
             if spread_seeds and seeded:
-                seed = max(remaining, key=lambda p: (min(meters(p, other) for other in seeded), scores[p.place_id]))
+                seed = max(seed_pool, key=lambda p: (min(meters(p, other) for other in seeded), scores[p.place_id]))
             elif spread_seeds:
-                seed = max(remaining, key=lambda p: scores[p.place_id])
+                seed = max(seed_pool, key=lambda p: scores[p.place_id])
             else:
-                seed = max(remaining, key=lambda p: meters(p, center))
+                seed = max(seed_pool, key=lambda p: meters(p, center))
             day.append(seed)
             remaining.remove(seed)
         # Fill a compact area before seeding another day, while reserving at
         # least one attraction for each remaining empty day.
         empty_later = sum(not d for d in days[index + 1:])
         while day and len(day) < per_day and len(remaining) > empty_later:
-            neighbour = min(remaining, key=lambda p: min(meters(p, q) for q in day))
+            same_area = [p for p in remaining if area_key(p) and area_key(p) in {area_key(q) for q in day}]
+            unrepresented = {area_key(p) for p in remaining if area_key(p) and
+                not any(area_key(q) == area_key(p) for group in days for q in group)}
+            if not same_area and unrepresented and empty_later and len(unrepresented) <= empty_later:
+                break
+            neighbour = min(same_area or remaining, key=lambda p: min(meters(p, q) for q in day))
             day.append(neighbour)
             remaining.remove(neighbour)
     while remaining:
@@ -106,7 +137,9 @@ def allocate(places, count, per_day, required_ids, fixed_days, scores, spread_se
                 possible = list(range(count))
             else:
                 continue
-        chosen = min(possible, key=lambda i: (min((meters(place, p) for p in days[i]), default=0), len(days[i])))
+        key = area_key(place)
+        same_area_days = [i for i in possible if key and any(area_key(p) == key for p in days[i])]
+        chosen = min(same_area_days or possible, key=lambda i: (min((meters(place, p) for p in days[i]), default=0), len(days[i])))
         days[chosen].append(place)
     return days
 

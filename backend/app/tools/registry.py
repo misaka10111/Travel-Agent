@@ -2,6 +2,7 @@ import asyncio
 from uuid import uuid4
 
 from app.providers.maps.amap import AmapProvider
+from app.providers.maps.base import MapError
 from app.providers.maps.transport import MapTransport
 from app.runtime.guards import PlanningError
 from app.agents.intake_agent import IntakeAgent
@@ -81,22 +82,35 @@ class ToolRegistry:
             keywords = list(dict.fromkeys(keywords))[:3]
 
             def search(provider):
-                found = {}
+                batches = []
                 excluded = set(action.filters.exclude_place_ids)
                 excluded.update(s.place_id for s in state.selections if s.decision == "exclude")
                 excluded.update(c.place_id for c in state.intent_snapshot.constraints if c.kind == "exclude" and c.strength == "hard")
                 for keyword in keywords:
+                    found = {}
                     for place in provider.search_places(keyword, action.region, min(action.limit, 25)):
                         if place.category in action.categories and place.place_id not in excluded:
                             found[place.place_id] = place
+                    batches.append(list(found.values()))
                 # Amap keyword search does not enforce our category filter. A
                 # descriptive hotel query can return zero hotel POIs. Try one
                 # canonical query before reporting the category unavailable.
-                if not found and action.categories == ["hotel"] and "酒店" not in keywords:
+                if not any(batches) and action.categories == ["hotel"] and "酒店" not in keywords:
+                    found = {}
                     for place in provider.search_places("酒店", action.region, min(action.limit, 25)):
                         if place.category == "hotel" and place.place_id not in excluded:
                             found[place.place_id] = place
-                return list(found.values())[:action.limit]
+                    batches.append(list(found.values()))
+                # Interleave topics before applying the limit. Otherwise a broad
+                # first query can consume every slot and hide later districts.
+                selected = {}
+                for index in range(max(map(len, batches), default=0)):
+                    for batch in batches:
+                        if index < len(batch):
+                            selected.setdefault(batch[index].place_id, batch[index])
+                        if len(selected) >= action.limit:
+                            return list(selected.values())
+                return list(selected.values())
 
             places = await asyncio.to_thread(self._map, search, reserve_map)
             # Merge newly retrieved identities; explicit user selections remain independent.
@@ -132,6 +146,8 @@ class ToolRegistry:
                 "warnings": ["requested_fields_may_be_unknown"]}
         if action.kind == "rank_nearby":
             anchors = [p for p in state.candidates if p.place_id in action.anchor_refs][:3]
+            existing = [p for p in state.candidates if p.category == action.category and p.coordinates and
+                p.place_id not in {s.place_id for s in state.selections if s.decision == "exclude"}]
             def nearby(provider):
                 found = {}
                 for anchor in anchors:
@@ -141,7 +157,18 @@ class ToolRegistry:
                             if p.category == action.category and p.place_id not in {s.place_id for s in state.selections if s.decision == "exclude"}:
                                 found[p.place_id] = p
                 return list(found.values())
-            places = await asyncio.to_thread(self._map, nearby, reserve_map)
+            fallback_warning = None
+            if action.category == "hotel" and len(existing) >= 12:
+                places = []
+                fallback_warning = "existing_hotel_candidates_reused_no_new_provider_search"
+            else:
+                try:
+                    places = await asyncio.to_thread(self._map, nearby, reserve_map)
+                except MapError as exc:
+                    if not exc.retryable or not existing:
+                        raise
+                    places = []
+                    fallback_warning = "nearby_provider_temporarily_unavailable_existing_candidates_used"
             merged = {p.place_id: p for p in state.candidates}
             kept = []
             for place in places:
@@ -156,11 +183,13 @@ class ToolRegistry:
             recipe = SearchRecipe(queries=["餐厅" if action.category == "restaurant" else "酒店"], categories=[action.category], limit=25)
             if recipe not in state.search_recipes:
                 state.search_recipes.append(recipe)
-            ranking = nearby_ranking(kept, anchors, action.category, state.intent_snapshot)
+            ranking = nearby_ranking(list({p.place_id: p for p in existing + kept}.values()), anchors,
+                action.category, state.intent_snapshot)[:20]
             return state, {"status": "partial", "kind": "ranking", "items": [
                 {"place_id": r.place_id, "score": sum(r.score_components.values()), "explanation": "；".join(r.reasons)} for r in ranking],
                 "warnings": ["distance_is_pruning_only; menus_and_inventory_not_confirmed"] +
-                    (["candidate_capacity_reached"] if len(kept) < len(places) else [])}
+                    (["candidate_capacity_reached"] if len(kept) < len(places) else []) +
+                    ([fallback_warning] if fallback_warning else [])}
         if action.kind in {"compute_itinerary", "edit_plan"}:
             previous = edit(state.current_plan, action.changes, state) if action.kind == "edit_plan" else None
             if action.kind == "compute_itinerary":

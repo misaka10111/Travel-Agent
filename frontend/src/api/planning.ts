@@ -71,7 +71,8 @@ async function call<T>(path: string, token?: string, body?: unknown, method = 'G
 export const planning = {
   create: (message: string, profile: unknown) => call<SessionView & { access_token: string }>('', undefined, { message, profile, task_scope: 'itinerary' }, 'POST'),
   get: (c: SessionCredential) => call<SessionView>(`/${c.id}`, c.token),
-  run: (c: SessionCredential, version: number) => call<SessionView>(`/${c.id}/run`, c.token, { request_id: crypto.randomUUID(), base_state_version: version }, 'POST'),
+  run: (c: SessionCredential, version: number, trigger: 'message' | 'answer' | 'selection' | 'schedule' | 'manual_resume' | 'retry') =>
+    call<SessionView>(`/${c.id}/run`, c.token, { request_id: crypto.randomUUID(), base_state_version: version, trigger }, 'POST'),
   retry: (c: SessionCredential, version: number) => call<SessionView & { access_token: string }>(`/${c.id}/retry`, c.token, { request_id: crypto.randomUUID(), base_state_version: version }, 'POST'),
   edit: (c: SessionCredential, version: number, update: unknown) => call<SessionView>(`/${c.id}`, c.token, { request_id: crypto.randomUUID(), base_state_version: version, ...(update as object) }, 'PATCH'),
   answer: (c: SessionCredential, q: SessionView['state']['pending_questions'][number], text?: string, optionId?: string) => call<SessionView>(`/${c.id}/answers`, c.token, { answer: { request_id: crypto.randomUUID(), question_id: q.question_id, state_version: q.state_version, ...(text ? { text } : {}), option_ids: optionId ? [optionId] : [] } }, 'POST'),
