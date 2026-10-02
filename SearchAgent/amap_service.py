@@ -35,15 +35,18 @@ FOOD_TYPES = "050000"
 
 @dataclass
 class RestaurantInfo:
-    """标准化餐厅信息，规划智能体消费的数据契约。"""
+    """标准化餐厅信息，规划智能体消费的数据契约。
+
+    rating / price_per_person 缺失时为 None（不是 0），避免下游误判为零分或免费。
+    """
 
     name: str
     address: str
     longitude: float
     latitude: float
     cuisine: str = ""
-    rating: float = 0.0
-    price_per_person: float = 0.0
+    rating: float | None = None
+    price_per_person: float | None = None
     business_area: str = ""
     poi_id: str = ""
     map_url: str = ""
@@ -164,8 +167,10 @@ def search_restaurants(
 
         # v5 API：评分、人均、商圈都在 business 对象中
         business = poi.get("business") or {}
-        rating = float(business.get("rating") or 0)
-        cost = float(business.get("cost") or 0)
+        rating_raw = business.get("rating")
+        cost_raw = business.get("cost")
+        rating = float(rating_raw) if rating_raw else None
+        price_per_person = float(cost_raw) if cost_raw else None
         business_area = business.get("business_area") or poi.get("business_area") or ""
 
         poi_id = poi.get("id") or ""
@@ -179,7 +184,7 @@ def search_restaurants(
                 latitude=lat,
                 cuisine=_parse_cuisine(poi.get("type") or ""),
                 rating=rating,
-                price_per_person=cost,
+                price_per_person=price_per_person,
                 business_area=business_area,
                 poi_id=poi_id,
                 map_url=_build_map_url(lng, lat, name),
@@ -190,8 +195,8 @@ def search_restaurants(
     # 排序：有评分的优先，评分高的在前；评分相同则人均适中(≈100元)的靠前
     results.sort(
         key=lambda r: (
-            1 if r.rating > 0 else 0,
-            r.rating,
+            1 if r.rating else 0,
+            r.rating or 0,
             -abs(r.price_per_person - 100) if r.price_per_person else -999,
         ),
         reverse=True,

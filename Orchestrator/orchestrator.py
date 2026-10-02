@@ -125,6 +125,13 @@ def search_node(state: State) -> dict:
     }
     if basic.get("origin"):
         payload["origin"] = basic["origin"]
+    # 把用户画像里的预算、人数、旅行目的传给搜索，用于餐饮搜索的菜系/预算过滤
+    if basic:
+        payload["basic"] = {
+            k: basic.get(k)
+            for k in ("total_budget", "travelers", "purposes")
+            if basic.get(k)
+        }
     result = _call(SEARCH_PYTHON, SEARCH_PY, payload)
     return {"search": result}
 

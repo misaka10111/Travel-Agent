@@ -116,8 +116,8 @@ class TestRestaurantInfoLocal(unittest.TestCase):
     def test_default_values(self):
         r = RestaurantInfo(name="测试", address="测试地址", longitude=120.0, latitude=30.0)
         self.assertEqual(r.cuisine, "")
-        self.assertEqual(r.rating, 0.0)
-        self.assertEqual(r.price_per_person, 0.0)
+        self.assertIsNone(r.rating)
+        self.assertIsNone(r.price_per_person)
         self.assertEqual(r.poi_id, "")
         self.assertEqual(r.map_url, "")
         self.assertEqual(r.poi_detail_url, "")

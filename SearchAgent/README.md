@@ -9,7 +9,7 @@
 - `search_promotions`：检索飞猪促销活动/优惠商品（飞猪 FlyAI）
 - `search_web`：通用网页搜索（Tavily，需要 `TAVILY_API_KEY`）
 - `search_events`：搜索某地日期段内的热点活动（演唱会/比赛/节日等，Tavily）
-- `search_food`：搜索当地美食（大众点评/小红书/抖音等，Tavily）
+- `search_food`：搜索目的地餐厅（高德地图 POI，返回名称/菜系/评分/人均/地址/商圈/地图链接/POI详情链接；高德不可用时回退 Tavily 网页搜索）
 
 文件说明：
 

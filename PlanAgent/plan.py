@@ -46,6 +46,8 @@ PLAN_SYSTEM_PROMPT = (
     "2) 景点形式按 travel_style 匹配：美食→餐饮街/老字号；亲子→乐园/动物园/海洋馆；文化→博物馆/古迹/艺术馆；"
     "自然→山水园林/湖景；购物→商圈；摄影→出片打卡点；冒险→徒步/户外体验；"
     "3) 美食：travel_style 含「美食探店」或 purposes 含「美食之旅」时，午晚餐各给具体饭店名；否则每餐1家即可；"
+    "search.food 里的每条餐厅含 name/cuisine(菜系)/rating(评分)/price_per_person(人均)/business_area(商圈)/address，"
+    "选餐厅时参考评分和人均是否符合预算，尽量选与当天景点同商圈的餐厅；",
     "4) 预算：经济档优先免费景点+公共交通，豪华档可付费体验+打车；总花费不超 total_budget；"
     "5) 人数与身份：带老人/孩子减少步行、安排休息点；学生控预算；退休轻松节奏；"
     "6) 交通：相邻景点在 note 里标注交通方式+大致耗时（打车/地铁/步行），尽量地理就近、少折返；"
@@ -140,12 +142,34 @@ def _trim_search(search: dict) -> dict:
             for p in search["promotions"]
         ]
 
-    for key in ("events", "food"):
-        if isinstance(search.get(key), list):
-            result[key] = [
-                {"title": x.get("title"), "content": (x.get("content") or "")[:120]}
-                for x in search[key]
-            ]
+    # events 仍按网页搜索结果处理（title + content）
+    if isinstance(search.get("events"), list):
+        result["events"] = [
+            {"title": x.get("title"), "content": (x.get("content") or "")[:120]}
+            for x in search["events"]
+        ]
+
+    # food：区分高德结构化数据和 Tavily 网页数据
+    if isinstance(search.get("food"), list):
+        trimmed_food = []
+        for x in search["food"]:
+            if x.get("_source") == "amap" or "cuisine" in x:
+                # 高德结构化餐厅：保留规划需要的核心字段
+                trimmed_food.append({
+                    "name": x.get("name"),
+                    "cuisine": x.get("cuisine"),
+                    "rating": x.get("rating"),
+                    "price_per_person": x.get("price_per_person"),
+                    "business_area": x.get("business_area"),
+                    "address": x.get("address"),
+                })
+            else:
+                # Tavily 回退数据：title + content
+                trimmed_food.append({
+                    "title": x.get("title"),
+                    "content": (x.get("content") or "")[:120],
+                })
+        result["food"] = trimmed_food
 
     for key in ("flights", "trains"):
         if isinstance(search.get(key), list):
@@ -181,7 +205,13 @@ def _backfill_links(plan: dict, search: dict) -> dict:
             continue
         for item in items:
             name = item.get("name") or item.get("title") or ""
-            url = item.get("url") or ""
+            # 高德餐厅优先用 POI 详情链接，其次地图标记链接，最后通用 url
+            url = (
+                item.get("poi_detail_url")
+                or item.get("map_url")
+                or item.get("url")
+                or ""
+            )
             if name and url:
                 entries.append((name, url))
     for key in ("flights", "trains"):

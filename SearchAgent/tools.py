@@ -13,6 +13,7 @@ import os
 import re
 import ssl
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -547,22 +548,52 @@ def _fetch_events(
     return _extract_item_features(items, EVENTS_FEATURE_PROMPT)
 
 
-def _fetch_food(destination: str, max_results: int = 10) -> list[dict]:
+def _fetch_food(
+    destination: str,
+    keyword: str | None = None,
+    max_price: float | None = None,
+    max_results: int = 10,
+) -> list[dict]:
     """用高德地图 POI 搜索当地餐厅，返回结构化数据。
 
     优先调用高德（返回 name/address/lng/lat/cuisine/rating/人均/商圈/地图链接/POI详情链接）；
-    若未配置 AMAP_KEY 或调用失败，回退到 Tavily 网页搜索。
+    若未配置 AMAP_KEY 或调用失败，回退到 Tavily 网页搜索，并在结果中标记来源。
+
+    每条结果带 _source 字段："amap" 或 "tavily"，便于下游区分数据格式。
     """
+    # 1. 优先高德
     try:
-        restaurants = search_restaurants(destination, limit=max_results)
+        restaurants = search_restaurants(
+            destination,
+            keyword=keyword,
+            limit=max_results,
+        )
         if restaurants:
-            return [r.to_dict() for r in restaurants]
-    except Exception:  # noqa: BLE001
-        pass
-    # 回退：Tavily 网页搜索
-    query = f"{destination} 美食 必吃 餐厅 小吃 大众点评 小红书 抖音 探店"
+            items = [r.to_dict() for r in restaurants]
+            # 按人均预算过滤（如果有）
+            if max_price is not None and max_price > 0:
+                items = [
+                    it for it in items
+                    if it.get("price_per_person") is None or it["price_per_person"] <= max_price
+                ]
+            for it in items:
+                it["_source"] = "amap"
+            return items
+        # 高德返回空也算失败，走回退
+        raise RuntimeError("高德返回 0 条餐厅结果")
+    except Exception as exc:  # noqa: BLE001
+        amap_error = str(exc)
+        print(f"[food] 高德搜索失败，回退 Tavily：{amap_error}", file=sys.stderr)
+
+    # 2. 回退：Tavily 网页搜索
+    query = f"{destination} 美食 必吃 餐厅 小吃"
+    if keyword:
+        query += f" {keyword}"
     items = _fetch_web_search(query, max_results=max_results)
-    return _extract_item_features(items, FOOD_FEATURE_PROMPT)
+    items = _extract_item_features(items, FOOD_FEATURE_PROMPT)
+    for it in items:
+        it["_source"] = "tavily"
+    return items
 
 
 # ================= 文本格式化（MCP 工具用） =================
@@ -834,8 +865,8 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
         return key, {"error": str(exc)}
 
 
-def _cache_key(destination: str, start: str, end: str, origin: str) -> str:
-    raw = "|".join([destination, start, end, origin])
+def _cache_key(destination: str, start: str, end: str, origin: str, extra: str = "") -> str:
+    raw = "|".join([destination, start, end, origin, extra])
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -862,7 +893,13 @@ def _write_cache(key: str, result: dict) -> None:
 
 
 def run_search(input_data: dict) -> dict:
-    """输入 {destination, start_date, end_date?, origin?}，并行调用 6~8 个工具，返回结构化 JSON。"""
+    """输入 {destination, start_date, end_date?, origin?, basic?, food_keyword?}，
+    并行调用 6~8 个工具，返回结构化 JSON。
+
+    basic 可含 total_budget（总预算）、travelers（出行人数）、purposes（旅行目的），
+    用于推算餐饮搜索的人均预算上限。
+    food_keyword 为用户明确提到的菜系/关键词（如 "川菜"、"火锅"），会透传给高德搜索。
+    """
     destination = (input_data.get("destination") or "").strip()
     if not destination:
         raise ValueError("缺少 destination")
@@ -873,8 +910,16 @@ def run_search(input_data: dict) -> dict:
     end = _normalize_date(input_data["end_date"]) if input_data.get("end_date") else start
     origin = (input_data.get("origin") or "").strip()
 
-    # 缓存：同一目的地/日期/出发地的结果直接复用，避免反复调用飞猪/Tavily/天气
-    cache_key = _cache_key(destination, start, end, origin)
+    # 从 basic 中提取餐饮搜索参数
+    basic = input_data.get("basic") or {}
+    food_keyword = (input_data.get("food_keyword") or "").strip() or None
+    max_price = _estimate_food_budget(basic)
+
+    # 缓存：把餐饮搜索参数纳入 key，不同菜系/预算不串缓存
+    cache_key = _cache_key(
+        destination, start, end, origin,
+        extra=f"{food_keyword or ''}|{max_price or ''}",
+    )
     cached = _read_cache(cache_key)
     if cached is not None:
         return cached
@@ -893,7 +938,11 @@ def run_search(input_data: dict) -> dict:
         "poi": lambda: _fetch_poi(destination),
         "promotions": lambda: _fetch_promotions(f"{destination} 促销 特价"),
         "events": lambda: _fetch_events(destination, start, end),
-        "food": lambda: _fetch_food(destination),
+        "food": lambda: _fetch_food(
+            destination,
+            keyword=food_keyword,
+            max_price=max_price,
+        ),
     }
     if origin:
         tasks["flights"] = lambda: _fetch_round_trip(_fetch_flights, origin, destination, start, end)
@@ -906,6 +955,33 @@ def run_search(input_data: dict) -> dict:
 
     _write_cache(cache_key, result)
     return result
+
+
+def _estimate_food_budget(basic: dict) -> float | None:
+    """根据总预算和出行人数估算人均餐饮预算上限。
+
+    简单策略：总预算 ÷ 人数 ÷ 行程天数 ÷ 3（三餐），取整；
+    拿不到时返回 None（不过滤）。
+    """
+    total_budget = basic.get("total_budget")
+    if not total_budget:
+        return None
+    try:
+        total = float(total_budget)
+    except (TypeError, ValueError):
+        return None
+    if total <= 0:
+        return None
+
+    travelers = 1
+    travelers_raw = basic.get("travelers") or ""
+    m = re.search(r"(\d+)", str(travelers_raw))
+    if m:
+        travelers = max(1, int(m.group(1)))
+
+    # 经验值：餐饮占总预算约 25%，人均每餐上限 = 总预算×0.25 ÷ 人数 ÷ 6（按2天×3餐估算）
+    per_meal = total * 0.25 / travelers / 6
+    return round(per_meal, 0)
 
 
 @server.tool(description="综合搜索某目的地（天气+酒店+景点+餐厅+促销+活动），返回结构化 JSON。")
