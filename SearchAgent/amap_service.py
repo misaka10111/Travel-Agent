@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import time
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
+
+import certifi
 
 AMAP_BASE = "https://restapi.amap.com"
 
@@ -57,8 +60,9 @@ def _get(path: str, **params: Any) -> dict:
         raise RuntimeError("缺少 AMAP_KEY，请在 SearchAgent/.env 中配置高德 Web 服务 Key")
     params["key"] = api_key
     url = f"{AMAP_BASE}{path}?{urllib.parse.urlencode(params)}"
+    context = ssl.create_default_context(cafile=certifi.where())
     for attempt in range(2):
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with urllib.request.urlopen(url, timeout=10, context=context) as resp:
             data = json.loads(resp.read())
         if data.get("status") == "1":
             return data
