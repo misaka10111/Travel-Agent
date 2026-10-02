@@ -27,6 +27,8 @@ from mcp.server.fastmcp import FastMCP
 from openai import OpenAI
 from tavily import TavilyClient
 
+from amap_service import search_restaurants
+
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -546,7 +548,18 @@ def _fetch_events(
 
 
 def _fetch_food(destination: str, max_results: int = 10) -> list[dict]:
-    """搜索当地美食（大众点评/小红书/抖音等平台），复用 Tavily。"""
+    """用高德地图 POI 搜索当地餐厅，返回结构化数据。
+
+    优先调用高德（返回 name/address/lng/lat/cuisine/rating/人均/商圈/地图链接/POI详情链接）；
+    若未配置 AMAP_KEY 或调用失败，回退到 Tavily 网页搜索。
+    """
+    try:
+        restaurants = search_restaurants(destination, limit=max_results)
+        if restaurants:
+            return [r.to_dict() for r in restaurants]
+    except Exception:  # noqa: BLE001
+        pass
+    # 回退：Tavily 网页搜索
     query = f"{destination} 美食 必吃 餐厅 小吃 大众点评 小红书 抖音 探店"
     items = _fetch_web_search(query, max_results=max_results)
     return _extract_item_features(items, FOOD_FEATURE_PROMPT)
@@ -684,14 +697,34 @@ def _format_events(items: list[dict], destination: str, start_date: str, end_dat
 
 def _format_food(items: list[dict], destination: str) -> str:
     if not items:
-        return f"没有找到「{destination}」的美食推荐。"
-    lines = [f"{destination} 美食推荐（前 {min(len(items), 10)} 条）："]
+        return f"没有找到「{destination}」的餐厅。"
+    # 高德结构化数据有 name/cuisine/rating 等字段；Tavily 回退数据只有 title/content
+    is_amap = any("cuisine" in item for item in items)
+    lines = [f"{destination} 餐厅推荐（前 {min(len(items), 10)} 家）："]
     for item in items[:10]:
-        lines.append(f" - {item['title']}")
-        if item.get("content"):
-            lines.append(f"   {item['content'][:180]}")
-        if item.get("url"):
-            lines.append(f"   {item['url']}")
+        if is_amap:
+            parts = [item.get("name", "")]
+            if item.get("cuisine"):
+                parts.append(f"菜系:{item['cuisine']}")
+            if item.get("rating"):
+                parts.append(f"评分:{item['rating']}")
+            if item.get("price_per_person"):
+                parts.append(f"人均:¥{item['price_per_person']}")
+            if item.get("business_area"):
+                parts.append(f"商圈:{item['business_area']}")
+            if item.get("address"):
+                parts.append(f"地址:{item['address']}")
+            lines.append(" - " + " | ".join(p for p in parts if p))
+            if item.get("map_url"):
+                lines.append(f"   地图: {item['map_url']}")
+            if item.get("poi_detail_url"):
+                lines.append(f"   详情: {item['poi_detail_url']}")
+        else:
+            lines.append(f" - {item.get('title', '')}")
+            if item.get("content"):
+                lines.append(f"   {item['content'][:180]}")
+            if item.get("url"):
+                lines.append(f"   {item['url']}")
     return "\n".join(lines)
 
 
@@ -786,7 +819,7 @@ def search_events(destination: str, start_date: str, end_date: str, max_results:
     )
 
 
-@server.tool(description="搜索当地美食（大众点评/小红书/抖音等平台）。destination 必填。")
+@server.tool(description="搜索目的地餐厅（高德地图），返回名称、菜系、评分、人均、地址、商圈和地图/详情链接。destination 必填。")
 def search_food(destination: str, max_results: int = 10) -> str:
     return _format_food(_fetch_food(destination, max_results), destination)
 
@@ -875,7 +908,7 @@ def run_search(input_data: dict) -> dict:
     return result
 
 
-@server.tool(description="综合搜索某目的地（天气+酒店+景点+促销），返回结构化 JSON。")
+@server.tool(description="综合搜索某目的地（天气+酒店+景点+餐厅+促销+活动），返回结构化 JSON。")
 def search_trip(destination: str, start_date: str, end_date: str | None = None) -> str:
     return json.dumps(
         run_search({"destination": destination, "start_date": start_date, "end_date": end_date}),
