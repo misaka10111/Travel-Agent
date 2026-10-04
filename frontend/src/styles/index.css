@@ -1956,6 +1956,72 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.ta-stop-button {
+  border: 0;
+  border-radius: 11px;
+  padding: 9px 12px;
+  background: #e9edf5;
+  color: #5a6478;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.ta-stop-button:hover {
+  background: #dde3ef;
+}
+
+.ta-clarify-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid #e6eaf5;
+  border-radius: 13px;
+  background: #f7f9ff;
+}
+
+.ta-clarify-title {
+  color: #25314b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ta-clarify-row {
+  display: flex;
+  gap: 8px;
+}
+
+.ta-clarify-row input {
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid #dde2ee;
+  border-radius: 10px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+
+.ta-clarify-submit {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #4f6df5;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.ta-clarify-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .ta-ghost-button {
   background: #f1f4f9;
   color: #455064;
@@ -2013,6 +2079,156 @@ button:disabled {
 .ta-plan-empty span {
   color: #9aa2b0;
   font-size: 10px;
+}
+
+.ta-plan-empty .ta-plan-mock-button {
+  margin-top: 8px;
+  padding: 8px 14px;
+  border: 1px solid #d9def0;
+  border-radius: 999px;
+  background: #fff;
+  color: #5267ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ta-plan-empty .ta-plan-mock-button:hover {
+  border-color: rgba(82, 103, 255, 0.55);
+  background: #f6f7ff;
+}
+
+.ta-plan-styles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+.ta-plan-style-card.active {
+  border-color: rgba(82, 103, 255, 0.7);
+  box-shadow: 0 0 0 2px rgba(82, 103, 255, 0.16);
+}
+
+.ta-plan-styles-hint {
+  flex: 0 0 auto;
+  color: #929aaa;
+  font-size: 11px;
+}
+
+.ta-plan-empty .ta-plan-styles {
+  justify-content: flex-start;
+  align-items: stretch;
+  padding: 0;
+}
+
+.ta-plan-empty:has(.ta-plan-styles) {
+  justify-content: flex-start;
+  align-items: stretch;
+}
+
+.ta-plan-empty:has(.ta-plan-styles) .ta-plan-mock-button {
+  margin-top: auto;
+}
+
+.ta-plan-style {
+  border: 1px solid #e8ebf3;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.ta-plan-style-card {
+  display: flex;
+  flex: 1 1 0;
+  min-height: 0;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 22px 24px;
+  border: 1px solid #e8ebf3;
+  border-radius: 12px;
+  background: #fff;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.ta-plan-style-card:hover {
+  border-color: rgba(82, 103, 255, 0.4);
+  box-shadow: 0 4px 12px rgba(91, 83, 220, 0.08);
+}
+
+.ta-plan-style-name {
+  display: block;
+  font-weight: 800;
+  color: #172033;
+  font-size: 22px;
+  margin-bottom: 4px;
+}
+
+.ta-plan-style-summary {
+  margin: 0;
+  font-size: 15px;
+  color: #697386;
+  line-height: 1.7;
+}
+
+.ta-plan-style-blocks {
+  padding: 8px 10px;
+  background: #fff;
+}
+
+.ta-plan-style-day {
+  margin-bottom: 8px;
+}
+
+.ta-plan-style-day-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #5267ff;
+  margin-bottom: 4px;
+}
+
+.ta-plan-block {
+  display: flex;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px dashed #eff2f6;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.ta-plan-block.selected {
+  background: #f0edff;
+  box-shadow: 0 0 0 1px rgba(82, 103, 255, 0.35);
+}
+
+.ta-plan-block:last-child {
+  border-bottom: 0;
+}
+
+.ta-plan-block-left {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 72px;
+  font-size: 11px;
+  color: #697386;
+}
+
+.ta-plan-block-body strong {
+  font-size: 13px;
+  color: #172033;
+}
+
+.ta-plan-block-body p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: #697386;
 }
 
 .ta-plan-timeline {
@@ -2864,7 +3080,7 @@ button:disabled {
 /* Tabs use the full center width without crowding the heading */
 .ta-options-column .ta-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 6px;
   width: 100%;
   margin: 0;
@@ -4249,6 +4465,165 @@ button:disabled {
   min-height: 0;
 }
 
+/* Full-column detail view for one expanded plan (fills the whole column). */
+.ta-plan-detail {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.ta-plan-detail-back {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  margin-bottom: 8px;
+  padding: 6px 10px;
+  border: 1px solid #e8ebf3;
+  border-radius: 999px;
+  background: #fff;
+  color: #5267ff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ta-plan-detail-back:hover {
+  border-color: rgba(82, 103, 255, 0.45);
+  background: #f6f7ff;
+}
+
+.ta-plan-detail-title {
+  flex: 0 0 auto;
+  margin-bottom: 10px;
+}
+
+.ta-plan-detail-title strong {
+  display: block;
+  color: #172033;
+  font-size: 17px;
+}
+
+.ta-plan-detail-title p {
+  margin: 4px 0 0;
+  color: #697386;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.ta-plan-detail-scroll {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
+.ta-plan-detail .ta-plan-confirm-button {
+  flex: 0 0 auto;
+  margin-top: 10px;
+  padding: 10px 16px;
+  border: 0;
+  border-radius: 12px;
+  background: #5267ff;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ta-plan-detail .ta-plan-confirm-button:hover {
+  background: #4356e8;
+}
+
+.ta-plan-rating {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid #eff2f6;
+}
+
+.ta-plan-rating-label {
+  color: #25314b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ta-plan-rating-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ta-plan-rating-button {
+  padding: 7px 11px;
+  border: 1px solid #e5e9f2;
+  border-radius: 999px;
+  background: #fff;
+  color: #59657a;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ta-plan-rating-button:hover {
+  border-color: rgba(82, 103, 255, 0.5);
+  color: #5267ff;
+}
+
+.ta-plan-rating-button.active {
+  border-color: #5267ff;
+  background: #eef0ff;
+  color: #4356e8;
+}
+
+.ta-plan-rating-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ta-plan-rating-feedback {
+  width: 100%;
+  min-height: 46px;
+  padding: 8px 10px;
+  border: 1px solid #e5e9f2;
+  border-radius: 10px;
+  background: #fff;
+  color: #25314b;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.ta-plan-rating-status {
+  min-height: 14px;
+  color: #929aaa;
+  font-size: 11px;
+}
+
+.ta-plan-detail .ta-plan-confirmed {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #e9f8f0;
+  color: #18794e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ta-plan-detail .ta-plan-style-day {
+  margin-bottom: 12px;
+}
+
+.ta-plan-detail .ta-plan-block {
+  padding: 8px 6px;
+}
+
 /* Right option column keeps its own scroll. */
 .ta-options-panel.ta-options-column {
   display: flex;
@@ -4454,6 +4829,67 @@ button:disabled {
   flex: 0 0 auto;
   align-items: center;
   gap: 6px;
+}
+
+.ta-floating-map-actions .ta-map-hide-button {
+  flex: 0 0 auto;
+  padding: 5px 9px;
+  border: 1px solid #dfe4ef;
+  border-radius: 9px;
+  background: #ffffff;
+  color: #5267a8;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ta-floating-map-actions .ta-map-hide-button:hover {
+  border-color: #cfd7ea;
+  background: #f6f8fd;
+  color: #4259b8;
+}
+
+.ta-map-side-tab {
+  position: fixed;
+  top: 50%;
+  right: 0;
+  transform: translateY(-50%);
+  z-index: 121;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 34px;
+  min-height: 88px;
+  padding: 10px 5px;
+  border: 1px solid #dfe4ef;
+  border-right: 0;
+  border-radius: 12px 0 0 12px;
+  background: #ffffff;
+  color: #5267a8;
+  font: inherit;
+  box-shadow: 0 10px 24px rgba(31, 41, 55, 0.16);
+  cursor: pointer;
+}
+
+.ta-map-side-tab:hover {
+  border-color: #cfd7ea;
+  background: #f6f8fd;
+  color: #4259b8;
+}
+
+.ta-map-side-arrow {
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ta-map-side-label {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
 }
 
 .ta-map-drag-hint {

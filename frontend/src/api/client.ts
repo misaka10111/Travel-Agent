@@ -56,6 +56,7 @@ export const api = {
       body: JSON.stringify({ user_id: userId, action, target, detail }),
     }),
   plan: (payload: {
+    user_id?: string;
     query?: string;
     destination?: string;
     start_date?: string;
@@ -91,6 +92,7 @@ export const api = {
     end_date: string;
     chosen_plan_style?: string;
     final_plan?: unknown;
+    conversation?: unknown[];
     rating?: number;
     feedback?: string;
   }) =>

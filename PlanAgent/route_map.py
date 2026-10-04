@@ -9,6 +9,7 @@
 import json
 import math
 import os
+import ssl
 import threading
 import time
 import urllib.parse
@@ -16,12 +17,15 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import certifi
+
 AMAP_BASE = "https://restapi.amap.com"
 CACHE_PATH = Path(__file__).resolve().parent / "route_cache.json"
 WALK_MAX_KM = 1.2
 TRANSIT_MAX_KM = 25
-# 高德个人开发者 key 的路线接口 QPS 较低，并发不宜过高
-MAX_WORKERS = 3
+# 高德个人开发者 key 的 QPS 较低（约 1~3），串行 + 限速避免触发限流重试
+MAX_WORKERS = 1
+REQUEST_GAP = 0.25  # 每次请求间隔（秒），控制到约 4 QPS 以内
 
 _lock = threading.Lock()
 _cache: dict | None = None
@@ -47,8 +51,10 @@ def _save_cache() -> None:
 def _get(path: str, **params) -> dict:
     params["key"] = os.getenv("AMAP_KEY", "")
     url = f"{AMAP_BASE}{path}?{urllib.parse.urlencode(params)}"
+    context = ssl.create_default_context(cafile=certifi.where())
+    time.sleep(REQUEST_GAP)
     for attempt in range(2):
-        with urllib.request.urlopen(url, timeout=10) as resp:
+        with urllib.request.urlopen(url, timeout=10, context=context) as resp:
             data = json.loads(resp.read())
         if data.get("status") == "1":
             return data

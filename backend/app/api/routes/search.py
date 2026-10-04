@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -10,6 +11,12 @@ SEARCH_PY = ROOT / "SearchAgent" / "search.py"
 SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
 
 router = APIRouter(prefix="/search", tags=["search"])
+
+
+def _subprocess_env() -> dict:
+    env = dict(os.environ)
+    env.pop("__PYVENV_LAUNCHER__", None)
+    return env
 
 
 class SearchRequest(BaseModel):
@@ -34,6 +41,7 @@ def search(payload: SearchRequest) -> dict:
                 input=payload.query,
                 capture_output=True,
                 text=True,
+                env=_subprocess_env(),
                 timeout=120,
             )
             parsed = json.loads(proc.stdout)
@@ -61,6 +69,7 @@ def search(payload: SearchRequest) -> dict:
             input=json.dumps(search_payload, ensure_ascii=False),
             capture_output=True,
             text=True,
+            env=_subprocess_env(),
             timeout=180,
         )
         return json.loads(proc.stdout)

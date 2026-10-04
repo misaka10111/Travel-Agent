@@ -23,7 +23,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from route_map import attach_routes, geocode_blocks, strip_geo
+from route_map import attach_routes, geocode, geocode_blocks, strip_geo, _km
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -41,6 +41,12 @@ PLAN_SYSTEM_PROMPT = (
     "travel_style=旅行风格（可多选：休闲度假/深度文化/自然风光/美食探店/亲子乐园/购物血拼/冒险户外/摄影旅拍）。"
     "如果输入中包含 basic（本次旅行基本信息），其字段含义为："
     "origin=出发地；travelers=出行人数；budget_tiers=预算档位；total_budget=总预算金额；purposes=旅行目的（可多选）。"
+    "如果输入中包含 preferences（用户长期偏好，JSON），必须优先满足：餐饮口味/忌口、酒店硬性要求（含早/近地铁/预算等）、"
+    "节奏偏好、交通方式、避雷点等都要落实；只有当 answers 明确与 preferences 冲突时，以本次 answers 为准。"
+    "如果输入中包含 recent_trips（最近的历史行程），参考用户过去的选择：rating 低或 feedback 里提到的问题要避免；"
+    "user_edits 中被用户改掉/删除的内容代表用户不想要，避免再次推荐同类安排。"
+    "如果输入中包含 recent_trip_summary（对最近历史行程的语义摘要），优先依据摘要理解用户长期偏好和避雷点，"
+    "recent_trips 原始记录作为补充。"
     "根据画像和旅行信息动态规划每日节奏与内容："
     "1) 景点数量：休闲度假/带老人→每天2个；深度文化/冒险户外/年轻单人→每天3个；其余2~3个；"
     "2) 景点形式按 travel_style 匹配：美食→餐饮街/老字号；亲子→乐园/动物园/海洋馆；文化→博物馆/古迹/艺术馆；"
@@ -49,11 +55,17 @@ PLAN_SYSTEM_PROMPT = (
     "4) 预算：经济档优先免费景点+公共交通，豪华档可付费体验+打车；总花费不超 total_budget；"
     "5) 人数与身份：带老人/孩子减少步行、安排休息点；学生控预算；退休轻松节奏；"
     "6) 交通：相邻景点在 note 里标注交通方式+大致耗时（打车/地铁/步行），尽量地理就近、少折返；"
+    "若输入中包含 geo_hints（按地理片区聚类的地点提示），必须优先把同一片区的地点安排在同一天，"
+    "且当天的 schedule 按片区内部的地理顺序排列；不要把同一片区的地点拆到不同天；"
     "7) 天气：雨天优先室内景点（博物馆/乐园室内馆），晴天可户外；"
     "8) 去程/回程：若 search 含 flights/trains，第一天 schedule 开头加一个 type=交通 的去程项"
     "（name 取 flights/trains 的 outbound 里的一项，note 写「出发地→目的地 出发时间 价格」），"
     "最后一天结尾加一个 type=交通 的回程项（name 取 flights/trains 的 inbound 里的一项，反向）；"
     "9) schedule 每天 4~6 项（景点+午晚餐+必要交通），每项 note ≤20 字；优先用 search 里的真实景点/酒店/饭店名称；"
+    "9.5) 整个方案中同一个具体景点/活动名称只能出现一次，禁止「西湖」等景点在多个日期重复出现；"
+    "每天优先选择 search.poi 中不同名称、不同 geo_hints 片区的地点，5 天尽量覆盖 5 个不同片区。"
+    "如果输入中包含 day_assignments（每天应使用的景点片区），每天只能从对应 names 中选择景点，"
+    "且不同天不得重复；同一片区若被分配多天，各天使用该片区内的不同景点。"
     "10) 有 answers 时严格遵循；有 feedback 时修正；若输入含 modify（block_ids 数组 + instruction 文本），"
     "只按 instruction 修改 block_ids 对应的那些活动块，其余块保持不变，并返回完整计划；"
     "11) 只输出 JSON，不要任何多余文字或代码块。"
@@ -91,6 +103,14 @@ BLOCK_MODIFY_PROMPT = (
     "只修改或删除 targets 对应的块，必要时顺延当天后续块的时间或填补空档；未涉及的块和天保持不变。"
     "输出 JSON：{\"days\":[修改后的 day itinerary...]}，每天结构保持 day/date/theme/hotel/schedule。"
     "schedule 项含 time/type/name/note/link。只输出 JSON，不要任何多余文字或代码块。"
+)
+
+TRIP_SUMMARY_PROMPT = (
+    "你是用户旅行记忆摘要助手。根据给定的历史行程记录（recent_trips），"
+    "提炼出对后续旅行规划有用的稳定偏好和教训。"
+    "重点关注：用户选择的方案风格、评分与反馈（rating/feedback）、用户主动修改（user_edits）所透露的喜好与避雷点。"
+    "输出一段不超过 150 字的摘要，用「偏好：...；避雷：...；节奏：...」的简洁形式。"
+    "只输出摘要文字，不要 JSON、不要解释。"
 )
 
 
@@ -196,6 +216,242 @@ def _trim_search(search: dict) -> dict:
     return result
 
 
+def _names_from_search(search: dict) -> list[str]:
+    """收集 search 里所有可定位的地点名称，去重后返回。"""
+    seen: list[str] = []
+    for key in ("poi", "hotels", "food", "events", "promotions"):
+        items = search.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            name = (item.get("name") or item.get("title") or "").strip()
+            if name and name not in seen:
+                seen.append(name)
+    return seen
+
+
+def _geo_hints(search: dict, destination: str, cluster_km: float = 2.5) -> dict:
+    """A 方案：给 PlanAgent 注入地理片区聚类提示。
+
+    对 search 里的地点做高德地理编码，按直线距离聚成片区。
+    没有 AMAP_KEY 或地理编码失败时返回空字典。
+    """
+    if not os.getenv("AMAP_KEY") or not destination:
+        return {}
+    names = _names_from_search(search)
+    if not names:
+        return {}
+
+    located: list[tuple[str, str]] = []
+    for name in names:
+        hit = geocode(name, destination)
+        if hit and hit.get("location"):
+            located.append((name, hit["location"]))
+
+    clusters: list[dict] = []
+    for name, loc in located:
+        placed = False
+        for cluster in clusters:
+            if _km(cluster["anchor"], loc) <= cluster_km:
+                cluster["names"].append(name)
+                placed = True
+                break
+        if not placed:
+            clusters.append({"anchor": loc, "names": [name]})
+
+    clusters = [c for c in clusters if len(c["names"]) > 1]
+    if not clusters:
+        return {}
+    return {
+        "hint": "以下地点地理上相邻，应安排在同一天并尽量连续游览，不要拆到不同天。",
+        "clusters": [
+            {"names": c["names"]}
+            for c in sorted(clusters, key=lambda c: -len(c["names"]))
+        ],
+    }
+
+
+def _chunks(items: list[str], count: int) -> list[list[str]]:
+    count = max(1, min(count, len(items)))
+    buckets: list[list[str]] = [[] for _ in range(count)]
+    for index, item in enumerate(items):
+        buckets[index % count].append(item)
+    return [bucket for bucket in buckets if bucket]
+
+
+def _assign_clusters(search: dict, destination: str, days: int) -> list[dict]:
+    """把地理片区分配到每一天：每天不同片区，大片区可拆成多天。"""
+    hints = _geo_hints(search, destination)
+    clusters = hints.get("clusters") or []
+    if not clusters or days <= 0:
+        return []
+
+    clusters = sorted(clusters, key=lambda c: -len(c["names"]))
+    total = sum(len(c["names"]) for c in clusters)
+    if total <= 0:
+        return []
+
+    raw_days = [max(1, round(len(c["names"]) / total * days)) for c in clusters]
+    diff = days - sum(raw_days)
+    order = sorted(range(len(clusters)), key=lambda i: -len(clusters[i]["names"]))
+
+    while diff > 0:
+        raw_days[order[0]] += 1
+        diff -= 1
+    while diff < 0:
+        adjusted = False
+        for i in order:
+            if raw_days[i] > 1:
+                raw_days[i] -= 1
+                diff += 1
+                adjusted = True
+                break
+        if not adjusted:
+            break
+
+    assignments: list[dict] = []
+    day = 1
+    for cluster, count in zip(clusters, raw_days):
+        for chunk in _chunks(cluster["names"], count):
+            assignments.append({"day": day, "names": chunk})
+            day += 1
+    return assignments[:days]
+
+
+def _locate_schedule(plans: list[dict], destination: str) -> dict[str, str | None]:
+    """给所有 schedule 活动块做地理编码，返回 {name: "lng,lat"}（失败为 None）。"""
+    names: list[str] = []
+    for p in plans:
+        for it in p.get("itinerary") or []:
+            for s in it.get("schedule") or []:
+                name = (s.get("name") or "").strip()
+                if name and name not in names:
+                    names.append(name)
+    locations: dict[str, str | None] = {}
+    for name in names:
+        hit = geocode(name, destination)
+        locations[name] = (hit or {}).get("location") or None
+    return locations
+
+
+def _reorder_by_proximity(plan: dict, destination: str, move_km: float = 2.0) -> dict:
+    """B 方案：生成后兜底，把明显相邻却分在不同天的非酒店活动合并到更近的那天。
+
+    酒店 block 属于当天住宿，不跨天移动；交通（去程/回程）也不动；景点/美食/活动参与就近合并。
+    只在能拿到坐标时生效，否则原样返回。
+    """
+    if not os.getenv("AMAP_KEY") or not destination:
+        return plan
+    plans = plan.get("plans") or []
+    if not plans:
+        return plan
+
+    locations = _locate_schedule(plans, destination)
+    movable_types = {"景点", "美食", "活动"}
+
+    changed = False
+    for p in plans:
+        days = p.get("itinerary") or []
+        day_blocks: list[list[dict]] = []
+        for it in days:
+            day_blocks.append(
+                [
+                    s for s in (it.get("schedule") or [])
+                    if (s.get("type") in movable_types or not s.get("type"))
+                ]
+            )
+
+        day_centers: list[tuple[float, float] | None] = []
+        for movable in day_blocks:
+            coords = []
+            for s in movable:
+                loc = locations.get((s.get("name") or "").strip())
+                if loc:
+                    coords.append(tuple(map(float, loc.split(","))))
+            if coords:
+                day_centers.append(
+                    (
+                        sum(c[0] for c in coords) / len(coords),
+                        sum(c[1] for c in coords) / len(coords),
+                    )
+                )
+            else:
+                day_centers.append(None)
+
+        new_day_blocks: list[list[dict]] = [[] for _ in days]
+        for idx, movable in enumerate(day_blocks):
+            for s in movable:
+                loc = locations.get((s.get("name") or "").strip())
+                if not loc:
+                    new_day_blocks[idx].append(s)
+                    continue
+                target = idx
+                best_gain = 0.0
+                for prev in range(idx):
+                    center = day_centers[prev]
+                    if not center:
+                        continue
+                    d_prev = _km(f"{center[0]},{center[1]}", loc)
+                    own = day_centers[idx]
+                    d_own = _km(f"{own[0]},{own[1]}", loc) if own else 999.0
+                    gain = d_own - d_prev
+                    if d_prev <= move_km and gain > best_gain:
+                        best_gain = gain
+                        target = prev
+                if target != idx:
+                    changed = True
+                new_day_blocks[target].append(s)
+
+        for it, movable in zip(days, new_day_blocks):
+            fixed = [
+                s for s in (it.get("schedule") or [])
+                if s.get("type") not in movable_types and s.get("type")
+            ]
+            # 合并后按 time 重排，避免把被移动的活动插到错误的时间顺序里
+            merged = fixed + movable
+            merged.sort(
+                key=lambda s: (s.get("time") or "99:99")
+            )
+            it["schedule"] = merged
+
+    return plan if changed else plan
+
+
+def _dedupe_poi_names(plan: dict, search_result: dict) -> dict:
+    """兜底去重：同一个景点名如果被排到多个日期，用 search.poi 里的未用景点替换后续重复项。"""
+    poi_names = [
+        (p.get("name") or "").strip()
+        for p in (search_result.get("poi") or [])
+        if (p.get("name") or "").strip()
+    ]
+    unused = [name for name in poi_names]
+
+    for p in plan.get("plans") or []:
+        seen: set[str] = set()
+        for it in p.get("itinerary") or []:
+            for s in it.get("schedule") or []:
+                if s.get("type") != "景点":
+                    continue
+                name = (s.get("name") or "").strip()
+                if not name:
+                    continue
+                if name in seen:
+                    replacement = next(
+                        (candidate for candidate in unused if candidate not in seen),
+                        None,
+                    )
+                    if replacement:
+                        s["name"] = replacement
+                        s["note"] = (s.get("note") or "")[:0]
+                        seen.add(replacement)
+                        unused.remove(replacement)
+                    continue
+                seen.add(name)
+                if name in unused:
+                    unused.remove(name)
+    return plan
+
+
 def _backfill_links(plan: dict, search: dict) -> dict:
     """生成后按名称匹配回填链接，避免 url 进 prompt 导致 prompt 过长。"""
     entries: list[tuple[str, str]] = []
@@ -276,22 +532,71 @@ def _build_one_plan(client: OpenAI, style: str, context: dict) -> dict:
     return last
 
 
+def _summarize_trips(client: OpenAI, recent_trips: list) -> str:
+    """把最近的历史行程做一次语义摘要，提炼稳定偏好和避雷点。"""
+    if not recent_trips:
+        return ""
+    try:
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            messages=[
+                {"role": "system", "content": TRIP_SUMMARY_PROMPT},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {"recent_trips": recent_trips}, ensure_ascii=False
+                    ),
+                },
+            ],
+            max_tokens=300,
+            timeout=60,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""
+
+
 def build_plan(
     search_result: dict,
     profile: dict | None = None,
+    preferences: dict | None = None,
+    recent_trips: list | None = None,
     basic: dict | None = None,
     answers: list | None = None,
     feedback: str | None = None,
     modify: dict | None = None,
+    recent_trip_summary: str | None = None,
+    skip_trip_summary: bool = False,
 ) -> dict:
     kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
     if os.getenv("OPENAI_BASE_URL"):
         kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
     client = OpenAI(**kwargs)
 
+    meta = _build_meta(search_result)
+    destination = search_result.get("destination") or ""
+    days = meta.get("days") or 0
+
     context: dict = {"search": _trim_search(search_result)}
+    geo_hints = _geo_hints(search_result, destination)
+    if geo_hints:
+        context["geo_hints"] = geo_hints
+    day_assignments = _assign_clusters(search_result, destination, days)
+    if day_assignments:
+        context["day_assignments"] = day_assignments
     if profile:
         context["user_profile"] = profile
+    if preferences:
+        context["preferences"] = preferences
+    if recent_trips:
+        context["recent_trips"] = recent_trips
+    computed_summary = ""
+    if recent_trip_summary:
+        context["recent_trip_summary"] = recent_trip_summary
+    elif recent_trips and not skip_trip_summary:
+        computed_summary = _summarize_trips(client, recent_trips)
+        if computed_summary:
+            context["recent_trip_summary"] = computed_summary
     if basic:
         context["basic"] = basic
     if answers:
@@ -305,8 +610,12 @@ def build_plan(
     with ThreadPoolExecutor(max_workers=2) as executor:
         plans = list(executor.map(lambda s: _build_one_plan(client, s, context), styles))
 
-    result = _build_meta(search_result)
+    result = meta
     result["plans"] = plans
+    result = _dedupe_poi_names(result, search_result)
+    result = _reorder_by_proximity(result, result.get("destination") or "")
+    if computed_summary:
+        result["recent_trip_summary"] = computed_summary
     return _backfill_links(result, search_result)
 
 
@@ -610,9 +919,27 @@ def main() -> None:
                 geocode_blocks(result["blocks"], (data.get("search") or {}).get("destination") or "")
                 strip_geo(result["blocks"])
         else:
-            if isinstance(data, dict) and any(k in data for k in ("search", "profile", "basic", "answers", "feedback", "modify")):
+            if isinstance(data, dict) and any(
+                k in data
+                for k in (
+                    "search",
+                    "profile",
+                    "preferences",
+                    "recent_trips",
+                    "recent_trip_summary",
+                    "skip_trip_summary",
+                    "basic",
+                    "answers",
+                    "feedback",
+                    "modify",
+                )
+            ):
                 search_result = data.get("search") or {}
                 profile = data.get("profile")
+                preferences = data.get("preferences")
+                recent_trips = data.get("recent_trips")
+                recent_trip_summary = data.get("recent_trip_summary")
+                skip_trip_summary = bool(data.get("skip_trip_summary"))
                 basic = data.get("basic")
                 answers = data.get("answers")
                 feedback = data.get("feedback")
@@ -620,11 +947,26 @@ def main() -> None:
             else:
                 search_result = data
                 profile = None
+                preferences = None
+                recent_trips = None
+                recent_trip_summary = None
+                skip_trip_summary = False
                 basic = None
                 answers = None
                 feedback = None
                 modify = None
-            result = build_plan(search_result, profile, basic, answers, feedback, modify)
+            result = build_plan(
+                search_result,
+                profile,
+                preferences,
+                recent_trips,
+                basic,
+                answers,
+                feedback,
+                modify,
+                recent_trip_summary,
+                skip_trip_summary,
+            )
             if isinstance(result, dict) and "error" not in result:
                 result["blocks"] = blockify(result)
                 attach_routes(result, result.get("destination") or "")

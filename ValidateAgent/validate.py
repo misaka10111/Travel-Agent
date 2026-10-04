@@ -13,7 +13,8 @@ load_dotenv(BASE_DIR / ".env")
 
 VALIDATE_SYSTEM_PROMPT = (
     "你是一名严格的旅行方案审核员。审核输入中的旅行计划（plan 字段），"
-    "结合用户画像（user_profile）、基础信息（basic）、搜索数据（search）和问卷作答（answers，均可选），"
+    "结合用户画像（user_profile）、长期偏好（preferences）、历史行程（recent_trips）、"
+    "基础信息（basic）、搜索数据（search）和问卷作答（answers，均可选），"
     "检查是否存在以下问题："
     "1) 预算：酒店/活动是否明显超出用户预算；"
     "2) 交通：景点之间是否往返折返、单日车程过长、交通方式与用户偏好不符；"
@@ -31,6 +32,8 @@ VALIDATE_SYSTEM_PROMPT = (
 def validate_plan(
     plan: dict,
     profile: dict | None = None,
+    preferences: dict | None = None,
+    recent_trips: list | None = None,
     search: dict | None = None,
     basic: dict | None = None,
     answers: list | None = None,
@@ -43,6 +46,10 @@ def validate_plan(
     context: dict = {"plan": plan}
     if profile:
         context["user_profile"] = profile
+    if preferences:
+        context["preferences"] = preferences
+    if recent_trips:
+        context["recent_trips"] = recent_trips
     if search:
         context["search"] = search
     if basic:
@@ -96,6 +103,8 @@ def main() -> None:
         result = validate_plan(
             data.get("plan") or {},
             data.get("profile"),
+            data.get("preferences"),
+            data.get("recent_trips"),
             data.get("search"),
             data.get("basic"),
             data.get("answers"),

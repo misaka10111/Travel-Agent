@@ -10,7 +10,9 @@ from app.api.routes import (
     behavior_signal,
     destinations,
     health,
+    memory_cache,
     plan,
+    preferences,
     profile,
     search,
     trip_memory,
@@ -53,7 +55,9 @@ app.include_router(trips.router, prefix=api_prefix)
 app.include_router(destinations.router, prefix=api_prefix)
 app.include_router(agent.router, prefix=api_prefix)
 app.include_router(profile.router, prefix=api_prefix)
+app.include_router(preferences.router, prefix=api_prefix)
 app.include_router(trip_memory.router, prefix=api_prefix)
 app.include_router(behavior_signal.router, prefix=api_prefix)
+app.include_router(memory_cache.router, prefix=api_prefix)
 app.include_router(plan.router, prefix=api_prefix)
 app.include_router(search.router, prefix=api_prefix)

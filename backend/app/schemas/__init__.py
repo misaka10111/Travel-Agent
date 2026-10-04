@@ -1,7 +1,9 @@
 from app.schemas.agent import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.behavior_signal import BehaviorSignalCreate, BehaviorSignalRead
 from app.schemas.destination import DestinationCreate, DestinationRead
+from app.schemas.memory_cache import MemoryCacheRead, MemoryCacheUpsert
 from app.schemas.profile import UserProfileCreate, UserProfileRead
+from app.schemas.preference import UserPreferenceCreate, UserPreferenceRead
 from app.schemas.trip_memory import TripMemoryCreate, TripMemoryRead
 from app.schemas.trip import (
     ItineraryItemCreate,
@@ -22,6 +24,8 @@ __all__ = [
     "DestinationRead",
     "ItineraryItemCreate",
     "ItineraryItemRead",
+    "MemoryCacheRead",
+    "MemoryCacheUpsert",
     "LoginRequest",
     "LoginResponse",
     "SendCodeRequest",
@@ -33,4 +37,6 @@ __all__ = [
     "UserRead",
     "UserProfileCreate",
     "UserProfileRead",
+    "UserPreferenceCreate",
+    "UserPreferenceRead",
 ]

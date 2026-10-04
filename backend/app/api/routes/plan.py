@@ -1,8 +1,10 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -16,7 +18,15 @@ PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
 router = APIRouter(prefix="/plan", tags=["plan"])
 
 
+def _subprocess_env() -> dict:
+    """清除 __PYVENV_LAUNCHER__，避免 macOS venv 启动器变量污染子进程的 venv 解析。"""
+    env = dict(os.environ)
+    env.pop("__PYVENV_LAUNCHER__", None)
+    return env
+
+
 class PlanRequest(BaseModel):
+    user_id: str | None = None
     query: str | None = None
     destination: str | None = None
     start_date: str | None = None
@@ -35,6 +45,7 @@ def _parse_query(query: str) -> dict:
             input=query,
             capture_output=True,
             text=True,
+            env=_subprocess_env(),
             timeout=120,
         )
         return json.loads(proc.stdout)
@@ -67,6 +78,7 @@ def _local_modify(
                 input=json.dumps(search_payload, ensure_ascii=False),
                 capture_output=True,
                 text=True,
+                env=_subprocess_env(),
                 timeout=120,
             )
             search_result = json.loads(proc.stdout)
@@ -86,6 +98,7 @@ def _local_modify(
             input=json.dumps(plan_payload, ensure_ascii=False),
             capture_output=True,
             text=True,
+            env=_subprocess_env(),
             timeout=120,
         )
         return json.loads(proc.stdout)
@@ -93,6 +106,97 @@ def _local_modify(
         return {"error": (proc.stdout or proc.stderr).strip()}
     except Exception as exc:  # noqa: BLE001
         return {"error": str(exc)}
+
+
+@router.post("/stream")
+def plan_stream(payload: PlanRequest):
+    """SSE 流式规划：逐节点返回 search/plan/validate 进度。"""
+    destination = payload.destination
+    start_date = payload.start_date
+    end_date = payload.end_date
+    parsed: dict = {}
+
+    if payload.query and not destination:
+        parsed = _parse_query(payload.query)
+        destination = parsed.get("destination")
+        start_date = parsed.get("start_date")
+        end_date = parsed.get("end_date")
+
+    if not destination or not start_date:
+        return {"error": "无法从输入中解析出目的地或日期"}
+
+    basic = dict(payload.basic or {})
+    if parsed:
+        if parsed.get("origin") and not basic.get("origin"):
+            basic["origin"] = parsed["origin"]
+        if parsed.get("travelers") and not basic.get("travelers"):
+            basic["travelers"] = parsed["travelers"]
+        if parsed.get("budget") and not basic.get("total_budget"):
+            basic["total_budget"] = str(parsed["budget"])
+        if parsed.get("purposes") and not basic.get("purposes"):
+            basic["purposes"] = parsed["purposes"]
+
+    data: dict = {
+        "destination": destination,
+        "start_date": start_date,
+        "end_date": end_date,
+    }
+    if payload.user_id:
+        data["user_id"] = payload.user_id
+    if payload.profile:
+        data["profile"] = payload.profile
+    if basic:
+        data["basic"] = basic
+    if payload.answers:
+        data["answers"] = payload.answers
+
+    def event_stream():
+        missing: list[str] = []
+        if not basic.get("origin") and not parsed.get("origin"):
+            missing.append("origin")
+        if missing:
+            clarify = {
+                "type": "clarify",
+                "missing": missing,
+                "destination": destination,
+                "start_date": start_date,
+                "end_date": end_date,
+            }
+            yield f"data: {json.dumps(clarify, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+            return
+
+        proc = subprocess.Popen(
+            [str(ORCHESTRATOR_PYTHON), str(ORCHESTRATOR_PY), "--stream"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            env=_subprocess_env(),
+        )
+        proc.stdin.write(json.dumps(data, ensure_ascii=False))
+        proc.stdin.close()
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if line:
+                yield f"data: {line}\n\n"
+        proc.wait()
+        if proc.returncode != 0:
+            err = (proc.stderr.read() or "").strip()
+            if err:
+                yield f"data: {json.dumps({'type': 'error', 'error': err}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _modify_plan(
@@ -120,6 +224,7 @@ def _modify_plan(
                 input=json.dumps(search_payload, ensure_ascii=False),
                 capture_output=True,
                 text=True,
+                env=_subprocess_env(),
                 timeout=120,
             )
             search_result = json.loads(proc.stdout)
@@ -139,6 +244,7 @@ def _modify_plan(
             input=json.dumps(plan_payload, ensure_ascii=False),
             capture_output=True,
             text=True,
+            env=_subprocess_env(),
             timeout=300,
         )
         return json.loads(proc.stdout)
@@ -169,6 +275,8 @@ def create_plan(payload: PlanRequest) -> dict:
         "start_date": start_date,
         "end_date": end_date,
     }
+    if payload.user_id:
+        data["user_id"] = payload.user_id
     # 把 query 里解析出的出发地/人数/预算/目的合并进 basic（优先保留已填的 tripInfo）
     basic = dict(payload.basic or {})
     if parsed:
@@ -220,6 +328,7 @@ def create_plan(payload: PlanRequest) -> dict:
             input=json.dumps(data, ensure_ascii=False),
             capture_output=True,
             text=True,
+            env=_subprocess_env(),
             timeout=600,
         )
         return json.loads(proc.stdout)

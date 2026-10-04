@@ -6,6 +6,7 @@ export type RouteBlock = {
   id: string;
   plan_style?: string;
   day: number;
+  date?: string;
   type: string;
   time: string;
   name: string;

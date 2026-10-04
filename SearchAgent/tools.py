@@ -32,6 +32,7 @@ load_dotenv(BASE_DIR / ".env")
 
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_TTL = 3600  # 缓存有效期（秒），1 小时
+SEARCH_VERSION = "poi50-v2"  # 搜索逻辑版本，变更后自动让旧缓存失效
 
 server = FastMCP(
     "search-tools",
@@ -398,7 +399,7 @@ def _extract_poi_features(pois: list[dict]) -> list[dict]:
                 {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            max_tokens=6000,
+            max_tokens=12000,
             timeout=60,
         )
         content = (resp.choices[0].message.content or "{}").strip()
@@ -457,7 +458,23 @@ def _extract_item_features(items: list[dict], prompt: str) -> list[dict]:
         return items
 
 
-def _fetch_poi(
+POI_THEMES = {
+    "自然户外": ["自然风光", "山湖田园", "户外活动"],
+    "历史文化": ["人文古迹", "宗教场所", "园林花园", "古镇古村"],
+    "教育博物": ["博物馆", "纪念馆"],
+    "城市生活": ["文创街区", "市集"],
+}
+
+
+def _pick_district(item: dict) -> str:
+    for key in ("districtName", "district", "areaName", "region", "address"):
+        value = item.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _search_poi_items(
     city_name: str,
     keyword: str | None = None,
     category: str | None = None,
@@ -483,10 +500,73 @@ def _fetch_poi(
             "free": item.get("freePoiStatus") == "FREE",
             "description": item.get("description") or "",
             "url": item.get("jumpUrl") or "",
+            "district": _pick_district(item),
         }
         for item in items
     ]
+    return pois
+
+
+def _fetch_poi(
+    city_name: str,
+    keyword: str | None = None,
+    category: str | None = None,
+    poi_level: str | None = None,
+) -> list[dict]:
+    pois = _search_poi_items(city_name, keyword, category, poi_level)
     return _extract_poi_features(pois)
+
+
+def _fetch_poi_distributed(city_name: str, target: int = 50) -> list[dict]:
+    """按 4 个主题分散搜索景点，合并去重后均匀取 target 条。"""
+    by_category: dict[str, list[dict]] = {}
+    seen: set[str] = set()
+    for theme, categories in POI_THEMES.items():
+        for category in categories:
+            try:
+                items = _search_poi_items(city_name, category=category)
+            except Exception:
+                items = []
+            for item in items:
+                name = (item.get("name") or "").strip()
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                item["query_category"] = theme
+                by_category.setdefault(theme, []).append(item)
+
+    themes = [t for t in POI_THEMES if by_category.get(t)]
+    idx = {t: 0 for t in themes}
+    district_counts: dict[str, int] = {}
+    selected: list[dict] = []
+
+    while len(selected) < target and themes:
+        progressed = False
+        for theme in themes:
+            if len(selected) >= target:
+                break
+            items = by_category[theme]
+            if idx[theme] >= len(items):
+                continue
+            # 在剩余候选中优先选一个当前出现次数更少的行政区，促进城市内分布均匀
+            candidates = items[idx[theme]:]
+            best = min(
+                candidates,
+                key=lambda p: district_counts.get(p.get("district") or "", 0),
+            )
+            best_pos = items.index(best, idx[theme])
+            items[idx[theme]], items[best_pos] = items[best_pos], items[idx[theme]]
+            picked = items[idx[theme]]
+            idx[theme] += 1
+            selected.append(picked)
+            district = picked.get("district") or ""
+            if district:
+                district_counts[district] = district_counts.get(district, 0) + 1
+            progressed = True
+        if not progressed:
+            break
+
+    return _extract_poi_features(selected)
 
 
 def _fetch_promotions(keyword: str | None = None) -> list[dict]:
@@ -869,7 +949,7 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
 
 
 def _cache_key(destination: str, start: str, end: str, origin: str) -> str:
-    raw = "|".join([destination, start, end, origin])
+    raw = "|".join([SEARCH_VERSION, destination, start, end, origin])
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -924,7 +1004,7 @@ def run_search(input_data: dict) -> dict:
     tasks = {
         "weather": lambda: _fetch_weather(destination, start, end),
         "hotels": lambda: _fetch_hotels(destination, start, end),
-        "poi": lambda: _fetch_poi(destination),
+        "poi": lambda: _fetch_poi_distributed(destination, target=50),
         "promotions": lambda: _fetch_promotions(f"{destination} 促销 特价"),
         "events": lambda: _fetch_events(destination, start, end),
         "food": lambda: _fetch_food(destination),
