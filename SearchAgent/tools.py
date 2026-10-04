@@ -13,6 +13,7 @@ import os
 import re
 import ssl
 import subprocess
+import sys
 import time
 import urllib.parse
 import urllib.request
@@ -26,6 +27,8 @@ from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from openai import OpenAI
 from tavily import TavilyClient
+
+from amap_service import search_restaurants
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
@@ -635,68 +638,52 @@ def _fetch_events(
     return _extract_item_features(items, EVENTS_FEATURE_PROMPT)
 
 
-def _extract_restaurants(platform_results: dict[str, list[dict]]) -> list[dict]:
-    """用 LLM 从多平台搜索结果提取餐厅列表（每个类别两个候选）。"""
-    client = OpenAI(
-        api_key=os.getenv("OPENAI_API_KEY"),
-        base_url=os.getenv("OPENAI_BASE_URL"),
-    )
-    brief: dict[str, list[dict]] = {}
-    for platform, items in platform_results.items():
-        brief[platform] = [
-            {"title": x.get("title") or "", "url": x.get("url") or ""}
-            for x in items
-        ]
-    resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
-        messages=[
-            {"role": "system", "content": RESTAURANT_PROMPT},
-            {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
-        ],
-        response_format={"type": "json_object"},
-        max_tokens=6000,
-        timeout=60,
-    )
-    content = (resp.choices[0].message.content or "{}").strip()
-    if content.startswith("```"):
-        content = content.strip("`")
-        if content.startswith("json"):
-            content = content[4:]
-    return json.loads(content).get("food") or []
+def _fetch_food(
+    destination: str,
+    keyword: str | None = None,
+    max_price: float | None = None,
+    max_results: int = 10,
+) -> list[dict]:
+    """用高德地图 POI 搜索当地餐厅，返回结构化数据。
 
+    优先调用高德（返回 name/address/lng/lat/cuisine/rating/人均/商圈/地图链接/POI详情链接）；
+    若未配置 AMAP_KEY 或调用失败，回退到 Tavily 网页搜索，并在结果中标记来源。
 
-def _fetch_food(destination: str, max_results: int = 10) -> list[dict]:
-    """搜索当地美食：多平台定向搜索 + LLM 提取候选餐厅（每个类别两个）。"""
-    queries = {
-        "抖音": f"{destination} 美食 探店 抖音",
-        "大众点评": f"{destination} 必吃 餐厅 大众点评",
-        "小红书": f"{destination} 美食 探店 小红书",
-    }
-    platform_results: dict[str, list[dict]] = {}
-    with ThreadPoolExecutor(max_workers=len(queries)) as executor:
-        futures = {p: executor.submit(_fetch_web_search, q, 6) for p, q in queries.items()}
-        for p, future in futures.items():
-            platform_results[p] = future.result()
-
+    每条结果带 _source 字段："amap" 或 "tavily"，便于下游区分数据格式。
+    """
+    # 1. 优先高德
     try:
-        return _extract_restaurants(platform_results)
-    except Exception:
-        fallback = []
-        for platform, items in platform_results.items():
-            for x in items:
-                fallback.append(
-                    {
-                        "category": platform,
-                        "options": [
-                            {
-                                "name": x.get("title") or "",
-                                "link": x.get("url") or "",
-                                "source": platform,
-                            }
-                        ],
-                    }
-                )
-        return fallback
+        restaurants = search_restaurants(
+            destination,
+            keyword=keyword,
+            limit=max_results,
+        )
+        if restaurants:
+            items = [r.to_dict() for r in restaurants]
+            # 按人均预算过滤（如果有）
+            if max_price is not None and max_price > 0:
+                items = [
+                    it for it in items
+                    if it.get("price_per_person") is None or it["price_per_person"] <= max_price
+                ]
+            for it in items:
+                it["_source"] = "amap"
+            return items
+        # 高德返回空也算失败，走回退
+        raise RuntimeError("高德返回 0 条餐厅结果")
+    except Exception as exc:  # noqa: BLE001
+        amap_error = str(exc)
+        print(f"[food] 高德搜索失败，回退 Tavily：{amap_error}", file=sys.stderr)
+
+    # 2. 回退：Tavily 网页搜索
+    query = f"{destination} 美食 必吃 餐厅 小吃"
+    if keyword:
+        query += f" {keyword}"
+    items = _fetch_web_search(query, max_results=max_results)
+    items = _extract_item_features(items, FOOD_FEATURE_PROMPT)
+    for it in items:
+        it["_source"] = "tavily"
+    return items
 
 
 # ================= 文本格式化（MCP 工具用） =================
@@ -831,14 +818,34 @@ def _format_events(items: list[dict], destination: str, start_date: str, end_dat
 
 def _format_food(items: list[dict], destination: str) -> str:
     if not items:
-        return f"没有找到「{destination}」的美食推荐。"
-    lines = [f"{destination} 美食推荐（前 {min(len(items), 10)} 条）："]
+        return f"没有找到「{destination}」的餐厅。"
+    # 高德结构化数据有 name/cuisine/rating 等字段；Tavily 回退数据只有 title/content
+    is_amap = any("cuisine" in item for item in items)
+    lines = [f"{destination} 餐厅推荐（前 {min(len(items), 10)} 家）："]
     for item in items[:10]:
-        lines.append(f" - {item['title']}")
-        if item.get("content"):
-            lines.append(f"   {item['content'][:180]}")
-        if item.get("url"):
-            lines.append(f"   {item['url']}")
+        if is_amap:
+            parts = [item.get("name", "")]
+            if item.get("cuisine"):
+                parts.append(f"菜系:{item['cuisine']}")
+            if item.get("rating"):
+                parts.append(f"评分:{item['rating']}")
+            if item.get("price_per_person"):
+                parts.append(f"人均:¥{item['price_per_person']}")
+            if item.get("business_area"):
+                parts.append(f"商圈:{item['business_area']}")
+            if item.get("address"):
+                parts.append(f"地址:{item['address']}")
+            lines.append(" - " + " | ".join(p for p in parts if p))
+            if item.get("map_url"):
+                lines.append(f"   地图: {item['map_url']}")
+            if item.get("poi_detail_url"):
+                lines.append(f"   详情: {item['poi_detail_url']}")
+        else:
+            lines.append(f" - {item.get('title', '')}")
+            if item.get("content"):
+                lines.append(f"   {item['content'][:180]}")
+            if item.get("url"):
+                lines.append(f"   {item['url']}")
     return "\n".join(lines)
 
 
@@ -933,7 +940,7 @@ def search_events(destination: str, start_date: str, end_date: str, max_results:
     )
 
 
-@server.tool(description="搜索当地美食（大众点评/小红书/抖音等平台）。destination 必填。")
+@server.tool(description="搜索目的地餐厅（高德地图），返回名称、菜系、评分、人均、地址、商圈和地图/详情链接。destination 必填。")
 def search_food(destination: str, max_results: int = 10) -> str:
     return _format_food(_fetch_food(destination, max_results), destination)
 
@@ -948,8 +955,8 @@ def _run_safe(key: str, fn: Any) -> tuple[str, Any]:
         return key, {"error": str(exc)}
 
 
-def _cache_key(destination: str, start: str, end: str, origin: str) -> str:
-    raw = "|".join([SEARCH_VERSION, destination, start, end, origin])
+def _cache_key(destination: str, start: str, end: str, origin: str, extra: str = "") -> str:
+    raw = "|".join([SEARCH_VERSION, destination, start, end, origin, extra])
     return hashlib.md5(raw.encode("utf-8")).hexdigest()
 
 
@@ -976,7 +983,13 @@ def _write_cache(key: str, result: dict) -> None:
 
 
 def run_search(input_data: dict) -> dict:
-    """输入 {destination, start_date, end_date?, origin?}，并行调用 6~8 个工具，返回结构化 JSON。"""
+    """输入 {destination, start_date, end_date?, origin?, basic?, food_keyword?}，
+    并行调用 6~8 个工具，返回结构化 JSON。
+
+    basic 可含 total_budget（总预算）、travelers（出行人数）、purposes（旅行目的），
+    用于推算餐饮搜索的人均预算上限。
+    food_keyword 为用户明确提到的菜系/关键词（如 "川菜"、"火锅"），会透传给高德搜索。
+    """
     destination = (input_data.get("destination") or "").strip()
     if not destination:
         raise ValueError("缺少 destination")
@@ -987,8 +1000,16 @@ def run_search(input_data: dict) -> dict:
     end = _normalize_date(input_data["end_date"]) if input_data.get("end_date") else start
     origin = (input_data.get("origin") or "").strip()
 
-    # 缓存：同一目的地/日期/出发地的结果直接复用，避免反复调用飞猪/Tavily/天气
-    cache_key = _cache_key(destination, start, end, origin)
+    # 从 basic 中提取餐饮搜索参数
+    basic = input_data.get("basic") or {}
+    food_keyword = (input_data.get("food_keyword") or "").strip() or None
+    max_price = _estimate_food_budget(basic)
+
+    # 缓存：把餐饮搜索参数纳入 key，不同菜系/预算不串缓存
+    cache_key = _cache_key(
+        destination, start, end, origin,
+        extra=f"{food_keyword or ''}|{max_price or ''}",
+    )
     cached = _read_cache(cache_key)
     if cached is not None:
         return cached
@@ -1007,7 +1028,11 @@ def run_search(input_data: dict) -> dict:
         "poi": lambda: _fetch_poi_distributed(destination, target=50),
         "promotions": lambda: _fetch_promotions(f"{destination} 促销 特价"),
         "events": lambda: _fetch_events(destination, start, end),
-        "food": lambda: _fetch_food(destination),
+        "food": lambda: _fetch_food(
+            destination,
+            keyword=food_keyword,
+            max_price=max_price,
+        ),
     }
     if origin:
         tasks["flights"] = lambda: _fetch_round_trip(_fetch_flights, origin, destination, start, end)
@@ -1022,7 +1047,34 @@ def run_search(input_data: dict) -> dict:
     return result
 
 
-@server.tool(description="综合搜索某目的地（天气+酒店+景点+促销），返回结构化 JSON。")
+def _estimate_food_budget(basic: dict) -> float | None:
+    """根据总预算和出行人数估算人均餐饮预算上限。
+
+    简单策略：总预算 ÷ 人数 ÷ 行程天数 ÷ 3（三餐），取整；
+    拿不到时返回 None（不过滤）。
+    """
+    total_budget = basic.get("total_budget")
+    if not total_budget:
+        return None
+    try:
+        total = float(total_budget)
+    except (TypeError, ValueError):
+        return None
+    if total <= 0:
+        return None
+
+    travelers = 1
+    travelers_raw = basic.get("travelers") or ""
+    m = re.search(r"(\d+)", str(travelers_raw))
+    if m:
+        travelers = max(1, int(m.group(1)))
+
+    # 经验值：餐饮占总预算约 25%，人均每餐上限 = 总预算×0.25 ÷ 人数 ÷ 6（按2天×3餐估算）
+    per_meal = total * 0.25 / travelers / 6
+    return round(per_meal, 0)
+
+
+@server.tool(description="综合搜索某目的地（天气+酒店+景点+餐厅+促销+活动），返回结构化 JSON。")
 def search_trip(destination: str, start_date: str, end_date: str | None = None) -> str:
     return json.dumps(
         run_search({"destination": destination, "start_date": start_date, "end_date": end_date}),
