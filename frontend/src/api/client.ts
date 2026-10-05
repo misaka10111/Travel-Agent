@@ -97,6 +97,8 @@ export const api = {
     feedback?: string;
   }) =>
     request('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
+  listTripMemory: (userId: string) =>
+    request<Array<Record<string, unknown>>>(`/trip-memory/${encodeURIComponent(userId)}`),
   search: (payload: {
     query?: string;
     destination?: string;
@@ -105,6 +107,11 @@ export const api = {
     origin?: string;
   }) =>
     request<Record<string, unknown>>('/search', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    }),
+  question: (payload: { messages: ChatMessage[]; has_plan?: boolean }) =>
+    request<Record<string, unknown>>('/question', {
       method: 'POST',
       body: JSON.stringify(payload),
     }),

@@ -15,9 +15,11 @@
 
 import json
 import os
+import re
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -27,50 +29,49 @@ from route_map import attach_routes, geocode, geocode_blocks, strip_geo, _km
 
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
+ROOT = BASE_DIR.parent
+SEARCH_PY = ROOT / "SearchAgent" / "search.py"
+SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
 
-PLAN_SYSTEM_PROMPT = (
-    "你是一名专业的旅行规划师。根据输入中的结构化旅行数据（search 字段）和用户画像（user_profile 字段，可能没有），"
-    "以及本次旅行基本信息（basic 字段，可能没有），生成一个旅行方案。方案风格由用户消息中的 style 字段指定，必须鲜明体现。"
-    "输出必须是 JSON，结构如下："
-    '{"style":"风格","summary":"一句话概述","itinerary":['
-    '{"day":1,"date":"日期","theme":"当天主题","hotel":"推荐酒店","schedule":['
-    '{"time":"09:00-11:00","type":"景点","name":"活动名","note":"交通/餐食/穿衣等简短说明"}'
-    ']}]}。'
-    "如果输入中包含 user_profile（用户画像），其字段含义为："
-    "age_group=年龄段；gender=性别；identity=身份；city=常驻城市；"
-    "travel_style=旅行风格（可多选：休闲度假/深度文化/自然风光/美食探店/亲子乐园/购物血拼/冒险户外/摄影旅拍）。"
-    "如果输入中包含 basic（本次旅行基本信息），其字段含义为："
-    "origin=出发地；travelers=出行人数；budget_tiers=预算档位；total_budget=总预算金额；purposes=旅行目的（可多选）。"
-    "如果输入中包含 preferences（用户长期偏好，JSON），必须优先满足：餐饮口味/忌口、酒店硬性要求（含早/近地铁/预算等）、"
-    "节奏偏好、交通方式、避雷点等都要落实；只有当 answers 明确与 preferences 冲突时，以本次 answers 为准。"
-    "如果输入中包含 recent_trips（最近的历史行程），参考用户过去的选择：rating 低或 feedback 里提到的问题要避免；"
-    "user_edits 中被用户改掉/删除的内容代表用户不想要，避免再次推荐同类安排。"
-    "如果输入中包含 recent_trip_summary（对最近历史行程的语义摘要），优先依据摘要理解用户长期偏好和避雷点，"
-    "recent_trips 原始记录作为补充。"
-    "根据画像和旅行信息动态规划每日节奏与内容："
-    "1) 景点数量：休闲度假/带老人→每天2个；深度文化/冒险户外/年轻单人→每天3个；其余2~3个；"
-    "2) 景点形式按 travel_style 匹配：美食→餐饮街/老字号；亲子→乐园/动物园/海洋馆；文化→博物馆/古迹/艺术馆；"
-    "自然→山水园林/湖景；购物→商圈；摄影→出片打卡点；冒险→徒步/户外体验；"
-    "3) 美食：travel_style 含「美食探店」或 purposes 含「美食之旅」时，午晚餐各给具体饭店名；否则每餐1家即可；"
-    "search.food 里的每条餐厅含 name/cuisine(菜系)/rating(评分)/price_per_person(人均)/business_area(商圈)/address，"
-    "选餐厅时参考评分和人均是否符合预算，尽量选与当天景点同商圈的餐厅；",
-    "4) 预算：经济档优先免费景点+公共交通，豪华档可付费体验+打车；总花费不超 total_budget；"
-    "5) 人数与身份：带老人/孩子减少步行、安排休息点；学生控预算；退休轻松节奏；"
-    "6) 交通：相邻景点在 note 里标注交通方式+大致耗时（打车/地铁/步行），尽量地理就近、少折返；"
-    "若输入中包含 geo_hints（按地理片区聚类的地点提示），必须优先把同一片区的地点安排在同一天，"
-    "且当天的 schedule 按片区内部的地理顺序排列；不要把同一片区的地点拆到不同天；"
-    "7) 天气：雨天优先室内景点（博物馆/乐园室内馆），晴天可户外；"
-    "8) 去程/回程：若 search 含 flights/trains，第一天 schedule 开头加一个 type=交通 的去程项"
-    "（name 取 flights/trains 的 outbound 里的一项，note 写「出发地→目的地 出发时间 价格」），"
-    "最后一天结尾加一个 type=交通 的回程项（name 取 flights/trains 的 inbound 里的一项，反向）；"
-    "9) schedule 每天 4~6 项（景点+午晚餐+必要交通），每项 note ≤20 字；优先用 search 里的真实景点/酒店/饭店名称；"
-    "9.5) 整个方案中同一个具体景点/活动名称只能出现一次，禁止「西湖」等景点在多个日期重复出现；"
-    "每天优先选择 search.poi 中不同名称、不同 geo_hints 片区的地点，5 天尽量覆盖 5 个不同片区。"
-    "如果输入中包含 day_assignments（每天应使用的景点片区），每天只能从对应 names 中选择景点，"
-    "且不同天不得重复；同一片区若被分配多天，各天使用该片区内的不同景点。"
-    "10) 有 answers 时严格遵循；有 feedback 时修正；若输入含 modify（block_ids 数组 + instruction 文本），"
-    "只按 instruction 修改 block_ids 对应的那些活动块，其余块保持不变，并返回完整计划；"
-    "11) 只输出 JSON，不要任何多余文字或代码块。"
+DAY_PLAN_PROMPT = (
+    "你是旅行规划师，负责规划某一天的行程。"
+    "输入包含 day（第几天）、date、block（当天分配的景点片区，names 是可选的景点名）、"
+    "search（酒店/机票/高铁等）、user_profile、preferences、basic、answers 等。"
+    "规则：根据 user_profile.travel_style 或 preferences.pace 调整节奏："
+    "休闲度假/轻松→每天 1~2 个景点，慢节奏、安排休息；摄影旅拍/打卡/紧凑→每天 3 个景点，优先网红出片点，行程充实。"
+    "如果是第一天且去程航班/高铁到达时间较晚（15:00 以后），可只安排 1 个景点或仅安排晚餐/入住；"
+    "如果到达时间晚于 20:00，第一天不要再安排景点，只安排交通和入住；禁止在 00:00 之后安排景点。"
+    "其他情况当天至少安排 2 个景点；若 block.names 少于 2 个，可从 search.poi 里选地理相邻的景点补充。"
+    "根据景点 scale/duration 安排数量与时间：大景点(全天)每天 1 个，中景点每天 2 个，小景点每天最多 3 个；"
+    "不要在同一天塞入两个全天型大景点。"
+    "优先选择榜单名次靠前（rank 小）的景点；如果当天 block 内有全天型高热度景点，优先把它安排进去，"
+    "其他可顺延的小景点放到别的天。"
+    "按时间与距离合理安排：当天所有景点的 duration 累加（含交通）控制在 8 小时以内；"
+    "优先把同区县、同 geo_hints 片区的景点排在一起，相邻景点交通耗时尽量不超过 30 分钟；"
+    "跨区且交通超过 1 小时的景点不要硬塞在同一天。"
+    "当天景点必须按地理顺序排成一条不折返的路线：如果 C 离 A 很近，就应安排 A→C→B，而不是 A→B→C。"
+    "最后一天若回程时间在傍晚或晚上，不要安排距离车站/机场超过 1 小时的远郊景点。"
+    "schedule 必须按时间从早到晚排列。"
+    "当天只从 block.names 里选景点；"
+    "本阶段不要安排美食/餐饮，餐饮稍后会单独补充。"
+    "如果是第一天且 search 有 flights/trains 去程，开头加一个 type=交通 的去程项；"
+    "如果是最后一天且 search 有 flights/trains 回程，结尾加一个 type=交通 的回程项；"
+    "推荐一家当天酒店（search.hotels）。"
+    "酒店尽量选在当天最后一个景点附近，或第二天第一个景点附近；远郊游玩当天不要安排住回市区。"
+    "如果是最后一天且当晚已安排回程交通，酒店字段填「当晚返程，无住宿」。"
+    "输出 JSON：{\"day\":N,\"date\":\"YYYY-MM-DD\",\"theme\":\"当天主题\",\"hotel\":\"酒店名\","
+    "\"schedule\":[{\"time\":\"09:00-11:00\",\"type\":\"景点\",\"name\":\"活动名\",\"note\":\"简短说明\"}]}。"
+    "只输出 JSON，不要任何多余文字或代码块。"
+)
+
+
+CLASSIFY_MODIFY_PROMPT = (
+    "你是旅行计划修改意图分类器。根据用户指令和现有行程块，判断修改方式。"
+    "如果指令指向某个具体景点/酒店/活动（例如「我不想去雷峰塔」「把酒店换成豪华型」），"
+    "mode=block，并在 targets 中列出涉及的块（每项含 name/type/day）；"
+    "如果是整体意见（例如「行程太紧」「预算太高」「节奏慢一点」），mode=global，targets=[]。"
+    "输出 JSON：{\"mode\":\"global或block\",\"targets\":[{\"name\":\"...\",\"type\":\"...\",\"day\":1}]}。"
+    "只输出 JSON，不要任何多余文字。"
 )
 
 
@@ -169,6 +170,11 @@ def _trim_search(search: dict) -> dict:
                 "category": p.get("category"),
                 "rank": p.get("rank"),
                 "free": p.get("free"),
+                "district": p.get("district_label") or p.get("district") or "",
+                "duration": p.get("duration") or "",
+                "scale": p.get("scale") or "",
+                "longitude": p.get("longitude"),
+                "latitude": p.get("latitude"),
                 "description": (p.get("description") or "")[:80],
             }
             for p in search["poi"]
@@ -176,44 +182,33 @@ def _trim_search(search: dict) -> dict:
 
     if isinstance(search.get("hotels"), list):
         result["hotels"] = [
-            {"name": h.get("name"), "star": h.get("star"), "price": h.get("price"), "location": h.get("location")}
+            {
+                "name": h.get("name"),
+                "star": h.get("star"),
+                "price": h.get("price"),
+                "location": h.get("location"),
+                "longitude": h.get("longitude"),
+                "latitude": h.get("latitude"),
+            }
             for h in search["hotels"]
         ]
 
-    if isinstance(search.get("promotions"), list):
-        result["promotions"] = [
-            {"title": p.get("title"), "price": p.get("price")}
-            for p in search["promotions"]
-        ]
-
-    # events 仍按网页搜索结果处理（title + content）
-    if isinstance(search.get("events"), list):
-        result["events"] = [
-            {"title": x.get("title"), "content": (x.get("content") or "")[:120]}
-            for x in search["events"]
-        ]
-
-    # food：区分高德结构化数据和 Tavily 网页数据
+    # food：第二阶段补入计划，仍保留结构化餐厅数据
     if isinstance(search.get("food"), list):
-        trimmed_food = []
-        for x in search["food"]:
-            if x.get("_source") == "amap" or "cuisine" in x:
-                # 高德结构化餐厅：保留规划需要的核心字段
-                trimmed_food.append({
-                    "name": x.get("name"),
-                    "cuisine": x.get("cuisine"),
-                    "rating": x.get("rating"),
-                    "price_per_person": x.get("price_per_person"),
-                    "business_area": x.get("business_area"),
-                    "address": x.get("address"),
-                })
-            else:
-                # Tavily 回退数据：title + content
-                trimmed_food.append({
-                    "title": x.get("title"),
-                    "content": (x.get("content") or "")[:120],
-                })
-        result["food"] = trimmed_food
+        result["food"] = [
+            {
+                "name": x.get("name"),
+                "cuisine": x.get("cuisine"),
+                "rating": x.get("rating"),
+                "price_per_person": x.get("price_per_person"),
+                "business_area": x.get("business_area"),
+                "address": x.get("address"),
+                "longitude": x.get("longitude"),
+                "latitude": x.get("latitude"),
+            }
+            for x in search["food"]
+            if x.get("name")
+        ]
 
     for key in ("flights", "trains"):
         if isinstance(search.get(key), list):
@@ -303,6 +298,88 @@ def _chunks(items: list[str], count: int) -> list[list[str]]:
     return [bucket for bucket in buckets if bucket]
 
 
+def _short_district(value: str | None) -> str:
+    """从完整地址里提取区县级行政区，用于分 block 时兜底。"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    candidates: list[tuple[int, str]] = []
+    for suffix in ("自治县", "区", "县", "旗"):
+        start = 0
+        while True:
+            idx = value.find(suffix, start)
+            if idx == -1:
+                break
+            if suffix == "区" and idx >= 2 and value[idx - 2:idx] == "自治":
+                start = idx + 1
+                continue
+            candidates.append((idx, suffix))
+            break
+    if not candidates:
+        return ""
+    pos, suffix = min(candidates, key=lambda item: item[0])
+    prefix = value[:pos]
+    cut = -1
+    for sep in ("自治州", "自治区", "市", "省"):
+        idx = prefix.rfind(sep)
+        if idx != -1:
+            cut = max(cut, idx + len(sep))
+    name = prefix[cut:] if cut != -1 else prefix
+    return f"{name}{suffix}"
+
+
+def _ensure_requested_pois(
+    search_result: dict,
+    destination: str,
+    requested_pois: list[str],
+) -> dict:
+    """补搜用户明确要求但 SearchAgent 结果里没有的地点。"""
+    existing = {
+        (p.get("name") or "").strip()
+        for p in (search_result.get("poi") or [])
+        if (p.get("name") or "").strip()
+    }
+    poi_list = list(search_result.get("poi") or [])
+    for name in requested_pois:
+        name = (name or "").strip()
+        if not name or name in existing:
+            continue
+        try:
+            proc = subprocess.run(
+                [
+                    str(SEARCH_PYTHON),
+                    str(SEARCH_PY),
+                    "--poi-keyword",
+                    name,
+                    "--city",
+                    destination,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=90,
+            )
+            extra = json.loads(proc.stdout).get("poi") or []
+        except Exception:
+            extra = []
+        for item in extra:
+            item_name = (item.get("name") or "").strip()
+            if item_name and item_name not in existing:
+                existing.add(item_name)
+                item["source"] = "on_demand"
+                poi_list.append(item)
+    search_result["poi"] = poi_list
+    return search_result
+
+
+def _rank_score(rank: str | None) -> int:
+    """从飞猪榜单文案里解析名次，用于 block 内热度排序。"""
+    import re as _re
+
+    text = str(rank or "")
+    match = _re.search(r"第\s*(\d+)\s*名", text)
+    return int(match.group(1)) if match else 0
+
+
 def _assign_clusters(search: dict, destination: str, days: int) -> list[dict]:
     """把地理片区分配到每一天：每天不同片区，大片区可拆成多天。"""
     hints = _geo_hints(search, destination)
@@ -340,6 +417,327 @@ def _assign_clusters(search: dict, destination: str, days: int) -> list[dict]:
             assignments.append({"day": day, "names": chunk})
             day += 1
     return assignments[:days]
+
+
+def _build_blocks(
+    search: dict,
+    destination: str,
+    cluster_km: float = 2.5,
+    max_km: float = 60.0,
+) -> list[dict]:
+    """按区县标签 + 高德坐标聚类，把景点分成一个个地理 block。"""
+    pois = search.get("poi") or []
+    items: list[dict] = []
+    for p in pois:
+        name = (p.get("name") or "").strip()
+        if not name:
+            continue
+        hit = geocode(name, destination)
+        loc = (hit or {}).get("location") or ""
+        district = (
+            p.get("district_label")
+            or _short_district(p.get("district") or "")
+            or ""
+        )
+        items.append(
+            {
+                "name": name,
+                "district": district,
+                "loc": loc,
+                "score": _rank_score(p.get("rank") or ""),
+            }
+        )
+
+    # 以城市中心为基准，先过滤掉过远的景点（如千岛湖之于杭州主城）
+    city_hit = (
+        geocode(destination, destination)
+        or geocode(f"{destination}市", destination)
+        or geocode(destination, "")
+    )
+    city_loc = (city_hit or {}).get("location") or ""
+    if city_loc:
+        kept: list[dict] = []
+        for item in items:
+            if not item["loc"]:
+                kept.append(item)
+                continue
+            if _km(city_loc, item["loc"]) <= max_km:
+                kept.append(item)
+        if kept:
+            items = kept
+
+    by_district: dict[str, list[dict]] = {}
+    for item in items:
+        key = item["district"] or "__none__"
+        by_district.setdefault(key, []).append(item)
+
+    blocks: list[dict] = []
+    for district, members in by_district.items():
+        if district == "__none__":
+            continue
+        members.sort(key=lambda m: (m.get("score", 0) == 0, m.get("score", 0)))
+        names = [m["name"] for m in members]
+        scores = [m.get("score", 0) for m in members]
+        locs = [m["loc"] for m in members if m["loc"]]
+        center = None
+        if locs:
+            lngs = [float(loc.split(",")[0]) for loc in locs]
+            lats = [float(loc.split(",")[1]) for loc in locs]
+            center = [sum(lngs) / len(lngs), sum(lats) / len(lats)]
+        block_id = f"{district}-1"
+        blocks.append(
+            {
+                "block_id": block_id,
+                "district": "" if district == "__none__" else district,
+                "names": names,
+                "scores": scores,
+                "center": center,
+            }
+        )
+
+    # 没有标准区县标签的景点，就近并到已有 block
+    for item in by_district.get("__none__", []):
+        if not blocks:
+            blocks.append(
+                {
+                    "block_id": "block-1",
+                    "district": "",
+                    "names": [item["name"]],
+                    "scores": [item.get("score", 0)],
+                    "center": None,
+                }
+            )
+            continue
+        candidates = [i for i, b in enumerate(blocks) if b.get("center")]
+        if candidates and item["loc"]:
+            target = min(
+                candidates,
+                key=lambda i: _km(
+                    f"{blocks[i]['center'][0]},{blocks[i]['center'][1]}",
+                    item["loc"],
+                ),
+            )
+        else:
+            target = max(
+                range(len(blocks)),
+                key=lambda i: len(blocks[i].get("names") or []),
+            )
+        blocks[target]["names"].append(item["name"])
+        blocks[target]["scores"].append(item.get("score", 0))
+        if blocks[target].get("scores"):
+            pairs = sorted(
+                zip(blocks[target]["scores"], blocks[target]["names"]),
+                key=lambda pair: -pair[0],
+            )
+            blocks[target]["scores"] = [s for s, _ in pairs]
+            blocks[target]["names"] = [n for _, n in pairs]
+        if item["loc"] and not blocks[target].get("center"):
+            lng, lat = item["loc"].split(",")
+            blocks[target]["center"] = [float(lng), float(lat)]
+
+    return blocks
+
+
+def _merge_small_blocks(blocks: list[dict], min_size: int = 3) -> list[dict]:
+    """把小 block 合并到最近的 block，避免出现大量单点 block。"""
+    working = [dict(b) for b in blocks]
+    while True:
+        small = [i for i, b in enumerate(working) if len(b.get("names") or []) < min_size]
+        if not small:
+            break
+        index = small[0]
+        block = working[index]
+        candidates = [j for j, b in enumerate(working) if j != index and b.get("center")]
+        if candidates:
+            target = min(
+                candidates,
+                key=lambda j: _km(
+                    f"{working[j]['center'][0]},{working[j]['center'][1]}",
+                    f"{block['center'][0]},{block['center'][1]}",
+                )
+                if block.get("center")
+                else 0,
+            )
+            if block.get("center") is None:
+                target = max(candidates, key=lambda j: len(working[j].get("names") or []))
+        else:
+            if len(working) <= 1:
+                break
+            target = max(
+                [j for j in range(len(working)) if j != index],
+                key=lambda j: len(working[j].get("names") or []),
+            )
+        working[target]["names"] = (working[target].get("names") or []) + (block.get("names") or [])
+        working[target]["scores"] = (working[target].get("scores") or []) + (block.get("scores") or [])
+        if working[target].get("scores"):
+            pairs = sorted(
+                zip(working[target]["scores"], working[target]["names"]),
+                key=lambda pair: -pair[0],
+            )
+            working[target]["scores"] = [s for s, _ in pairs]
+            working[target]["names"] = [n for _, n in pairs]
+        working[target]["district"] = working[target].get("district") or block.get("district") or ""
+        working.pop(index)
+    return working
+
+
+def _split_block(block: dict, count: int) -> list[dict]:
+    parts = _chunks(block.get("names") or [], count)
+    score_parts = _chunks(block.get("scores") or [], count)
+    return [
+        {
+            "block_id": f"{block['block_id']}-{i + 1}",
+            "district": block.get("district") or "",
+            "names": part,
+            "scores": score_parts[i] if i < len(score_parts) else [],
+            "center": block.get("center"),
+        }
+        for i, part in enumerate(parts)
+    ]
+
+
+def _first_day_arrives_late(search_result: dict) -> bool:
+    """判断去程航班/高铁是否在 15:00 之后到达。"""
+    for key in ("flights", "trains"):
+        items = search_result.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if item.get("direction") != "去":
+                continue
+            match = re.search(r"(\d{1,2}):\d{2}", str(item.get("arr_time") or ""))
+            if match and int(match.group(1)) >= 15:
+                return True
+    return False
+
+
+def _score_blocks(
+    blocks: list[dict],
+    city_center: list[float] | None,
+    profile: dict | None = None,
+) -> list[dict]:
+    """给每个区打分：热度 + 距离 + 密度 + 匹配 + 交通。"""
+    scored: list[tuple[float, dict]] = []
+    for block in blocks:
+        scores = [s for s in (block.get("scores") or []) if s and s > 0]
+        hot = sum(1.0 / s for s in scores) / len(scores) if scores else 0.0
+
+        if city_center and block.get("center"):
+            dist = _km(
+                f"{city_center[0]},{city_center[1]}",
+                f"{block['center'][0]},{block['center'][1]}",
+            )
+            distance_score = 1.0 / (1.0 + dist / 10.0)
+        else:
+            distance_score = 0.5
+
+        density = min(1.0, len(block.get("names") or []) / 8.0)
+        match = 0.5
+        transport = 0.5
+
+        total = (
+            0.30 * hot
+            + 0.25 * distance_score
+            + 0.20 * density
+            + 0.15 * match
+            + 0.10 * transport
+        )
+        scored.append((total, block))
+
+    scored.sort(key=lambda pair: -pair[0])
+    return [block for _, block in scored]
+
+
+def _assign_blocks_to_days(
+    blocks: list[dict],
+    days: int,
+    first_day_late: bool = False,
+    city_center: list[float] | None = None,
+) -> list[dict]:
+    """固定 1 block/天：把 block 数量调整到 days，每个 block 对应一天。"""
+    if not blocks or days <= 0:
+        return []
+    working = [dict(b) for b in blocks]
+
+    # block 数量少于天数时，拆最大的 block
+    while len(working) < days:
+        working.sort(key=lambda b: -len(b.get("names") or []))
+        largest = working[0]
+        if len(largest.get("names") or []) < 2:
+            break
+        working = working[1:] + _split_block(largest, 2)
+
+    # 仍少于天数时，补空 block（按区县/景点兜底）
+    while len(working) < days:
+        working.append({"block_id": f"empty-{len(working) + 1}", "district": "", "names": [], "center": None})
+
+    # block 数量多于天数时，合并最近的 block
+    while len(working) > days:
+        located = [b for b in working if b.get("center")]
+        if city_center:
+            global_center = city_center
+        elif located:
+            total_w = sum(len(b.get("names") or []) for b in located) or 1
+            global_center = [
+                sum((b["center"][0] * len(b.get("names") or [])) for b in located) / total_w,
+                sum((b["center"][1] * len(b.get("names") or [])) for b in located) / total_w,
+            ]
+        else:
+            global_center = None
+
+        working = _score_blocks(working, global_center)
+        working = working[:days]
+
+        # 按地理就近串成一天接一天的顺序，避免第一天和最后一天跨区跳远
+        if len(working) > 1 and all(b.get("center") for b in working):
+            ordered = [working[0]]
+            remaining = working[1:]
+            while remaining:
+                last = ordered[-1]
+                nxt = min(
+                    remaining,
+                    key=lambda b: _km(
+                        f"{last['center'][0]},{last['center'][1]}",
+                        f"{b['center'][0]},{b['center'][1]}",
+                    ),
+                )
+                ordered.append(nxt)
+                remaining.remove(nxt)
+            working = ordered
+
+        # 最后一天尽量回到城市中心附近，方便返程
+        if len(working) >= 3 and global_center:
+            def distance_to_center(block: dict) -> float:
+                if not block.get("center"):
+                    return float("inf")
+                return _km(
+                    f"{block['center'][0]},{block['center'][1]}",
+                    f"{global_center[0]},{global_center[1]}",
+                )
+
+            first = working[0]
+            rest = working[1:]
+            last_day = min(rest, key=distance_to_center)
+            middle = [b for b in rest if b is not last_day]
+            working = [first, *middle, last_day]
+        break
+
+    assignments = []
+    for i, block in enumerate(working):
+        assignments.append(
+            {
+                "day": i + 1,
+                "block_id": block.get("block_id"),
+                "district": block.get("district"),
+                "names": block.get("names") or [],
+                "center": block.get("center"),
+            }
+        )
+    if first_day_late and len(assignments) > 1:
+        assignments[0], assignments[1] = assignments[1], assignments[0]
+    for index, assignment in enumerate(assignments):
+        assignment["day"] = index + 1
+    return assignments
 
 
 def _locate_schedule(plans: list[dict], destination: str) -> dict[str, str | None]:
@@ -533,20 +931,47 @@ def _backfill_links(plan: dict, search: dict) -> dict:
     return plan
 
 
-def _build_one_plan(client: OpenAI, style: str, context: dict) -> dict:
+def _build_day_plan(
+    client: OpenAI,
+    context: dict,
+    day_assignment: dict,
+    total_days: int,
+    start_date: str,
+) -> dict:
+    """按单个地理 block 生成一天的行程。"""
+    day = int(day_assignment.get("day") or 0)
+    names = day_assignment.get("names") or []
+
     ctx = dict(context)
-    ctx["style"] = style
+    search = dict(ctx.get("search") or {})
+    if names and isinstance(search.get("poi"), list):
+        name_set = set(names)
+        search["poi"] = [p for p in search["poi"] if (p.get("name") or "") in name_set]
+    ctx["search"] = search
+    ctx["day"] = day
+    ctx["block"] = {
+        "block_id": day_assignment.get("block_id"),
+        "district": day_assignment.get("district"),
+        "names": names,
+    }
+    ctx["is_first_day"] = day == 1
+    ctx["is_last_day"] = day == total_days
+    try:
+        ctx["date"] = (date.fromisoformat(start_date) + timedelta(days=day - 1)).isoformat()
+    except ValueError:
+        ctx["date"] = start_date
+
     last: dict = {}
     for _ in range(2):
         resp = client.chat.completions.create(
             model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
             messages=[
-                {"role": "system", "content": PLAN_SYSTEM_PROMPT},
+                {"role": "system", "content": DAY_PLAN_PROMPT},
                 {"role": "user", "content": json.dumps(ctx, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            max_tokens=16000,
-            timeout=300,
+            max_tokens=4000,
+            timeout=120,
         )
         content = (resp.choices[0].message.content or "{}").strip()
         if content.startswith("```"):
@@ -557,9 +982,224 @@ def _build_one_plan(client: OpenAI, style: str, context: dict) -> dict:
             last = json.loads(content)
         except json.JSONDecodeError:
             last = {}
-        if isinstance(last, dict) and last.get("itinerary"):
+        if isinstance(last, dict) and last.get("schedule"):
+            if isinstance(last.get("schedule"), list):
+                last["schedule"].sort(key=lambda s: (s.get("time") or "99:99"))
             return last
+    if not isinstance(last, dict):
+        last = {}
+    last.setdefault("day", day)
+    last.setdefault("date", ctx.get("date") or "")
+    last.setdefault("theme", "")
+    last.setdefault("hotel", "")
+    last.setdefault("schedule", [])
+    if not last["schedule"] and names:
+        times = ["09:00-11:00", "14:00-16:00"]
+        for index, name in enumerate(names[:2]):
+            last["schedule"].append(
+                {
+                    "time": times[index],
+                    "type": "景点",
+                    "name": name,
+                    "note": "",
+                }
+            )
     return last
+
+
+def _pick_restaurant(
+    food: list[dict],
+    district: str,
+    used: set[str],
+    center: list[float] | None,
+) -> dict | None:
+    candidates = [
+        f for f in food
+        if (f.get("name") or "").strip() and (f.get("name") or "").strip() not in used
+    ]
+    if not candidates:
+        return None
+    if district:
+        district_match = [
+            f for f in candidates
+            if district in str(f.get("business_area") or "")
+            or district in str(f.get("address") or "")
+        ]
+        if district_match:
+            candidates = district_match
+    if center:
+        def distance(f: dict) -> float:
+            lng = f.get("longitude")
+            lat = f.get("latitude")
+            if lng is None or lat is None:
+                return float("inf")
+            return _km(
+                f"{center[0]},{center[1]}",
+                f"{float(lng)},{float(lat)}",
+            )
+
+        candidates.sort(
+            key=lambda f: (
+                distance(f),
+                f.get("rating") is None,
+                -(f.get("rating") or 0),
+            )
+        )
+    else:
+        candidates.sort(key=lambda f: (f.get("rating") is None, -(f.get("rating") or 0)))
+    return candidates[0]
+
+
+def _to_minutes(value: str) -> int | None:
+    match = re.search(r"(\d{1,2}):(\d{2})", str(value or ""))
+    if not match:
+        return None
+    return int(match.group(1)) * 60 + int(match.group(2))
+
+
+def _slot_time(schedule: list[dict], kind: str) -> str:
+    """根据当天景点时间，找午餐/晚餐的空档时间。"""
+    occupied: list[tuple[int, int]] = []
+    for item in schedule:
+        if (item.get("type") or "") not in ("景点", "活动"):
+            continue
+        match = re.match(
+            r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})",
+            str(item.get("time") or ""),
+        )
+        if match:
+            start = _to_minutes(match.group(1))
+            end = _to_minutes(match.group(2))
+            if start is not None and end is not None:
+                occupied.append((start, end))
+
+    window = (11 * 60, 14 * 60) if kind == "午餐" else (17 * 60, 20 * 60)
+    occupied = sorted(o for o in occupied if o[1] > window[0] and o[0] < window[1])
+
+    free_from = window[0]
+    best_start = window[0]
+    best_len = 0
+    for start, end in occupied:
+        start = max(start, window[0])
+        end = min(end, window[1])
+        if start > free_from and (start - free_from) > best_len:
+            best_len = start - free_from
+            best_start = free_from
+        free_from = max(free_from, end)
+    if window[1] - free_from > best_len:
+        best_len = window[1] - free_from
+        best_start = free_from
+
+    start = best_start if best_len >= 40 else window[0]
+    end = min(start + 60, window[1])
+    return f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}"
+
+
+def _add_food_to_day(
+    day: dict,
+    food: list[dict],
+    district: str,
+    center: list[float] | None,
+    poi_map: dict[str, list[float]],
+    used_restaurants: set[str],
+) -> dict:
+    """第二阶段：给已生成的一天行程补午餐/晚餐，并跨天去重。"""
+    schedule = list(day.get("schedule") or [])
+    if any((s.get("type") or "") in ("美食", "餐饮") for s in schedule):
+        return day
+
+    # 当天有长时段大景点时，不插入外部餐厅
+    for item in schedule:
+        if (item.get("type") or "") != "景点":
+            continue
+        match = re.match(
+            r"(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})",
+            str(item.get("time") or ""),
+        )
+        if match:
+            start = _to_minutes(match.group(1))
+            end = _to_minutes(match.group(2))
+            if start is not None and end is not None and (end - start) >= 360:
+                return day
+
+    for meal in ("午餐", "晚餐"):
+        time = _slot_time(schedule, meal)
+        anchor = center
+        spots = [
+            s for s in schedule
+            if (s.get("type") or "") == "景点"
+            and poi_map.get((s.get("name") or "").strip())
+        ]
+        if meal == "午餐":
+            before_noon = [
+                s for s in spots
+                if (s.get("time") or "").startswith(("09", "10", "11"))
+            ]
+            if before_noon:
+                anchor = poi_map[(before_noon[-1].get("name") or "").strip()]
+        elif spots:
+            anchor = poi_map[(spots[-1].get("name") or "").strip()]
+        restaurant = _pick_restaurant(food, district, used_restaurants, anchor)
+        if restaurant:
+            schedule.append(
+                {
+                    "time": time,
+                    "type": "美食",
+                    "name": restaurant.get("name"),
+                    "note": f"{meal}推荐",
+                }
+            )
+            used_restaurants.add(str(restaurant.get("name") or ""))
+    schedule.sort(key=lambda s: (s.get("time") or "99:99"))
+    day["schedule"] = schedule
+    return day
+
+
+def _pick_hotel(
+    hotels: list[dict],
+    center: list[float] | None,
+    used_hotels: set[str],
+) -> dict | None:
+    candidates = [
+        h for h in hotels
+        if (h.get("name") or "").strip() and (h.get("name") or "").strip() not in used_hotels
+    ]
+    if not candidates:
+        return None
+    if center:
+        def distance(h: dict) -> float:
+            lng = h.get("longitude")
+            lat = h.get("latitude")
+            if lng is None or lat is None:
+                return float("inf")
+            return _km(f"{center[0]},{center[1]}", f"{float(lng)},{float(lat)}")
+
+        candidates.sort(key=distance)
+    else:
+        candidates.sort(key=lambda h: (h.get("star") is None, -(len(h.get("star") or ""))))
+    return candidates[0]
+
+
+def _add_hotel_to_day(
+    day: dict,
+    hotels: list[dict],
+    center: list[float] | None,
+    poi_map: dict[str, list[float]],
+    used_hotels: set[str],
+) -> dict:
+    if (day.get("hotel") or "").strip():
+        return day
+    spots = [
+        s for s in (day.get("schedule") or [])
+        if (s.get("type") or "") == "景点"
+        and poi_map.get((s.get("name") or "").strip())
+    ]
+    anchor = poi_map[(spots[-1].get("name") or "").strip()] if spots else center
+    hotel = _pick_hotel(hotels, anchor, used_hotels)
+    if hotel:
+        day["hotel"] = hotel.get("name") or ""
+        used_hotels.add(str(hotel.get("name") or ""))
+    return day
 
 
 def _summarize_trips(client: OpenAI, recent_trips: list) -> str:
@@ -607,11 +1247,31 @@ def build_plan(
     destination = search_result.get("destination") or ""
     days = meta.get("days") or 0
 
+    requested_pois = (basic or {}).get("requested_pois") or []
+    if requested_pois:
+        search_result = _ensure_requested_pois(search_result, destination, requested_pois)
+
+    city_hit = (
+        geocode(destination, destination)
+        or geocode(f"{destination}市", destination)
+        or geocode(destination, "")
+    )
+    city_center = None
+    if city_hit and city_hit.get("location"):
+        lng, lat = city_hit["location"].split(",")
+        city_center = [float(lng), float(lat)]
+
     context: dict = {"search": _trim_search(search_result)}
     geo_hints = _geo_hints(search_result, destination)
     if geo_hints:
         context["geo_hints"] = geo_hints
-    day_assignments = _assign_clusters(search_result, destination, days)
+    blocks = _build_blocks(search_result, destination)
+    day_assignments = _assign_blocks_to_days(
+        blocks,
+        days,
+        first_day_late=_first_day_arrives_late(search_result),
+        city_center=city_center,
+    )
     if day_assignments:
         context["day_assignments"] = day_assignments
     if profile:
@@ -636,12 +1296,66 @@ def build_plan(
     if modify:
         context["modify"] = modify
 
-    styles = ["经典人气", "小众深度"]
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        plans = list(executor.map(lambda s: _build_one_plan(client, s, context), styles))
+    with ThreadPoolExecutor(max_workers=min(max(days, 1), 8)) as executor:
+        day_plans = list(
+            executor.map(
+                lambda da: _build_day_plan(
+                    client, context, da, days, meta.get("start_date") or ""
+                ),
+                day_assignments,
+            )
+        )
+    day_plans = sorted(day_plans, key=lambda d: d.get("day") or 0)
+    food = search_result.get("food") or []
+    district_by_day = {
+        a.get("day"): a.get("district") or ""
+        for a in day_assignments
+    }
+    center_by_day = {
+        a.get("day"): a.get("center")
+        for a in day_assignments
+    }
+    poi_map: dict[str, list[float]] = {}
+    for poi in search_result.get("poi") or []:
+        name = (poi.get("name") or "").strip()
+        lng = poi.get("longitude")
+        lat = poi.get("latitude")
+        if name and lng is not None and lat is not None:
+            poi_map[name] = [float(lng), float(lat)]
+    used_restaurants: set[str] = set()
+    for day_plan in day_plans:
+        _add_food_to_day(
+            day_plan,
+            food,
+            district_by_day.get(day_plan.get("day"), ""),
+            center_by_day.get(day_plan.get("day")),
+            poi_map,
+            used_restaurants,
+        )
+    hotels = search_result.get("hotels") or []
+    used_hotels: set[str] = set()
+    for day_plan in day_plans:
+        day_num = day_plan.get("day")
+        if day_num == days:
+            if not (day_plan.get("hotel") or "").strip():
+                day_plan["hotel"] = "当晚返程，无住宿"
+        else:
+            _add_hotel_to_day(
+                day_plan,
+                hotels,
+                center_by_day.get(day_num),
+                poi_map,
+                used_hotels,
+            )
 
     result = meta
-    result["plans"] = plans
+    result["plans"] = [
+        {
+            "style": "推荐方案",
+            "summary": f"{destination} {days} 日游",
+            "itinerary": day_plans,
+        }
+    ]
     result = _dedupe_poi_names(result, search_result)
     result = _reorder_by_proximity(result, result.get("destination") or "")
     if computed_summary:
@@ -686,6 +1400,46 @@ def modify_blocks(
         if content.startswith("json"):
             content = content[4:]
     return json.loads(content)
+
+
+def classify_modify(client: OpenAI, instruction: str, blocks: list[dict]) -> dict:
+    brief = [
+        {
+            "id": b.get("id"),
+            "day": b.get("day"),
+            "type": b.get("type"),
+            "name": b.get("name"),
+        }
+        for b in blocks
+    ]
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        messages=[
+            {"role": "system", "content": CLASSIFY_MODIFY_PROMPT},
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {"instruction": instruction, "blocks": brief}, ensure_ascii=False
+                ),
+            },
+        ],
+        response_format={"type": "json_object"},
+        max_tokens=1000,
+        timeout=60,
+    )
+    content = (resp.choices[0].message.content or "{}").strip()
+    if content.startswith("```"):
+        content = content.strip("`")
+        if content.startswith("json"):
+            content = content[4:]
+    try:
+        result = json.loads(content)
+    except json.JSONDecodeError:
+        result = {}
+    return {
+        "mode": result.get("mode") or "global",
+        "targets": result.get("targets") or [],
+    }
 
 
 def _modify_block_local(
@@ -924,6 +1678,19 @@ def main() -> None:
 
     try:
         data = json.loads(raw)
+        if isinstance(data, dict) and data.get("classify"):
+            kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
+            if os.getenv("OPENAI_BASE_URL"):
+                kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
+            client = OpenAI(**kwargs)
+            result = classify_modify(
+                client,
+                data.get("instruction") or "",
+                data.get("blocks") or [],
+            )
+            print(json.dumps(result, ensure_ascii=False))
+            return
+
         # 完整计划修改：输入含 plan + modify（支持全局修改 / block 修改）
         if isinstance(data, dict) and data.get("plan") is not None and data.get("modify"):
             result = modify_plan(

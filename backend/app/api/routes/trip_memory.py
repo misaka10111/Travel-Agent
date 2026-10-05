@@ -14,8 +14,20 @@ router = APIRouter(prefix="/trip-memory", tags=["trip-memory"])
 def create_trip_memory(
     payload: TripMemoryCreate, db: Session = Depends(get_db)
 ) -> TripMemory:
-    memory = TripMemory(**payload.model_dump())
-    db.add(memory)
+    memory = db.scalar(
+        select(TripMemory).where(
+            TripMemory.user_id == payload.user_id,
+            TripMemory.destination == payload.destination,
+            TripMemory.start_date == payload.start_date,
+            TripMemory.end_date == payload.end_date,
+        )
+    )
+    if memory is None:
+        memory = TripMemory(**payload.model_dump())
+        db.add(memory)
+    else:
+        for field, value in payload.model_dump().items():
+            setattr(memory, field, value)
     db.commit()
     db.refresh(memory)
     if payload.conversation:

@@ -44,7 +44,7 @@ export function LoginPage() {
     try {
       const res = await api.login(phone, code);
       localStorage.setItem('currentUser', res.phone);
-      navigate(res.is_new ? '/profile' : '/trip-survey');
+      navigate(res.is_new ? '/profile' : '/agent');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

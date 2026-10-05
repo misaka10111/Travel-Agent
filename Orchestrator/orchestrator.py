@@ -388,7 +388,7 @@ def main() -> None:
                 node = next(iter(chunk), "") if isinstance(chunk, dict) else ""
                 event = {"type": "node", "node": node}
                 if node == "search" and isinstance(chunk, dict) and isinstance(chunk.get("search"), dict):
-                    event["search"] = chunk["search"]
+                    event["search"] = chunk["search"].get("search", chunk["search"])
                 print(
                     json.dumps(event, ensure_ascii=False),
                     flush=True,

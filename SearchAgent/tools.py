@@ -35,7 +35,7 @@ load_dotenv(BASE_DIR / ".env")
 
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_TTL = 3600  # 缓存有效期（秒），1 小时
-SEARCH_VERSION = "poi50-v2"  # 搜索逻辑版本，变更后自动让旧缓存失效
+SEARCH_VERSION = "hotel30-v8"  # 搜索逻辑版本，变更后自动让旧缓存失效
 
 server = FastMCP(
     "search-tools",
@@ -61,7 +61,10 @@ POI_FEATURE_PROMPT = (
     "你是景点特征提取助手。为每个景点提取 3~6 个简短特征标签（逗号分隔，每个 2~4 字）。"
     "标签应覆盖：类型与属性（文化/历史/自然/亲子/宗教/演出/购物/美食/运动/科技/湖景/园林等）、"
     "环境（室内/户外）、适合人群（亲子/情侣/老人/学生等）。"
-    "输出 JSON：{\"features\":[\"文化,历史,室内\",\"自然,湖景,户外\",...]}，顺序与输入景点一致。"
+    "同时估计每个景点的建议游玩时长（可选值：0.5-1小时、1-2小时、2-3小时、半天、全天）"
+    "和景点规模（大/中/小，大=大型景区或需要大量步行，小=单点或小展馆）。"
+    "输出 JSON：{\"features\":[\"文化,历史,室内\",...],\"durations\":[\"2-3小时\",...],\"scales\":[\"中\",...]}，"
+    "三个数组顺序都与输入景点一致。"
     "只输出 JSON，不要任何多余文字或代码块。"
 )
 
@@ -70,6 +73,16 @@ EVENTS_FEATURE_PROMPT = (
     "标签覆盖：活动类型（演唱会/音乐节/比赛/展览/节日/体育等）、室内外、适合人群、时间季节。"
     "输出 JSON：{\"features\":[\"音乐节,户外,10月\",...]}，顺序与输入一致。"
     "只输出 JSON，不要任何多余文字或代码块。"
+)
+
+EVENT_EXTRACT_PROMPT = (
+    "你是活动信息提取助手。从网页搜索结果中提取具体的活动。"
+    "输出 JSON：{\"events\":[{\"name\":\"具体活动名称，如「某某演唱会」\","
+    "\"type\":\"演唱会/音乐节/比赛/展览/节日等\",\"date\":\"活动日期或时间\","
+    "\"url\":\"对应活动链接\"}]}。"
+    "只保留具体活动，去掉「活动汇总」「榜单」「门户首页」等非具体活动；"
+    "如果某条结果本身就是具体活动，保留它的标题作为 name。"
+    "最多返回 20 个，只输出 JSON，不要任何多余文字。"
 )
 
 FOOD_FEATURE_PROMPT = (
@@ -222,13 +235,14 @@ def _fetch_weather(city: str, start_date: str | None = None, end_date: str | Non
     }
 
 
-def _fetch_hotels(
+def _fetch_hotels_once(
     destination: str,
     check_in_date: str | None = None,
     check_out_date: str | None = None,
     max_price: float | None = None,
     hotel_stars: str | None = None,
     hotel_types: str | None = None,
+    key_words: str | None = None,
     sort: str | None = None,
 ) -> list[dict]:
     args = ["search-hotel", "--dest-name", destination]
@@ -242,6 +256,8 @@ def _fetch_hotels(
         args += ["--hotel-stars", hotel_stars]
     if hotel_types:
         args += ["--hotel-types", hotel_types]
+    if key_words:
+        args += ["--key-words", key_words]
     if sort:
         args += ["--sort", sort]
 
@@ -257,9 +273,80 @@ def _fetch_hotels(
             "price": item.get("price") or "",
             "location": item.get("interestsPoi") or item.get("address") or "",
             "url": item.get("detailUrl") or "",
+            "longitude": item.get("longitude"),
+            "latitude": item.get("latitude"),
+            "image": (
+                item.get("mainPic")
+                or item.get("picUrl")
+                or item.get("pictureUrl")
+                or item.get("imgUrl")
+                or item.get("imageUrl")
+                or item.get("mainImage")
+                or ""
+            ),
         }
         for item in items
     ]
+
+
+def _fetch_hotels(
+    destination: str,
+    check_in_date: str | None = None,
+    check_out_date: str | None = None,
+    max_price: float | None = None,
+    hotel_stars: str | None = None,
+    hotel_types: str | None = None,
+    key_words: str | None = None,
+    sort: str | None = None,
+    limit: int = 30,
+) -> list[dict]:
+    """搜索酒店：飞猪无分页，用多种排序多次搜索后去重，尽量凑到 limit 条。"""
+    if sort:
+        return _fetch_hotels_once(
+            destination,
+            check_in_date,
+            check_out_date,
+            max_price,
+            hotel_stars,
+            hotel_types,
+            key_words,
+            sort,
+        )[:limit]
+
+    seen: set[str] = set()
+    result: list[dict] = []
+    rounds = [
+        {"sort": "rate_desc"},
+        {"sort": "rate_desc", "hotel_stars": "5"},
+        {"sort": "rate_desc", "hotel_stars": "4"},
+        {"sort": "price_asc", "hotel_stars": "3"},
+        {"sort": "no_rank", "key_words": "如家 汉庭 全季 亚朵 维也纳"},
+    ]
+    for params in rounds:
+        try:
+            items = _fetch_hotels_once(
+                destination,
+                check_in_date,
+                check_out_date,
+                max_price,
+                params.get("hotel_stars") or hotel_stars,
+                hotel_types,
+                params.get("key_words") or key_words,
+                params.get("sort") or sort,
+            )
+        except Exception:
+            items = []
+        for item in items:
+            name = item.get("name") or ""
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            result.append(item)
+            if len(result) >= limit:
+                break
+        if len(result) >= limit:
+            break
+    return result
 
 
 def _fetch_flights(
@@ -411,12 +498,18 @@ def _extract_poi_features(pois: list[dict]) -> list[dict]:
             if content.startswith("json"):
                 content = content[4:]
         features = json.loads(content).get("features") or []
+        durations = json.loads(content).get("durations") or []
+        scales = json.loads(content).get("scales") or []
         for i, p in enumerate(pois):
             p["description"] = features[i] if i < len(features) else ""
+            p["duration"] = durations[i] if i < len(durations) else ""
+            p["scale"] = scales[i] if i < len(scales) else ""
         return pois
     except Exception:
         for p in pois:
             p["description"] = (p.get("description") or "")[:80]
+            p.setdefault("duration", "")
+            p.setdefault("scale", "")
         return pois
 
 
@@ -467,14 +560,50 @@ POI_THEMES = {
     "教育博物": ["博物馆", "纪念馆"],
     "城市生活": ["文创街区", "市集"],
 }
-
-
 def _pick_district(item: dict) -> str:
     for key in ("districtName", "district", "areaName", "region", "address"):
         value = item.get(key)
         if value:
             return str(value)
     return ""
+
+
+def _extract_district_label(value: str) -> str:
+    """从地址里抽出区县级行政区，如「西湖区」「淳安县」。"""
+    value = (value or "").strip()
+    if not value:
+        return ""
+    candidates: list[tuple[int, str]] = []
+    for candidate in ("自治县", "区", "县", "旗"):
+        start = 0
+        while True:
+            idx = value.find(candidate, start)
+            if idx == -1:
+                break
+            # 跳过「自治区」里的「区」
+            if candidate == "区" and idx >= 2 and value[idx - 2:idx] == "自治":
+                start = idx + 1
+                continue
+            candidates.append((idx, candidate))
+            break
+    if not candidates:
+        return ""
+    pos, suffix = min(candidates, key=lambda item: item[0])
+    prefix = value[:pos]
+    cut = -1
+    for sep in ("自治州", "自治区", "市", "省"):
+        idx = prefix.rfind(sep)
+        if idx != -1:
+            cut = max(cut, idx + len(sep))
+    name = prefix[cut:] if cut != -1 else prefix
+    return f"{name}{suffix}"
+
+
+def _poi_hot_key(item: dict):
+    match = re.search(r"第\s*(\d+)\s*名", str(item.get("rank") or ""))
+    if not match:
+        return (1, 0)
+    return (0, int(match.group(1)))
 
 
 def _search_poi_items(
@@ -495,18 +624,34 @@ def _search_poi_items(
     if data.get("status") not in (0, None):
         raise ValueError(data.get("message") or "查询出错")
     items = (data.get("data") or {}).get("itemList") or []
-    pois = [
-        {
+    pois = []
+    for item in items:
+        raw_district = _pick_district(item)
+        address = item.get("address") or ""
+        pois.append(
+            {
             "name": item.get("name") or "",
             "category": item.get("category") or "",
             "rank": item.get("listRank") or "",
             "free": item.get("freePoiStatus") == "FREE",
             "description": item.get("description") or "",
             "url": item.get("jumpUrl") or "",
-            "district": _pick_district(item),
+            "longitude": item.get("longitude"),
+            "latitude": item.get("latitude"),
+            "image": (
+                item.get("mainPic")
+                or item.get("picUrl")
+                or item.get("pictureUrl")
+                or item.get("imgUrl")
+                or item.get("imageUrl")
+                or item.get("mainImage")
+                or ""
+            ),
+            "district": raw_district,
+            "district_label": _extract_district_label(raw_district)
+            or _extract_district_label(address),
         }
-        for item in items
-    ]
+        )
     return pois
 
 
@@ -538,10 +683,40 @@ def _fetch_poi_distributed(city_name: str, target: int = 50) -> list[dict]:
                 item["query_category"] = theme
                 by_category.setdefault(theme, []).append(item)
 
-    themes = [t for t in POI_THEMES if by_category.get(t)]
+    # 补上飞猪默认热门榜（西湖、雷峰塔、灵隐寺这类经典景点）
+    try:
+        default_items = _search_poi_items(city_name)
+    except Exception:
+        default_items = []
+    for item in default_items:
+        name = (item.get("name") or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        item["query_category"] = "经典必去"
+        by_category.setdefault("经典必去", []).append(item)
+
+    # 再用关键词补搜地标/必去，避免漏掉西湖这类超经典景点
+    for keyword in ("必去", "地标"):
+        try:
+            extra_items = _search_poi_items(city_name, keyword=keyword)
+        except Exception:
+            extra_items = []
+        for item in extra_items:
+            name = (item.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            item["query_category"] = "经典必去"
+            by_category.setdefault("经典必去", []).append(item)
+
+    themes = [t for t in list(POI_THEMES) + ["经典必去"] if by_category.get(t)]
     idx = {t: 0 for t in themes}
     district_counts: dict[str, int] = {}
     selected: list[dict] = []
+
+    def district_key(item: dict) -> str:
+        return item.get("district_label") or item.get("district") or ""
 
     while len(selected) < target and themes:
         progressed = False
@@ -555,20 +730,21 @@ def _fetch_poi_distributed(city_name: str, target: int = 50) -> list[dict]:
             candidates = items[idx[theme]:]
             best = min(
                 candidates,
-                key=lambda p: district_counts.get(p.get("district") or "", 0),
+                key=lambda p: district_counts.get(district_key(p), 0),
             )
             best_pos = items.index(best, idx[theme])
             items[idx[theme]], items[best_pos] = items[best_pos], items[idx[theme]]
             picked = items[idx[theme]]
             idx[theme] += 1
             selected.append(picked)
-            district = picked.get("district") or ""
+            district = district_key(picked)
             if district:
                 district_counts[district] = district_counts.get(district, 0) + 1
             progressed = True
         if not progressed:
             break
 
+    selected.sort(key=_poi_hot_key)
     return _extract_poi_features(selected)
 
 
@@ -618,11 +794,66 @@ def _fetch_web_search(
     ]
 
 
+def _extract_events(items: list[dict]) -> list[dict]:
+    """从 Tavily 网页结果中提取具体活动名称、类型、日期和链接。"""
+    if not items:
+        return []
+    try:
+        client = OpenAI(
+            api_key=os.getenv("OPENAI_API_KEY"),
+            base_url=os.getenv("OPENAI_BASE_URL"),
+        )
+        brief = [
+            {"title": x.get("title") or "", "url": x.get("url") or "", "content": (x.get("content") or "")[:300]}
+            for x in items
+        ]
+        resp = client.chat.completions.create(
+            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            messages=[
+                {"role": "system", "content": EVENT_EXTRACT_PROMPT},
+                {"role": "user", "content": json.dumps({"results": brief}, ensure_ascii=False)},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=6000,
+            timeout=60,
+        )
+        content = (resp.choices[0].message.content or "{}").strip()
+        if content.startswith("```"):
+            content = content.strip("`")
+            if content.startswith("json"):
+                content = content[4:]
+        events = json.loads(content).get("events") or []
+        result = []
+        for e in events:
+            name = (e.get("name") or "").strip()
+            if not name:
+                continue
+            typ = (e.get("type") or "").strip()
+            date_ = (e.get("date") or "").strip()
+            result.append(
+                {
+                    "title": name,
+                    "content": f"{typ},{date_}" if typ or date_ else "",
+                    "url": e.get("url") or "",
+                }
+            )
+        return result
+    except Exception:
+        return [
+            {
+                "title": x.get("title") or "",
+                "content": (x.get("content") or "")[:120],
+                "url": x.get("url") or "",
+            }
+            for x in items
+        ]
+
+
 def _fetch_events(
     destination: str,
     start_date: str | None = None,
     end_date: str | None = None,
-    max_results: int = 10,
+    max_results: int = 20,
 ) -> list[dict]:
     """搜索某地在日期段内的热点活动（演唱会/比赛/节日等），复用 Tavily。"""
     start = _normalize_date(start_date) if start_date else ""
@@ -635,14 +866,14 @@ def _fetch_events(
         date_range = "近期"
     query = f"{destination} {date_range} 演唱会 音乐节 比赛 展览 节日 活动 热点"
     items = _fetch_web_search(query, max_results=max_results)
-    return _extract_item_features(items, EVENTS_FEATURE_PROMPT)
+    return _extract_events(items)
 
 
 def _fetch_food(
     destination: str,
     keyword: str | None = None,
     max_price: float | None = None,
-    max_results: int = 10,
+    max_results: int = 50,
 ) -> list[dict]:
     """用高德地图 POI 搜索当地餐厅，返回结构化数据。
 
@@ -679,11 +910,40 @@ def _fetch_food(
     query = f"{destination} 美食 必吃 餐厅 小吃"
     if keyword:
         query += f" {keyword}"
-    items = _fetch_web_search(query, max_results=max_results)
+    items = _fetch_web_search(query, max_results=min(max_results, 20))
     items = _extract_item_features(items, FOOD_FEATURE_PROMPT)
     for it in items:
         it["_source"] = "tavily"
     return items
+
+
+def _fetch_social_food(destination: str, max_results: int = 20) -> list[dict]:
+    """在抖音/小红书搜索当地美食视频或笔记链接。"""
+    queries = {
+        "抖音": f"{destination} 美食 探店 抖音",
+        "小红书": f"{destination} 美食 探店 小红书 笔记",
+    }
+    results: list[dict] = []
+    for platform, query in queries.items():
+        try:
+            items = _fetch_web_search(query, max_results=max_results // 2)
+        except Exception:
+            items = []
+        for item in items:
+            url = (item.get("url") or "").lower()
+            if platform == "抖音" and "douyin.com" not in url:
+                continue
+            if platform == "小红书" and "xiaohongshu.com" not in url and "xhslink.com" not in url:
+                continue
+            results.append(
+                {
+                    "platform": platform,
+                    "title": item.get("title") or "",
+                    "url": item.get("url") or "",
+                    "content": (item.get("content") or "")[:200],
+                }
+            )
+    return results
 
 
 # ================= 文本格式化（MCP 工具用） =================
@@ -1026,13 +1286,13 @@ def run_search(input_data: dict) -> dict:
         "weather": lambda: _fetch_weather(destination, start, end),
         "hotels": lambda: _fetch_hotels(destination, start, end),
         "poi": lambda: _fetch_poi_distributed(destination, target=50),
-        "promotions": lambda: _fetch_promotions(f"{destination} 促销 特价"),
         "events": lambda: _fetch_events(destination, start, end),
         "food": lambda: _fetch_food(
             destination,
             keyword=food_keyword,
             max_price=max_price,
         ),
+        "social_food": lambda: _fetch_social_food(destination),
     }
     if origin:
         tasks["flights"] = lambda: _fetch_round_trip(_fetch_flights, origin, destination, start, end)

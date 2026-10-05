@@ -1989,9 +1989,39 @@ button:disabled {
   font-weight: 700;
 }
 
+.ta-confirm-summary {
+  margin: 0;
+  color: #59657a;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
 .ta-clarify-row {
   display: flex;
   gap: 8px;
+}
+
+.ta-clarify-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ta-clarify-option {
+  padding: 6px 10px;
+  border: 1px solid #dfe4ef;
+  border-radius: 999px;
+  background: #fff;
+  color: #5267a8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ta-clarify-option.active {
+  border-color: #4f6df5;
+  background: #eef2ff;
+  color: #4356e8;
 }
 
 .ta-clarify-row input {
@@ -2025,6 +2055,12 @@ button:disabled {
 .ta-ghost-button {
   background: #f1f4f9;
   color: #455064;
+}
+
+.ta-option-actions a.ta-ghost-button {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
 }
 
 .ta-ghost-button:hover {
@@ -2421,6 +2457,70 @@ button:disabled {
 
 .ta-option-main {
   min-width: 0;
+}
+
+.ta-option-image {
+  display: block;
+  width: 100%;
+  height: 118px;
+  object-fit: cover;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  background: #f1f4f9;
+}
+
+.ta-carrier-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 2px 6px;
+  border-radius: 6px;
+  background: #eef2ff;
+  color: #5267ff;
+  font-size: 11px;
+  font-weight: 700;
+  vertical-align: middle;
+}
+
+.ta-social-food {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #e9edf4;
+  border-radius: 13px;
+  background: #fafbff;
+}
+
+.ta-social-food-title {
+  color: #25314b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.ta-social-food-item {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  text-decoration: none;
+}
+
+.ta-social-food-platform {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #5267ff;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.ta-social-food-text {
+  overflow: hidden;
+  color: #59657a;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ta-option-title-row {
@@ -3080,7 +3180,7 @@ button:disabled {
 /* Tabs use the full center width without crowding the heading */
 .ta-options-column .ta-tabs {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 6px;
   width: 100%;
   margin: 0;
@@ -3090,6 +3190,23 @@ button:disabled {
   width: 100%;
   padding: 7px 8px;
   font-size: 11px;
+}
+
+.ta-options-column .ta-batch-button {
+  align-self: flex-start;
+  padding: 6px 12px;
+  border: 1px solid #dfe4ef;
+  border-radius: 999px;
+  background: #fff;
+  color: #5267a8;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ta-options-column .ta-batch-button:hover {
+  border-color: #cfd7ea;
+  background: #f6f8fd;
 }
 
 .ta-options-column .ta-option-list {
@@ -3575,6 +3692,38 @@ button:disabled {
 
 .app-nav-link:active {
   transform: translateY(1px);
+}
+
+.app-login-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 4px;
+  padding-left: 8px;
+}
+
+.app-login-phone {
+  color: #5a6478;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.app-logout-button {
+  padding: 6px 10px;
+  border: 1px solid #e4e8f3;
+  border-radius: 999px;
+  background: #f7f8ff;
+  color: #6171d9;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.app-logout-button:hover {
+  background: #eef2ff;
+  border-color: #d9e0fb;
 }
 
 .app-profile-button {
@@ -4597,6 +4746,22 @@ button:disabled {
   font: inherit;
   font-size: 12px;
   resize: vertical;
+}
+
+.ta-plan-rating-submit {
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: #4f6df5;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ta-plan-rating-submit:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .ta-plan-rating-status {

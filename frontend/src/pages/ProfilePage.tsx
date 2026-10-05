@@ -67,13 +67,13 @@ export function ProfilePage() {
 
     const userId = localStorage.getItem('currentUser');
     if (!userId) {
-      navigate('/trip-survey');
+      navigate('/agent');
       return;
     }
     try {
       await api.saveProfile(userId, form);
       setSaved(true);
-      navigate('/trip-survey');
+      navigate('/agent');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

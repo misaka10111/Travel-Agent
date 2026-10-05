@@ -5,7 +5,6 @@ import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { TripDetailPage } from './pages/TripDetailPage';
-import { TripSurveyPage } from './pages/TripSurveyPage';
 import { TripsPage } from './pages/TripsPage';
 
 export default function App() {
@@ -19,7 +18,6 @@ export default function App() {
           <Route path="/trips/:id" element={<TripDetailPage />} />
           <Route path="/agent" element={<AgentPage />} />
           <Route path="/profile" element={<ProfilePage />} />
-          <Route path="/trip-survey" element={<TripSurveyPage />} />
         </Route>
       </Routes>
     </BrowserRouter>

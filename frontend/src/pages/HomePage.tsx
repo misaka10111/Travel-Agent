@@ -19,7 +19,7 @@ export function HomePage() {
         <button
           type="button"
           className="agent-primary-button home-start-button"
-          onClick={() => navigate('/trip-survey')}
+          onClick={() => navigate('/agent')}
         >
           开始本次旅行
           <span aria-hidden="true">→</span>

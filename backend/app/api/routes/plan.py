@@ -53,6 +53,62 @@ def _parse_query(query: str) -> dict:
         return {}
 
 
+def _classify_modify(instruction: str, blocks: list) -> dict:
+    try:
+        proc = subprocess.run(
+            [str(PLAN_PYTHON), str(PLAN_PY)],
+            input=json.dumps(
+                {"classify": True, "instruction": instruction, "blocks": blocks},
+                ensure_ascii=False,
+            ),
+            capture_output=True,
+            text=True,
+            env=_subprocess_env(),
+            timeout=120,
+        )
+        return json.loads(proc.stdout)
+    except Exception:
+        return {"mode": "block", "targets": []}
+
+
+def _blocks_to_plan(
+    blocks: list,
+    destination: str,
+    start_date: str,
+    end_date: str,
+) -> dict:
+    """把扁平 blocks 重建为 PlanAgent 的 plans 结构，供全局修改使用。"""
+    by_day: dict[int, list[dict]] = {}
+    for block in blocks:
+        day = block.get("day") or 1
+        by_day.setdefault(day, []).append(
+            {
+                "time": block.get("time") or "",
+                "type": block.get("type") or "",
+                "name": block.get("name") or "",
+                "note": block.get("note") or "",
+                "link": block.get("link") or "",
+            }
+        )
+    itinerary = []
+    for day in sorted(by_day):
+        itinerary.append(
+            {
+                "day": day,
+                "date": "",
+                "theme": "",
+                "hotel": "",
+                "schedule": by_day[day],
+            }
+        )
+    return {
+        "destination": destination,
+        "start_date": start_date,
+        "end_date": end_date,
+        "plans": [{"style": "推荐方案", "summary": "", "itinerary": itinerary}],
+    }
+
+
 def _local_modify(
     destination: str,
     start_date: str,
@@ -294,6 +350,86 @@ def create_plan(payload: PlanRequest) -> dict:
         data["basic"] = basic
     if payload.answers:
         data["answers"] = payload.answers
+
+    # 已由 QuestionAgent 判断出 mode/targets 时，直接执行，不再二次分类
+    if (
+        payload.modify
+        and payload.modify.get("instruction")
+        and payload.modify.get("blocks")
+        and payload.modify.get("mode")
+    ):
+        blocks = payload.modify.get("blocks") or []
+        instruction = payload.modify.get("instruction") or ""
+        if payload.modify.get("mode") == "global":
+            plan = _blocks_to_plan(blocks, destination, start_date, end_date)
+            return _modify_plan(
+                destination,
+                start_date,
+                end_date,
+                plan,
+                {"mode": "global", "instruction": instruction},
+                payload.profile,
+                basic,
+            )
+        targets = payload.modify.get("targets") or []
+        if targets:
+            target_names = {
+                t if isinstance(t, str) else (t.get("name") if isinstance(t, dict) else "")
+                for t in targets
+            }
+            target_names = {n for n in target_names if n}
+            blocks = [
+                b
+                for b in blocks
+                if (b.get("name") or "") in target_names
+            ] or blocks
+        return _local_modify(
+            destination,
+            start_date,
+            end_date,
+            blocks,
+            instruction,
+            payload.profile,
+            basic,
+        )
+
+    # 自然语言修改：没有 mode 时，先让 PlanAgent 判断 global / block，再执行对应修改
+    if payload.modify and payload.modify.get("instruction") and payload.modify.get("blocks"):
+        blocks = payload.modify.get("blocks") or []
+        instruction = payload.modify.get("instruction") or ""
+        classification = _classify_modify(instruction, blocks)
+        if classification.get("mode") == "global":
+            plan = _blocks_to_plan(blocks, destination, start_date, end_date)
+            return _modify_plan(
+                destination,
+                start_date,
+                end_date,
+                plan,
+                {"mode": "global", "instruction": instruction},
+                payload.profile,
+                basic,
+            )
+        targets = classification.get("targets") or []
+        if targets:
+            target_names = {
+                t if isinstance(t, str) else (t.get("name") if isinstance(t, dict) else "")
+                for t in targets
+            }
+            target_names = {n for n in target_names if n}
+            blocks = [
+                b
+                for b in blocks
+                if (b.get("name") or "") in target_names
+            ] or blocks
+        return _local_modify(
+            destination,
+            start_date,
+            end_date,
+            blocks,
+            instruction,
+            payload.profile,
+            basic,
+        )
 
     # 完整计划修改：modify 含 mode（global/block），且带上一版 plan
     if payload.modify and payload.plan and payload.modify.get("mode"):

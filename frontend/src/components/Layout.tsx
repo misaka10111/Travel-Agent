@@ -1,15 +1,35 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 
 const navItems = [
   { to: '/', label: '首页', end: true },
   { to: '/agent', label: 'AI 助手' },
   { to: '/trips', label: '历史行程' },
-  { to: '/profile', label: '用户画像' },
-  { to: '/trip-survey', label: '本次旅行' },
-  { to: '/login', label: '登录' },
 ];
 
 export function Layout() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const [currentUser, setCurrentUser] = useState(
+    () => localStorage.getItem('currentUser') || '',
+  );
+
+  useEffect(() => {
+    setCurrentUser(localStorage.getItem('currentUser') || '');
+  }, [location.pathname]);
+
+  useEffect(() => {
+    const update = () => setCurrentUser(localStorage.getItem('currentUser') || '');
+    window.addEventListener('storage', update);
+    return () => window.removeEventListener('storage', update);
+  }, []);
+
+  function logout() {
+    localStorage.removeItem('currentUser');
+    setCurrentUser('');
+    navigate('/login');
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -30,6 +50,24 @@ export function Layout() {
               {item.label}
             </NavLink>
           ))}
+
+          {currentUser ? (
+            <span className="app-login-status">
+              <span className="app-login-phone">已登录 · {currentUser}</span>
+              <button type="button" className="app-logout-button" onClick={logout}>
+                退出
+              </button>
+            </span>
+          ) : (
+            <NavLink
+              to="/login"
+              className={({ isActive }) =>
+                `app-nav-link ${isActive ? 'active' : ''}`
+              }
+            >
+              登录
+            </NavLink>
+          )}
 
           <NavLink
             to="/profile"

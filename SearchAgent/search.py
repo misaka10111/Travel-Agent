@@ -9,6 +9,7 @@
 
 import json
 import os
+import re
 import sys
 from datetime import date, timedelta
 from pathlib import Path
@@ -62,6 +63,18 @@ def parse_nl(query: str) -> dict:
     result = json.loads(content)
     today = date.today()
 
+    # 明确时长（如“玩3天”）时，覆盖 LLM 可能算错的 end_date
+    duration_match = re.search(r"(\d+)\s*天", query)
+    if duration_match:
+        duration_days = int(duration_match.group(1))
+        if result.get("start_date"):
+            try:
+                result["end_date"] = (
+                    date.fromisoformat(result["start_date"]) + timedelta(days=duration_days - 1)
+                ).isoformat()
+            except (ValueError, TypeError):
+                pass
+
     def is_valid_day(value: str | None) -> bool:
         try:
             return bool(value) and date.fromisoformat(value) >= today
@@ -82,6 +95,19 @@ def parse_nl(query: str) -> dict:
 
 
 def main() -> None:
+    if "--poi-keyword" in sys.argv:
+        args = sys.argv
+        keyword = args[args.index("--poi-keyword") + 1]
+        city = ""
+        if "--city" in args:
+            city = args[args.index("--city") + 1]
+        try:
+            items = tools._fetch_poi(city, keyword=keyword)
+            print(json.dumps({"poi": items}, ensure_ascii=False, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return
+
     if "--parse" in sys.argv:
         query = (
             sys.stdin.read().strip()

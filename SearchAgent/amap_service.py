@@ -31,6 +31,17 @@ AMAP_BASE = "https://restapi.amap.com"
 
 # 高德 POI 分类编码：050000 = 餐饮服务
 FOOD_TYPES = "050000"
+BAD_FOOD_KEYWORDS = (
+    "宾馆",
+    "酒店",
+    "旅游景点",
+    "公司",
+    "休闲场所",
+    "美容美发",
+    "茶艺馆",
+    "咖啡厅",
+    "星巴克咖啡",
+)
 
 
 @dataclass
@@ -139,65 +150,93 @@ def search_restaurants(
     Returns:
         标准化餐厅列表，优先返回评分高且有价格信息的餐厅。
     """
-    params: dict[str, Any] = {
-        "types": FOOD_TYPES,
-        "region": city,
-        "city_limit": "true",
-        "page_size": min(limit, 25),
-        "page_num": 1,
-        "show_fields": "business",
-    }
-    if keyword:
-        params["keywords"] = keyword
-
-    data = _get("/v5/place/text", **params)
-    pois = data.get("pois") or []
-
     results: list[RestaurantInfo] = []
-    for poi in pois:
-        location = poi.get("location") or ""
-        if not location or "," not in location:
-            continue
-        lng_s, lat_s = location.split(",")
+    seen_names: set[str] = set()
+    page_num = 1
+    page_size = min(25, max(1, limit))
+    first_error: Exception | None = None
+
+    while len(results) < limit:
+        params: dict[str, Any] = {
+            "types": FOOD_TYPES,
+            "region": city,
+            "city_limit": "true",
+            "page_size": page_size,
+            "page_num": page_num,
+            "show_fields": "business",
+        }
+        if keyword:
+            params["keywords"] = keyword
         try:
-            lng = float(lng_s)
-            lat = float(lat_s)
-        except ValueError:
-            continue
+            data = _get("/v5/place/text", **params)
+        except Exception as exc:  # noqa: BLE001
+            if first_error is None:
+                first_error = exc
+            break
+        pois = data.get("pois") or []
+        if not pois:
+            break
+        raw_count = len(pois)
 
-        # v5 API：评分、人均、商圈都在 business 对象中
-        business = poi.get("business") or {}
-        rating_raw = business.get("rating")
-        cost_raw = business.get("cost")
-        rating = float(rating_raw) if rating_raw else None
-        price_per_person = float(cost_raw) if cost_raw else None
-        business_area = business.get("business_area") or poi.get("business_area") or ""
+        for poi in pois:
+            location = poi.get("location") or ""
+            if not location or "," not in location:
+                continue
+            lng_s, lat_s = location.split(",")
+            try:
+                lng = float(lng_s)
+                lat = float(lat_s)
+            except ValueError:
+                continue
 
-        poi_id = poi.get("id") or ""
-        name = poi.get("name") or ""
+            name = poi.get("name") or ""
+            if not name or name in seen_names:
+                continue
+            seen_names.add(name)
 
-        results.append(
-            RestaurantInfo(
-                name=name,
-                address=poi.get("address") or "",
-                longitude=lng,
-                latitude=lat,
-                cuisine=_parse_cuisine(poi.get("type") or ""),
-                rating=rating,
-                price_per_person=price_per_person,
-                business_area=business_area,
-                poi_id=poi_id,
-                map_url=_build_map_url(lng, lat, name),
-                poi_detail_url=_build_poi_detail_url(poi_id),
+            cuisine = _parse_cuisine(poi.get("type") or "")
+            if any(keyword in cuisine for keyword in BAD_FOOD_KEYWORDS):
+                continue
+
+            # v5 API：评分、人均、商圈都在 business 对象中
+            business = poi.get("business") or {}
+            rating_raw = business.get("rating")
+            cost_raw = business.get("cost")
+            rating = float(rating_raw) if rating_raw else None
+            price_per_person = float(cost_raw) if cost_raw else None
+            business_area = business.get("business_area") or poi.get("business_area") or ""
+
+            poi_id = poi.get("id") or ""
+            results.append(
+                RestaurantInfo(
+                    name=name,
+                    address=poi.get("address") or "",
+                    longitude=lng,
+                    latitude=lat,
+                    cuisine=cuisine,
+                    rating=rating,
+                    price_per_person=price_per_person,
+                    business_area=business_area,
+                    poi_id=poi_id,
+                    map_url=_build_map_url(lng, lat, name),
+                    poi_detail_url=_build_poi_detail_url(poi_id),
+                )
             )
-        )
+            if len(results) >= limit:
+                break
+
+        if raw_count < page_size:
+            break
+        page_num += 1
+
+    if not results and first_error is not None:
+        raise first_error
 
     # 排序：有评分的优先，评分高的在前；评分相同则人均适中(≈100元)的靠前
     results.sort(
         key=lambda r: (
             1 if r.rating else 0,
             r.rating or 0,
-            -abs(r.price_per_person - 100) if r.price_per_person else -999,
         ),
         reverse=True,
     )

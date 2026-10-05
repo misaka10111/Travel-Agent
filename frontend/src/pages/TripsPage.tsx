@@ -1,81 +1,34 @@
-import { useState } from 'react';
-import type { ChangeEvent, FormEvent } from 'react';
 import { api } from '../api/client';
-import { TripCard } from '../components/TripCard';
 import { useApi } from '../hooks/useApi';
-
-const emptyForm = {
-  title: '',
-  destination: '',
-  start_date: '',
-  end_date: '',
-};
 
 export function TripsPage() {
   const userId = localStorage.getItem('currentUser') || '';
-  const { data: trips, loading, error, refetch } = useApi(() => api.listTrips(userId));
-  const [form, setForm] = useState(emptyForm);
-  const [submitting, setSubmitting] = useState(false);
-
-  function handleChange(e: ChangeEvent<HTMLInputElement>) {
-    setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
-  }
-
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    try {
-      await api.createTrip({ ...form, user_id: userId });
-      setForm(emptyForm);
-      refetch();
-    } finally {
-      setSubmitting(false);
-    }
-  }
+  const { data: memories, loading, error } = useApi(() =>
+    api.listTripMemory(userId),
+  );
 
   return (
     <section>
-      <h1>我的行程</h1>
-
-      <form onSubmit={handleSubmit} className="trip-form">
-        <input
-          name="title"
-          placeholder="行程标题"
-          value={form.title}
-          onChange={handleChange}
-          required
-        />
-        <input
-          name="destination"
-          placeholder="目的地"
-          value={form.destination}
-          onChange={handleChange}
-          required
-        />
-        <input
-          name="start_date"
-          type="date"
-          value={form.start_date}
-          onChange={handleChange}
-          required
-        />
-        <input
-          name="end_date"
-          type="date"
-          value={form.end_date}
-          onChange={handleChange}
-          required
-        />
-        <button type="submit" disabled={submitting}>
-          创建行程
-        </button>
-      </form>
+      <h1>历史行程</h1>
 
       {loading && <p>加载中…</p>}
       {error && <p className="error">{error}</p>}
+
+      {!loading && (!memories || memories.length === 0) && (
+        <p>还没有历史行程记录。</p>
+      )}
+
       <div className="card-grid">
-        {trips?.map((trip) => (
-          <TripCard key={trip.id} trip={trip} />
+        {memories?.map((memory, index) => (
+          <article className="trip-card" key={String(memory.id ?? index)}>
+            <h2>{String(memory.destination ?? '未命名行程')}</h2>
+            <p>
+              {String(memory.start_date ?? '')} ~ {String(memory.end_date ?? '')}
+            </p>
+            <p>方案：{String(memory.chosen_plan_style ?? '未选择')}</p>
+            {memory.rating != null && <p>评分：{String(memory.rating)}</p>}
+            {memory.feedback ? <p>评价：{String(memory.feedback)}</p> : null}
+          </article>
         ))}
       </div>
     </section>
