@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from app.api.routes import (
@@ -26,9 +27,30 @@ from app.services.destination_service import seed_destinations
 settings = get_settings()
 
 
+def ensure_sqlite_legacy_schema() -> None:
+    """Add columns that create_all cannot backfill on an existing SQLite DB."""
+    if not settings.database_url.startswith("sqlite"):
+        return
+
+    inspector = inspect(engine)
+    if "trip_memories" not in inspector.get_table_names():
+        return
+
+    columns = {column["name"] for column in inspector.get_columns("trip_memories")}
+    if "conversation" not in columns:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "ALTER TABLE trip_memories "
+                    "ADD COLUMN conversation JSON NOT NULL DEFAULT '[]'"
+                )
+            )
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
+    ensure_sqlite_legacy_schema()
     with SessionLocal() as db:
         seed_destinations(db)
     yield

@@ -1,6 +1,6 @@
 import json
-import os
 import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter
@@ -8,21 +8,24 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[4]
-ORCHESTRATOR_PY = ROOT / "Orchestrator" / "orchestrator.py"
-ORCHESTRATOR_PYTHON = ROOT / "Orchestrator" / ".venv" / "bin" / "python"
-SEARCH_PY = ROOT / "SearchAgent" / "search.py"
-SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
-PLAN_PY = ROOT / "PlanAgent" / "plan.py"
-PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_env import component_python, component_script, subprocess_env  # noqa: E402
+
+ORCHESTRATOR_PY = component_script("Orchestrator", "orchestrator.py")
+ORCHESTRATOR_PYTHON = component_python("Orchestrator")
+SEARCH_PY = component_script("SearchAgent", "search.py")
+SEARCH_PYTHON = component_python("SearchAgent")
+PLAN_PY = component_script("PlanAgent", "plan.py")
+PLAN_PYTHON = component_python("PlanAgent")
 
 router = APIRouter(prefix="/plan", tags=["plan"])
 
 
 def _subprocess_env() -> dict:
-    """清除 __PYVENV_LAUNCHER__，避免 macOS venv 启动器变量污染子进程的 venv 解析。"""
-    env = dict(os.environ)
-    env.pop("__PYVENV_LAUNCHER__", None)
-    return env
+    """子进程环境：UTF-8 标准流 + 清理 macOS venv 遗留变量。"""
+    return subprocess_env()
 
 
 class PlanRequest(BaseModel):
@@ -45,6 +48,7 @@ def _parse_query(query: str) -> dict:
             input=query,
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=120,
         )
@@ -63,6 +67,7 @@ def _classify_modify(instruction: str, blocks: list) -> dict:
             ),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=120,
         )
@@ -134,6 +139,7 @@ def _local_modify(
                 input=json.dumps(search_payload, ensure_ascii=False),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 env=_subprocess_env(),
                 timeout=120,
             )
@@ -154,6 +160,7 @@ def _local_modify(
             input=json.dumps(plan_payload, ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=120,
         )
@@ -228,6 +235,7 @@ def plan_stream(payload: PlanRequest):
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
             bufsize=1,
             env=_subprocess_env(),
         )
@@ -280,6 +288,7 @@ def _modify_plan(
                 input=json.dumps(search_payload, ensure_ascii=False),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 env=_subprocess_env(),
                 timeout=120,
             )
@@ -300,6 +309,7 @@ def _modify_plan(
             input=json.dumps(plan_payload, ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=300,
         )
@@ -464,6 +474,7 @@ def create_plan(payload: PlanRequest) -> dict:
             input=json.dumps(data, ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=600,
         )

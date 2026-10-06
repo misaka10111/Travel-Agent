@@ -101,6 +101,37 @@ type RoutePlan = {
   legs: RouteLeg[];
 };
 
+function buildSavedPlanSnapshot(
+  routePlan: RoutePlan,
+  style: string,
+  weatherData: { days?: Array<Record<string, unknown>> } | null,
+) {
+  const hasStyledBlocks = routePlan.blocks.some((block) => Boolean(block.plan_style));
+  const blocks = routePlan.blocks.filter(
+    (block) => !hasStyledBlocks || block.plan_style === style,
+  );
+  const blockIds = new Set(blocks.map((block) => block.id));
+
+  const hasStyledLegs = routePlan.legs.some((leg) => Boolean(leg.plan_style));
+  const legs = routePlan.legs.filter((leg) => {
+    if (hasStyledLegs) return leg.plan_style === style;
+    return blockIds.has(leg.from) && blockIds.has(leg.to);
+  });
+
+  return {
+    destination: routePlan.destination,
+    start_date: routePlan.start_date,
+    end_date: routePlan.end_date,
+    styles: [style],
+    summaries: { [style]: routePlan.summaries[style] ?? '' },
+    blocks,
+    legs,
+    weather: weatherData
+      ? { days: [...(weatherData.days ?? [])] }
+      : null,
+  };
+}
+
 function mapFlights(items: unknown): FlightOption[] {
   const list = Array.isArray(items)
     ? items
@@ -1309,13 +1340,14 @@ export function AgentPage() {
     }
     setSaveState('saving');
     try {
+      const savedPlan = buildSavedPlanSnapshot(routePlan, expandedStyle, weatherData);
       await api.saveTripMemory({
         user_id: userId,
         destination: routePlan.destination,
         start_date: routePlan.start_date,
         end_date: routePlan.end_date,
         chosen_plan_style: expandedStyle,
-        final_plan: routePlan,
+        final_plan: savedPlan,
         conversation: messages,
       });
       setSaveState('idle');
@@ -1334,13 +1366,14 @@ export function AgentPage() {
       return;
     }
     try {
+      const savedPlan = buildSavedPlanSnapshot(routePlan, expandedStyle, weatherData);
       await api.saveTripMemory({
         user_id: userId,
         destination: routePlan.destination,
         start_date: routePlan.start_date,
         end_date: routePlan.end_date,
         chosen_plan_style: expandedStyle,
-        final_plan: routePlan,
+        final_plan: savedPlan,
         conversation: messages,
         rating,
         feedback: planFeedback,

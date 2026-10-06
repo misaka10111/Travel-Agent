@@ -30,8 +30,13 @@ from route_map import attach_routes, geocode, geocode_blocks, strip_geo, _km
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 ROOT = BASE_DIR.parent
-SEARCH_PY = ROOT / "SearchAgent" / "search.py"
-SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_env import component_python, component_script, subprocess_env  # noqa: E402
+
+SEARCH_PY = component_script("SearchAgent", "search.py")
+SEARCH_PYTHON = component_python("SearchAgent")
 
 DAY_PLAN_PROMPT = (
     "你是旅行规划师，负责规划某一天的行程。"
@@ -356,7 +361,9 @@ def _ensure_requested_pois(
                 ],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 timeout=90,
+                env=subprocess_env(),
             )
             extra = json.loads(proc.stdout).get("poi") or []
         except Exception:

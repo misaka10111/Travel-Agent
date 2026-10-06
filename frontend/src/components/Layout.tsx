@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { AgentPage } from '../pages/AgentPage';
 
 const navItems = [
   { to: '/', label: '首页', end: true },
@@ -13,6 +14,8 @@ export function Layout() {
   const [currentUser, setCurrentUser] = useState(
     () => localStorage.getItem('currentUser') || '',
   );
+
+  const isAgentPage = location.pathname === '/agent' || location.pathname.startsWith('/agent/');
 
   useEffect(() => {
     setCurrentUser(localStorage.getItem('currentUser') || '');
@@ -95,8 +98,24 @@ export function Layout() {
         </nav>
       </header>
 
-      <main className="app-main">
-        <Outlet />
+      {/*
+        普通页面继续由 Outlet 渲染。
+        切到 AI 助手时将普通页面卸载，但 AgentPage 本身始终保持挂载，
+        只通过 display 控制显隐，因此聊天、路线、待选行程、地图位置等 state
+        在页面间切换时不会被 React 清空。
+      */}
+      {!isAgentPage && (
+        <main className="app-main">
+          <Outlet />
+        </main>
+      )}
+
+      <main
+        className="app-main"
+        style={{ display: isAgentPage ? undefined : 'none' }}
+        aria-hidden={!isAgentPage}
+      >
+        <AgentPage />
       </main>
     </div>
   );

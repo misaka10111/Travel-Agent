@@ -17,7 +17,10 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-import certifi
+try:
+    import certifi
+except ImportError:  # 未安装时退化为系统证书库，不影响其余规划流程
+    certifi = None
 
 AMAP_BASE = "https://restapi.amap.com"
 CACHE_PATH = Path(__file__).resolve().parent / "route_cache.json"
@@ -51,7 +54,8 @@ def _save_cache() -> None:
 def _get(path: str, **params) -> dict:
     params["key"] = os.getenv("AMAP_KEY", "")
     url = f"{AMAP_BASE}{path}?{urllib.parse.urlencode(params)}"
-    context = ssl.create_default_context(cafile=certifi.where())
+    # certifi 可用时用它的 CA 包（兼容 macOS/部分 Windows），否则用系统证书库
+    context = ssl.create_default_context(cafile=certifi.where() if certifi else None)
     time.sleep(REQUEST_GAP)
     for attempt in range(2):
         with urllib.request.urlopen(url, timeout=10, context=context) as resp:

@@ -27,13 +27,17 @@ from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
 ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
-SEARCH_PY = ROOT / "SearchAgent" / "search.py"
-SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
-PLAN_PY = ROOT / "PlanAgent" / "plan.py"
-PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
-VALIDATE_PY = ROOT / "ValidateAgent" / "validate.py"
-VALIDATE_PYTHON = ROOT / "ValidateAgent" / ".venv" / "bin" / "python"
+from agent_env import component_python, component_script, subprocess_env  # noqa: E402
+
+SEARCH_PY = component_script("SearchAgent", "search.py")
+SEARCH_PYTHON = component_python("SearchAgent")
+PLAN_PY = component_script("PlanAgent", "plan.py")
+PLAN_PYTHON = component_python("PlanAgent")
+VALIDATE_PY = component_script("ValidateAgent", "validate.py")
+VALIDATE_PYTHON = component_python("ValidateAgent")
 
 MAX_ITERATIONS = 1
 
@@ -178,26 +182,19 @@ class State(TypedDict, total=False):
 
 
 def _call(python: Path, script: Path, payload: dict) -> dict:
-    import platform
+    """以 JSON 为输入调用子 Agent 脚本。
 
-    python_str = str(python)
-    # 仅在 Windows 上做 bin→Scripts 路径替换
-    if platform.system() == "Windows":
-        python_str = python_str.replace("bin\\python", "Scripts\\python.exe").replace("bin/python", "Scripts\\python.exe")
-    # 兜底：替换后路径不存在时回退到原路径（不混用 sys.executable，避免 venv 错乱）
-    if not os.path.exists(python_str):
-        python_str = str(python)
-
-    env = dict(os.environ)
-    env.pop("__PYVENV_LAUNCHER__", None)
-
+    解释器路径已由 ``agent_env.component_python`` 在跨平台层面解析完毕，
+    这里直接使用，不再做字符串替换。
+    """
     proc = subprocess.run(
-        [python_str, str(script)],
+        [str(python), str(script)],
         input=json.dumps(payload, ensure_ascii=False),
         capture_output=True,
         text=True,
+        encoding="utf-8",
         timeout=600,
-        env=env,
+        env=subprocess_env(),
     )
     try:
         return json.loads(proc.stdout)

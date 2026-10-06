@@ -33,6 +33,12 @@ from amap_service import search_restaurants
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
+_REPO_ROOT = BASE_DIR.parent
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from agent_env import subprocess_env  # noqa: E402
+
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_TTL = 3600  # 缓存有效期（秒），1 小时
 SEARCH_VERSION = "hotel30-v8"  # 搜索逻辑版本，变更后自动让旧缓存失效
@@ -103,7 +109,29 @@ RESTAURANT_PROMPT = (
 )
 
 
-FLYAI_BIN = Path(__file__).resolve().parent / "node_modules" / ".bin" / "flyai"
+def _flyai_bin() -> Path:
+    """定位 npm 安装的 flyai CLI 入口。
+
+    npm 为同一个 bin 生成的启动器在不同平台不一样：
+
+    * macOS / Linux：无扩展名的可执行 shell 脚本（带 shebang，内核可直接执行）
+    * Windows：``flyai.cmd``（供 cmd.exe）与 ``flyai.ps1``（供 PowerShell），
+      **没有**无扩展名版本
+
+    因此不能写死无扩展名路径，否则 Windows 上会抛 ``FileNotFoundError: [WinError 2]``。
+    """
+    bin_dir = Path(__file__).resolve().parent / "node_modules" / ".bin"
+    if os.name == "nt":
+        candidates = (bin_dir / "flyai.cmd", bin_dir / "flyai.exe", bin_dir / "flyai")
+    else:
+        candidates = (bin_dir / "flyai", bin_dir / "flyai.cmd")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0]
+
+
+FLYAI_BIN = _flyai_bin()
 
 GEOCODING_URL = "https://geocoding-api.open-meteo.com/v1/search"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -142,8 +170,22 @@ def _http_get_json(url: str) -> dict:
 
 
 def _run_flyai(args: list[str]) -> dict:
+    """调用 flyai CLI 并解析其 JSON 输出。"""
+    if not FLYAI_BIN.is_file():
+        raise RuntimeError(
+            f"未找到 flyai CLI：{FLYAI_BIN}\n"
+            "请在 SearchAgent 目录执行 `npm install` 安装 Node 依赖"
+            "（依赖声明于 SearchAgent/package.json）。"
+        )
     cmd = [str(FLYAI_BIN), *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        timeout=90,
+        env=subprocess_env(),
+    )
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"flyai 调用失败：{detail}")
@@ -865,7 +907,13 @@ def _fetch_events(
     else:
         date_range = "近期"
     query = f"{destination} {date_range} 演唱会 音乐节 比赛 展览 节日 活动 热点"
-    items = _fetch_web_search(query, max_results=max_results)
+    try:
+        items = _fetch_web_search(query, max_results=max_results)
+    except Exception as exc:  # noqa: BLE001
+        # 活动属可选增强（Tavily 依赖），缺 key 或检索失败时降级为空，
+        # 与 _fetch_social_food 的处理保持一致，避免整轮搜索被判为失败。
+        print(f"[events] 跳过（{exc}）", file=sys.stderr)
+        return []
     return _extract_events(items)
 
 
@@ -1232,6 +1280,50 @@ def _read_cache(key: str) -> dict | None:
         return None
 
 
+def _module_available(module: str) -> bool:
+    """检查第三方模块是否可导入（用于判断缓存是否值得复用）。"""
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+#: 规划必备字段：为空即说明抓取失败，绝不能缓存（否则会固化整个 CACHE_TTL）。
+_REQUIRED_FIELDS = ("poi", "hotels")
+
+#: 依赖外部 CLI 的字段：CLI 未安装时结果无意义，不缓存。
+_CLI_BACKED_FIELDS = ("poi", "hotels")
+
+
+def _cache_block_reason(result: dict) -> str | None:
+    """返回不应缓存该结果的原因；可缓存时返回 None。
+
+    设计意图：搜索失败（依赖缺失、CLI 未安装、外部接口报错）时**不落盘**，
+    让下一次请求重新尝试，而不是把一次环境问题固化成持续失败。
+    """
+    if not FLYAI_BIN.is_file():
+        return f"flyai CLI 未安装（{FLYAI_BIN}）"
+
+    for key in _CLI_BACKED_FIELDS:
+        value = result.get(key)
+        if isinstance(value, dict) and value.get("error"):
+            return f"{key} 出错：{value['error']}"
+
+    for key in _REQUIRED_FIELDS:
+        value = result.get(key)
+        if isinstance(value, list) and not value:
+            return f"{key} 返回空列表"
+
+    # 其余字段为可选增强（如 social_food 依赖 TAVILY_API_KEY），
+    # 为空属正常降级，只拦真正的错误。
+    for key, value in result.items():
+        if isinstance(value, dict) and value.get("error"):
+            return f"{key} 出错：{value['error']}"
+    return None
+
+
 def _write_cache(key: str, result: dict) -> None:
     try:
         CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -1303,7 +1395,13 @@ def run_search(input_data: dict) -> dict:
             result_key, value = future.result()
             result[result_key] = value
 
-    _write_cache(cache_key, result)
+    # 只缓存健康结果：依赖缺失或抓取出错时不落盘，
+    # 否则一次环境问题（如未安装 node 依赖）会被固化到整个 CACHE_TTL。
+    block = _cache_block_reason(result)
+    if block is None:
+        _write_cache(cache_key, result)
+    else:
+        print(f"[cache] 跳过写入：{block}", file=sys.stderr)
     return result
 
 

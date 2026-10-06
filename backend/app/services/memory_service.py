@@ -6,8 +6,8 @@
 
 from copy import deepcopy
 import json
-import os
 import subprocess
+import sys
 from pathlib import Path
 
 from sqlalchemy import select
@@ -16,8 +16,18 @@ from sqlalchemy.orm import Session
 from app.models import BehaviorSignal, UserPreference
 
 ROOT = Path(__file__).resolve().parents[3]
-CONVERSATION_SUMMARY_PY = ROOT / "PlanAgent" / "conversation_summary.py"
-PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_env import component_python, component_script, subprocess_env  # noqa: E402
+
+CONVERSATION_SUMMARY_PY = component_script("PlanAgent", "conversation_summary.py")
+PLAN_PYTHON = component_python("PlanAgent")
+
+
+def _subprocess_env() -> dict:
+    """子进程环境：UTF-8 标准流 + 清理 macOS venv 遗留变量。"""
+    return subprocess_env()
 
 POSITIVE_ACTIONS = {
     "add",
@@ -185,15 +195,14 @@ def _summarize_conversation(conversation: list) -> dict:
     if not conversation:
         return {}
     try:
-        env = dict(os.environ)
-        env.pop("__PYVENV_LAUNCHER__", None)
         proc = subprocess.run(
             [str(PLAN_PYTHON), str(CONVERSATION_SUMMARY_PY)],
             input=json.dumps({"conversation": conversation}, ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=60,
-            env=env,
+            env=_subprocess_env(),
         )
         data = json.loads(proc.stdout)
     except Exception:

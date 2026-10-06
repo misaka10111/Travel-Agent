@@ -1,22 +1,27 @@
 import json
-import os
 import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[4]
-QUESTION_PY = ROOT / "QuestionAgent" / "agent.py"
-QUESTION_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_env import component_python, component_script, subprocess_env  # noqa: E402
+
+QUESTION_PY = component_script("QuestionAgent", "agent.py")
+# QuestionAgent 没有独立 venv，回退到 PlanAgent 的解释器（其依赖可覆盖）
+QUESTION_PYTHON = component_python("QuestionAgent", fallback=component_python("PlanAgent"))
 
 router = APIRouter(prefix="/question", tags=["question"])
 
 
 def _subprocess_env() -> dict:
-    env = dict(os.environ)
-    env.pop("__PYVENV_LAUNCHER__", None)
-    return env
+    """子进程环境：UTF-8 标准流 + 清理 macOS venv 遗留变量。"""
+    return subprocess_env()
 
 
 class QuestionRequest(BaseModel):
@@ -35,6 +40,7 @@ def ask_question(payload: QuestionRequest) -> dict:
             ),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=120,
         )

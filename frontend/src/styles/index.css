@@ -5242,3 +5242,250 @@ button:disabled {
     height: min(292px, calc(100dvh - 84px));
   }
 }
+
+
+/* =========================
+   History trip memory detail
+   ========================= */
+.trip-memory-page,
+.trip-memory-detail-page {
+  width: min(1100px, 100%);
+  margin: 0 auto;
+}
+
+.trip-memory-page-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.trip-memory-page-header h1,
+.trip-memory-detail-heading h1 {
+  margin: 5px 0 0;
+}
+
+.trip-memory-grid {
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+
+.trip-memory-card {
+  text-decoration: none;
+}
+
+.trip-memory-card h2 {
+  margin: 14px 0 6px;
+  font-size: 21px;
+}
+
+.trip-memory-card p {
+  margin: 7px 0;
+}
+
+.trip-memory-card-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.trip-memory-card-status,
+.trip-memory-detail-confirmed {
+  display: inline-flex;
+  align-items: center;
+  min-height: 27px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #e9f8f0;
+  color: #168455;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.trip-memory-card-date {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trip-memory-card-style {
+  color: #33436b;
+  font-weight: 600;
+}
+
+.trip-memory-card-feedback {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.trip-memory-card-action {
+  display: inline-block;
+  margin-top: 12px;
+  color: var(--primary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trip-memory-back-link {
+  margin-bottom: 16px;
+  text-decoration: none;
+}
+
+.trip-memory-detail-card {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: 0 14px 38px rgba(30, 42, 72, 0.08);
+}
+
+.trip-memory-detail-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 24px 26px 20px;
+  border-bottom: 1px solid #edf0f6;
+}
+
+.trip-memory-detail-meta {
+  margin: 8px 0 0;
+  color: var(--muted);
+}
+
+.trip-memory-detail-style {
+  padding: 18px 26px;
+  background: #f8faff;
+  border-bottom: 1px solid #edf0f6;
+}
+
+.trip-memory-detail-style strong {
+  font-size: 18px;
+}
+
+.trip-memory-detail-style p {
+  margin: 7px 0 0;
+  color: #667085;
+  line-height: 1.65;
+}
+
+.trip-memory-days {
+  padding: 8px 26px 24px;
+}
+
+.trip-memory-day {
+  padding: 18px 0 4px;
+}
+
+.trip-memory-day + .trip-memory-day {
+  border-top: 1px solid #edf0f6;
+}
+
+.trip-memory-day-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.trip-memory-day-title strong {
+  color: var(--primary);
+  font-size: 16px;
+}
+
+.trip-memory-day-title span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.trip-memory-itinerary-row {
+  display: grid;
+  grid-template-columns: 106px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px dashed #e5e9f2;
+}
+
+.trip-memory-itinerary-row:last-child {
+  border-bottom: 0;
+}
+
+.trip-memory-itinerary-left {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #68758f;
+  font-size: 13px;
+}
+
+.trip-memory-itinerary-left small {
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.trip-memory-itinerary-body strong {
+  color: #202b42;
+  font-size: 15px;
+}
+
+.trip-memory-itinerary-body p {
+  margin: 5px 0 0;
+  color: #667085;
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.trip-memory-weather-row {
+  margin-bottom: 4px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: #f4f8ff;
+}
+
+.trip-memory-review {
+  margin: 0 26px 26px;
+  padding: 15px 16px;
+  border-radius: 14px;
+  background: #f8f9fc;
+}
+
+.trip-memory-review strong {
+  margin-right: 10px;
+}
+
+.trip-memory-review span {
+  color: var(--primary);
+  font-weight: 700;
+}
+
+.trip-memory-review p {
+  margin: 8px 0 0;
+  color: #667085;
+}
+
+.trip-memory-empty-plan {
+  padding: 24px 26px;
+}
+
+@media (max-width: 700px) {
+  .trip-memory-detail-heading {
+    flex-direction: column;
+  }
+
+  .trip-memory-itinerary-row {
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 10px;
+  }
+
+  .trip-memory-detail-heading,
+  .trip-memory-detail-style,
+  .trip-memory-days {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+}

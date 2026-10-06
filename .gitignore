@@ -14,6 +14,8 @@ SearchAgent/cache/
 PlanAgent/route_cache.json
 *.db
 *.sqlite3
+*.db.bak
+*.bak
 .env
 
 # Node

@@ -1,22 +1,26 @@
 import json
-import os
 import subprocess
+import sys
 from pathlib import Path
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 ROOT = Path(__file__).resolve().parents[4]
-SEARCH_PY = ROOT / "SearchAgent" / "search.py"
-SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from agent_env import component_python, component_script, subprocess_env  # noqa: E402
+
+SEARCH_PY = component_script("SearchAgent", "search.py")
+SEARCH_PYTHON = component_python("SearchAgent")
 
 router = APIRouter(prefix="/search", tags=["search"])
 
 
 def _subprocess_env() -> dict:
-    env = dict(os.environ)
-    env.pop("__PYVENV_LAUNCHER__", None)
-    return env
+    """子进程环境：UTF-8 标准流 + 清理 macOS venv 遗留变量。"""
+    return subprocess_env()
 
 
 class SearchRequest(BaseModel):
@@ -41,6 +45,7 @@ def search(payload: SearchRequest) -> dict:
                 input=payload.query,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
                 env=_subprocess_env(),
                 timeout=120,
             )
@@ -69,6 +74,7 @@ def search(payload: SearchRequest) -> dict:
             input=json.dumps(search_payload, ensure_ascii=False),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=_subprocess_env(),
             timeout=180,
         )

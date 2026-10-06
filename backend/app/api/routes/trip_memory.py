@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,21 @@ def create_trip_memory(
     db.refresh(memory)
     if payload.conversation:
         merge_conversation_preferences(payload.user_id, payload.conversation, db)
+    return memory
+
+
+@router.get("/item/{memory_id}", response_model=TripMemoryRead)
+def get_trip_memory(
+    memory_id: int,
+    user_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> TripMemory:
+    memory = db.get(TripMemory, memory_id)
+    if memory is None or (user_id and memory.user_id != user_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Trip memory not found",
+        )
     return memory
 
 
