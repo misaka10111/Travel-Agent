@@ -560,6 +560,29 @@ POI_THEMES = {
     "教育博物": ["博物馆", "纪念馆"],
     "城市生活": ["文创街区", "市集"],
 }
+
+STYLE_KEYWORDS = {
+    "亲子乐园": ["亲子", "乐园", "动物园", "海洋馆"],
+    "深度文化": ["博物馆", "历史古迹", "纪念馆"],
+    "自然风光": ["自然风光", "公园", "山湖田园"],
+    "美食探店": ["美食街区", "市集", "老字号"],
+    "摄影旅拍": ["网红打卡", "地标", "拍照出片"],
+    "冒险户外": ["户外活动", "徒步", "露营"],
+    "购物血拼": ["商圈", "购物中心"],
+    "休闲度假": ["湖景", "园林", "温泉"],
+}
+
+
+def _profile_keywords(profile: dict | None) -> list[str]:
+    if not profile:
+        return []
+    styles = profile.get("travel_style") or []
+    if isinstance(styles, str):
+        styles = [styles]
+    keywords: list[str] = []
+    for style in styles:
+        keywords.extend(STYLE_KEYWORDS.get(style, []))
+    return keywords
 def _pick_district(item: dict) -> str:
     for key in ("districtName", "district", "areaName", "region", "address"):
         value = item.get(key)
@@ -665,7 +688,11 @@ def _fetch_poi(
     return _extract_poi_features(pois)
 
 
-def _fetch_poi_distributed(city_name: str, target: int = 50) -> list[dict]:
+def _fetch_poi_distributed(
+    city_name: str,
+    target: int = 50,
+    extra_keywords: list[str] | None = None,
+) -> list[dict]:
     """按 4 个主题分散搜索景点，合并去重后均匀取 target 条。"""
     by_category: dict[str, list[dict]] = {}
     seen: set[str] = set()
@@ -710,7 +737,24 @@ def _fetch_poi_distributed(city_name: str, target: int = 50) -> list[dict]:
             item["query_category"] = "经典必去"
             by_category.setdefault("经典必去", []).append(item)
 
-    themes = [t for t in list(POI_THEMES) + ["经典必去"] if by_category.get(t)]
+    # 根据用户画像关键词，各多检索 10 条
+    for keyword in extra_keywords or []:
+        try:
+            extra_items = _search_poi_items(city_name, keyword=keyword)
+        except Exception:
+            extra_items = []
+        for item in extra_items[:10]:
+            name = (item.get("name") or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            item["query_category"] = "用户偏好"
+            by_category.setdefault("用户偏好", []).append(item)
+
+    themes = [
+        t for t in list(POI_THEMES) + ["经典必去", "用户偏好"]
+        if by_category.get(t)
+    ]
     idx = {t: 0 for t in themes}
     district_counts: dict[str, int] = {}
     selected: list[dict] = []
@@ -1285,7 +1329,11 @@ def run_search(input_data: dict) -> dict:
     tasks = {
         "weather": lambda: _fetch_weather(destination, start, end),
         "hotels": lambda: _fetch_hotels(destination, start, end),
-        "poi": lambda: _fetch_poi_distributed(destination, target=50),
+        "poi": lambda: _fetch_poi_distributed(
+            destination,
+            target=50,
+            extra_keywords=_profile_keywords(input_data.get("profile")),
+        ),
         "events": lambda: _fetch_events(destination, start, end),
         "food": lambda: _fetch_food(
             destination,

@@ -39,6 +39,9 @@ DAY_PLAN_PROMPT = (
     "search（酒店/机票/高铁等）、user_profile、preferences、basic、answers 等。"
     "规则：根据 user_profile.travel_style 或 preferences.pace 调整节奏："
     "休闲度假/轻松→每天 1~2 个景点，慢节奏、安排休息；摄影旅拍/打卡/紧凑→每天 3 个景点，优先网红出片点，行程充实。"
+    "根据预算档位安排：经济档→免费景点+公共交通+经济酒店/餐厅；舒适档→中等门票+地铁/打车+舒适酒店；"
+    "豪华档→可付费体验+打车+高星酒店/高品质餐厅；总花费不超 basic.total_budget。"
+    "根据画像与人数：带老人/孩子减少步行、安排休息；学生控预算；退休轻松节奏；美食偏好优先安排当地特色餐厅。"
     "如果是第一天且去程航班/高铁到达时间较晚（15:00 以后），可只安排 1 个景点或仅安排晚餐/入住；"
     "如果到达时间晚于 20:00，第一天不要再安排景点，只安排交通和入住；禁止在 00:00 之后安排景点。"
     "其他情况当天至少安排 2 个景点；若 block.names 少于 2 个，可从 search.poi 里选地理相邻的景点补充。"
@@ -1012,6 +1015,7 @@ def _pick_restaurant(
     district: str,
     used: set[str],
     center: list[float] | None,
+    budget_tier: str | None = None,
 ) -> dict | None:
     candidates = [
         f for f in food
@@ -1027,7 +1031,16 @@ def _pick_restaurant(
         ]
         if district_match:
             candidates = district_match
-    if center:
+    if budget_tier in ("豪华", "舒适", "经济"):
+        def price_score(f: dict) -> float:
+            price = f.get("price_per_person")
+            return float(price) if price is not None else 0.0
+
+        if budget_tier == "经济":
+            candidates.sort(key=lambda f: (price_score(f), f.get("rating") is None, -(f.get("rating") or 0)))
+        else:
+            candidates.sort(key=lambda f: (-price_score(f), f.get("rating") is None, -(f.get("rating") or 0)))
+    elif center:
         def distance(f: dict) -> float:
             lng = f.get("longitude")
             lat = f.get("latitude")
@@ -1048,6 +1061,50 @@ def _pick_restaurant(
     else:
         candidates.sort(key=lambda f: (f.get("rating") is None, -(f.get("rating") or 0)))
     return candidates[0]
+
+
+def _pick_restaurants(
+    food: list[dict],
+    district: str,
+    used: set[str],
+    center: list[float] | None,
+    budget_tier: str | None,
+    limit: int = 3,
+) -> list[dict]:
+    candidates = [
+        f for f in food
+        if (f.get("name") or "").strip() and (f.get("name") or "").strip() not in used
+    ]
+    if district:
+        district_match = [
+            f for f in candidates
+            if district in str(f.get("business_area") or "")
+            or district in str(f.get("address") or "")
+        ]
+        if district_match:
+            candidates = district_match
+
+    def distance(f: dict) -> float:
+        if not center:
+            return 0.0
+        lng = f.get("longitude")
+        lat = f.get("latitude")
+        if lng is None or lat is None:
+            return float("inf")
+        return _km(f"{center[0]},{center[1]}", f"{float(lng)},{float(lat)}")
+
+    if budget_tier == "经济":
+        candidates = [f for f in candidates if 0 < float(f.get("price_per_person") or 0) <= 200] or candidates
+        candidates.sort(key=lambda f: (distance(f), float(f.get("price_per_person") or 0)))
+    elif budget_tier == "舒适":
+        candidates = [f for f in candidates if 200 < float(f.get("price_per_person") or 0) <= 400] or candidates
+        candidates.sort(key=lambda f: (distance(f), abs(float(f.get("price_per_person") or 0) - 400)))
+    elif budget_tier == "豪华":
+        candidates = [f for f in candidates if 400 < float(f.get("price_per_person") or 0) <= 800] or candidates
+        candidates.sort(key=lambda f: (distance(f), abs(float(f.get("price_per_person") or 0) - 800)))
+    else:
+        candidates.sort(key=lambda f: (distance(f), f.get("rating") is None, -(f.get("rating") or 0)))
+    return candidates[:limit]
 
 
 def _to_minutes(value: str) -> int | None:
@@ -1102,11 +1159,18 @@ def _add_food_to_day(
     center: list[float] | None,
     poi_map: dict[str, list[float]],
     used_restaurants: set[str],
+    budget_tier: str | None = None,
 ) -> dict:
     """第二阶段：给已生成的一天行程补午餐/晚餐，并跨天去重。"""
     schedule = list(day.get("schedule") or [])
     if any((s.get("type") or "") in ("美食", "餐饮") for s in schedule):
         return day
+
+    existing_meal_notes = {
+        (s.get("note") or "")
+        for s in schedule
+        if (s.get("type") or "") in ("美食", "餐饮")
+    }
 
     # 当天有长时段大景点时，不插入外部餐厅
     for item in schedule:
@@ -1123,13 +1187,15 @@ def _add_food_to_day(
                 return day
 
     for meal in ("午餐", "晚餐"):
+        if any(meal in note for note in existing_meal_notes):
+            continue
         time = _slot_time(schedule, meal)
-        anchor = center
         spots = [
             s for s in schedule
             if (s.get("type") or "") == "景点"
             and poi_map.get((s.get("name") or "").strip())
         ]
+        anchor = center
         if meal == "午餐":
             before_noon = [
                 s for s in spots
@@ -1139,26 +1205,60 @@ def _add_food_to_day(
                 anchor = poi_map[(before_noon[-1].get("name") or "").strip()]
         elif spots:
             anchor = poi_map[(spots[-1].get("name") or "").strip()]
-        restaurant = _pick_restaurant(food, district, used_restaurants, anchor)
-        if restaurant:
+        restaurants = _pick_restaurants(
+            food, district, used_restaurants, anchor, budget_tier, limit=3
+        )
+        if restaurants:
+            options = []
+            for r in restaurants:
+                options.append(
+                    {
+                        "name": r.get("name"),
+                        "price": r.get("price_per_person") or 0,
+                        "link": r.get("poi_detail_url") or r.get("map_url") or r.get("url") or "",
+                        "lng": r.get("longitude"),
+                        "lat": r.get("latitude"),
+                    }
+                )
+                used_restaurants.add(str(r.get("name") or ""))
             schedule.append(
                 {
                     "time": time,
                     "type": "美食",
-                    "name": restaurant.get("name"),
-                    "note": f"{meal}推荐",
+                    "name": f"{meal}（{len(options)}家可选）",
+                    "note": "",
+                    "options": options,
                 }
             )
-            used_restaurants.add(str(restaurant.get("name") or ""))
     schedule.sort(key=lambda s: (s.get("time") or "99:99"))
     day["schedule"] = schedule
     return day
+
+
+def _poi_coord_map(search_result: dict) -> dict[str, list[float]]:
+    destination = search_result.get("destination") or ""
+    poi_map: dict[str, list[float]] = {}
+    for poi in search_result.get("poi") or []:
+        name = (poi.get("name") or "").strip()
+        if not name:
+            continue
+        lng = poi.get("longitude")
+        lat = poi.get("latitude")
+        if lng is None or lat is None:
+            hit = geocode(name, destination)
+            loc = (hit or {}).get("location") or ""
+            if loc:
+                lng, lat = loc.split(",")
+        if lng is not None and lat is not None:
+            poi_map[name] = [float(lng), float(lat)]
+    return poi_map
 
 
 def _pick_hotel(
     hotels: list[dict],
     center: list[float] | None,
     used_hotels: set[str],
+    budget_tier: str | None = None,
 ) -> dict | None:
     candidates = [
         h for h in hotels
@@ -1166,7 +1266,16 @@ def _pick_hotel(
     ]
     if not candidates:
         return None
-    if center:
+    if budget_tier in ("豪华", "舒适", "经济"):
+        def price_score(h: dict) -> float:
+            price = h.get("price")
+            return float(price) if price is not None else 0.0
+
+        if budget_tier == "经济":
+            candidates.sort(key=price_score)
+        else:
+            candidates.sort(key=lambda h: -price_score(h))
+    elif center:
         def distance(h: dict) -> float:
             lng = h.get("longitude")
             lat = h.get("latitude")
@@ -1186,6 +1295,7 @@ def _add_hotel_to_day(
     center: list[float] | None,
     poi_map: dict[str, list[float]],
     used_hotels: set[str],
+    budget_tier: str | None = None,
 ) -> dict:
     if (day.get("hotel") or "").strip():
         return day
@@ -1195,11 +1305,29 @@ def _add_hotel_to_day(
         and poi_map.get((s.get("name") or "").strip())
     ]
     anchor = poi_map[(spots[-1].get("name") or "").strip()] if spots else center
-    hotel = _pick_hotel(hotels, anchor, used_hotels)
+    hotel = _pick_hotel(hotels, anchor, used_hotels, budget_tier)
     if hotel:
         day["hotel"] = hotel.get("name") or ""
         used_hotels.add(str(hotel.get("name") or ""))
     return day
+
+
+def _ensure_hotels(plan: dict, search_result: dict) -> dict:
+    """全局修改后给每天补酒店。"""
+    poi_map = _poi_coord_map(search_result)
+    hotels = search_result.get("hotels") or []
+    used: set[str] = set()
+    days = plan.get("days") or 0
+    for p in plan.get("plans") or []:
+        for it in p.get("itinerary") or []:
+            if (it.get("hotel") or "").strip():
+                continue
+            if it.get("day") == days:
+                it["hotel"] = "当晚返程，无住宿"
+            else:
+                _add_hotel_to_day(it, hotels, None, poi_map, used)
+    plan["blocks"] = blockify(plan)
+    return plan
 
 
 def _summarize_trips(client: OpenAI, recent_trips: list) -> str:
@@ -1315,14 +1443,10 @@ def build_plan(
         a.get("day"): a.get("center")
         for a in day_assignments
     }
-    poi_map: dict[str, list[float]] = {}
-    for poi in search_result.get("poi") or []:
-        name = (poi.get("name") or "").strip()
-        lng = poi.get("longitude")
-        lat = poi.get("latitude")
-        if name and lng is not None and lat is not None:
-            poi_map[name] = [float(lng), float(lat)]
+    poi_map = _poi_coord_map(search_result)
     used_restaurants: set[str] = set()
+    budget_tiers = (basic or {}).get("budget_tiers") or []
+    budget_tier = budget_tiers[0] if isinstance(budget_tiers, list) and budget_tiers else None
     for day_plan in day_plans:
         _add_food_to_day(
             day_plan,
@@ -1331,6 +1455,7 @@ def build_plan(
             center_by_day.get(day_plan.get("day")),
             poi_map,
             used_restaurants,
+            budget_tier,
         )
     hotels = search_result.get("hotels") or []
     used_hotels: set[str] = set()
@@ -1346,6 +1471,7 @@ def build_plan(
                 center_by_day.get(day_num),
                 poi_map,
                 used_hotels,
+                budget_tier,
             )
 
     result = meta
@@ -1625,6 +1751,7 @@ def blockify(plan: dict) -> list[dict]:
                         "name": name,
                         "note": note,
                         "link": item.get("link") or "",
+                        "options": item.get("options") or [],
                     }
                 )
             for meal in it.get("meals") or []:
@@ -1660,6 +1787,68 @@ def blockify(plan: dict) -> list[dict]:
                     }
                 )
     return blocks
+
+
+def _attach_prices(
+    plan: dict,
+    search_result: dict,
+    total_budget: str | float | None = None,
+) -> dict:
+    """给 blocks 补消费金额。"""
+    price_by_name: dict[str, float] = {}
+    for key in ("hotels", "poi", "food", "events", "promotions"):
+        items = search_result.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            name = (item.get("name") or item.get("title") or "").strip()
+            price = item.get("price") or item.get("price_per_person") or item.get("ticketPrice") or 0
+            try:
+                price = float(price)
+            except (TypeError, ValueError):
+                price = 0.0
+            if name and name not in price_by_name:
+                price_by_name[name] = price
+    for key in ("flights", "trains"):
+        items = search_result.get(key)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if key == "flights":
+                name = f"{item.get('airline') or ''}{item.get('flight_no') or ''}"
+            else:
+                name = f"{item.get('transport') or ''}{item.get('train_no') or ''}"
+            try:
+                price = float(item.get("price") or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+            if name and name not in price_by_name:
+                price_by_name[name] = price
+
+    for block in plan.get("blocks") or []:
+        name = (block.get("name") or "").strip()
+        price = price_by_name.get(name)
+        if price is None and name:
+            best = None
+            best_len = 0
+            for key, value in price_by_name.items():
+                if key and (name.startswith(key) or key.startswith(name)):
+                    if len(key) > best_len:
+                        best_len = len(key)
+                        best = value
+            price = best if best is not None else 0.0
+        block["price"] = price if price is not None else 0.0
+    total_cost = round(
+        sum(float(block.get("price") or 0) for block in plan.get("blocks") or []),
+        2,
+    )
+    plan["total_cost"] = total_cost
+    try:
+        budget = float(total_budget or 0)
+    except (TypeError, ValueError):
+        budget = 0.0
+    plan["budget_status"] = "over" if budget > 0 and total_cost > budget else "ok"
+    return plan
 
 
 def main() -> None:
@@ -1702,6 +1891,7 @@ def main() -> None:
             )
             if isinstance(result, dict) and "error" not in result:
                 result["blocks"] = blockify(result)
+                result = _ensure_hotels(result, data.get("search") or {})
         # 局部修改模式：输入含 blocks + instruction，只改选中块
         elif isinstance(data, dict) and data.get("blocks") is not None and data.get("instruction"):
             result = modify_blocks(
@@ -1766,6 +1956,9 @@ def main() -> None:
             )
             if isinstance(result, dict) and "error" not in result:
                 result["blocks"] = blockify(result)
+                result = _attach_prices(
+                    result, search_result, (basic or {}).get("total_budget")
+                )
                 attach_routes(result, result.get("destination") or "")
     except Exception as exc:  # noqa: BLE001
         result = {"error": str(exc)}

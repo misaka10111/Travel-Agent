@@ -95,6 +95,16 @@ def parse_nl(query: str) -> dict:
 
 
 def main() -> None:
+    if "--web" in sys.argv:
+        idx = sys.argv.index("--web")
+        query = " ".join(sys.argv[idx + 1:]).strip()
+        try:
+            items = tools._fetch_web_search(query, 5)
+            print(json.dumps({"results": items}, ensure_ascii=False, indent=2))
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"error": str(exc)}, ensure_ascii=False))
+        return
+
     if "--poi-keyword" in sys.argv:
         args = sys.argv
         keyword = args[args.index("--poi-keyword") + 1]

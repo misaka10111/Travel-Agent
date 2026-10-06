@@ -24,6 +24,8 @@ type BaseOption = {
   description: string;
   url?: string;
   image?: string;
+  lng?: number;
+  lat?: number;
 };
 
 type FlightOption = BaseOption & {
@@ -83,6 +85,7 @@ const FIXED_QUESTIONS = [
   { key: 'origin', field: 'origin', question: '您从哪里出发？', options: [], kind: 'text' },
   { key: 'travelers', field: 'travelers', question: '出行人数是？', options: ['1人', '2人', '3人', '4人', '5人以上'], kind: 'options' },
   { key: 'budget_tiers', field: 'budget_tiers', question: '预算档位是？', options: ['经济', '舒适', '豪华', '不设限'], kind: 'options' },
+  { key: 'total_budget', field: 'total_budget', question: '本次旅行总预算大概多少元？', options: [], kind: 'text' },
   { key: 'purposes', field: 'purposes', question: '这次旅行的主要目的是？', options: ['自然风光', '深度文化', '美食之旅', '亲子', '购物', '摄影', '冒险户外'], kind: 'options' },
 ] as const;
 
@@ -95,6 +98,8 @@ type RoutePlan = {
   destination: string;
   start_date: string;
   end_date: string;
+  total_cost?: number;
+  budget_status?: string;
   styles: string[];
   summaries: Record<string, string>;
   blocks: RouteBlock[];
@@ -183,6 +188,8 @@ function mapHotels(items: unknown): HotelOption[] {
     description: `${h?.name ?? ''}，${h?.star ?? ''}，${h?.location ?? ''}`,
     url: h?.url ?? '',
     image: h?.image ?? '',
+    lng: h?.longitude != null ? Number(h.longitude) : undefined,
+    lat: h?.latitude != null ? Number(h.latitude) : undefined,
   };
   });
 }
@@ -204,6 +211,8 @@ function mapSpots(items: unknown): SpotOption[] {
     description: p?.description ?? '',
     url: p?.url ?? '',
     image: p?.image ?? '',
+    lng: p?.longitude != null ? Number(p.longitude) : undefined,
+    lat: p?.latitude != null ? Number(p.latitude) : undefined,
   }));
 }
 
@@ -237,6 +246,8 @@ function mapFood(items: unknown): FoodOption[] {
     detailUrl: f?.poi_detail_url ?? f?.url ?? '',
     mapUrl: f?.map_url ?? '',
     url: f?.poi_detail_url ?? f?.map_url ?? f?.url ?? '',
+    lng: f?.longitude != null ? Number(f.longitude) : undefined,
+    lat: f?.latitude != null ? Number(f.latitude) : undefined,
     scheduleAt: '',
     scheduleLabel: '',
     location: f?.business_area ?? f?.address ?? '',
@@ -247,6 +258,40 @@ function mapFood(items: unknown): FoodOption[] {
 
 const formatPrice = (price: number) => `¥ ${price.toLocaleString()}`;
 const buildId = () => `${Date.now()}-${Math.random()}`;
+
+function timeToMinutes(value: string) {
+  const match = value.match(/(\d{1,2}):(\d{2})/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function rangeToMinutes(value: string): [number, number] | null {
+  const match = value.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+  if (!match) {
+    const start = timeToMinutes(value);
+    return start == null ? null : [start, start + 60];
+  }
+  return [
+    Number(match[1]) * 60 + Number(match[2]),
+    Number(match[3]) * 60 + Number(match[4]),
+  ];
+}
+
+function minutesToRange(start: number) {
+  const h = Math.floor(start / 60);
+  const m = start % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}-${String(
+    Math.floor((start + 60) / 60),
+  ).padStart(2, '0')}:${String((start + 60) % 60).padStart(2, '0')}`;
+}
+
+function coordDistance(
+  a: { lng: number; lat: number },
+  b: { lng: number; lat: number },
+) {
+  const dx = (b.lng - a.lng) * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));
+  const dy = b.lat - a.lat;
+  return Math.hypot(dx, dy);
+}
 
 function getOptionPrice(item: OptionItem) {
   if (item.type === 'flight') return item.price;
@@ -342,6 +387,7 @@ export function AgentPage() {
   const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [weatherData, setWeatherData] = useState<{ days?: Array<Record<string, unknown>> } | null>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
+  const [selectedFoodPoints, setSelectedFoodPoints] = useState<RouteBlock[]>([]);
   const [planning, setPlanning] = useState(false);
   const [mapPosition, setMapPosition] = useState(() => {
     if (typeof window === 'undefined') return { x: 760, y: 520 };
@@ -502,6 +548,8 @@ export function AgentPage() {
           plans?: Array<{ style?: string; summary?: string }>;
           blocks?: RouteBlock[];
           legs?: RouteLeg[];
+          total_cost?: number;
+          budget_status?: string;
           error?: string;
         };
         if (plan.error) {
@@ -524,6 +572,8 @@ export function AgentPage() {
           summaries,
           blocks,
           legs,
+          total_cost: plan.total_cost,
+          budget_status: plan.budget_status,
         });
         setActiveStyle(styles[0] ?? '');
         setActiveDay('all');
@@ -593,8 +643,7 @@ export function AgentPage() {
       } catch {
         basic = null;
       }
-      const selected = routePlan.blocks.filter((block) => selectedBlocks.has(block.id));
-      const blocks = selected.length > 0 ? selected : routePlan.blocks;
+      const blocks = routePlan.blocks;
       const raw = await api.plan({
         destination: routePlan.destination,
         start_date: routePlan.start_date,
@@ -645,6 +694,19 @@ export function AgentPage() {
         has_plan: !!routePlan,
       });
       const action = String(result.action ?? '');
+      if (action === 'explain') {
+        const answer = String(result.answer ?? '');
+        const links = Array.isArray(result.links)
+          ? (result.links as Array<{ title?: string; url?: string }>)
+          : [];
+        const linkText = links
+          .map((link) => `${link.title ?? ''}：${link.url ?? ''}`)
+          .join('\n');
+        addAssistantMessage(
+          `${answer}${linkText ? `\n\n相关链接：\n${linkText}` : ''}`,
+        );
+        return;
+      }
       if (action === 'ask') {
         setQuestion({
           field: String(result.field ?? ''),
@@ -805,6 +867,7 @@ export function AgentPage() {
         origin: data.origin,
         travelers: data.travelers,
         budget_tiers: data.budget_tiers,
+        total_budget: data.total_budget,
         purposes: data.purposes,
       },
     });
@@ -1247,7 +1310,43 @@ export function AgentPage() {
         : 1;
     const day = Math.min(Math.max(requestedDay, 1), maxDay);
     const timeMatch = content.match(/(\d{1,2}:\d{2})/);
-    const time = timeMatch ? timeMatch[1] : '09:00-11:00';
+    const sameDayBlocks = routePlan.blocks.filter(
+      (block) => Number(block.day) === day,
+    );
+    const existingRanges = sameDayBlocks
+      .map((block) => rangeToMinutes(block.time || ''))
+      .filter((range): range is [number, number] => range != null);
+    const preferredStart = timeToMinutes(timeMatch ? timeMatch[1] : '09:00') ?? 9 * 60;
+    let start = preferredStart;
+    if (!timeMatch && pendingAdd.lng != null && pendingAdd.lat != null) {
+      const located = sameDayBlocks.filter(
+        (block) => block.lng != null && block.lat != null,
+      );
+      if (located.length > 0) {
+        const nearest = located.reduce((best, block) =>
+          coordDistance(
+            { lng: pendingAdd.lng!, lat: pendingAdd.lat! },
+            { lng: block.lng!, lat: block.lat! },
+          ) <
+          coordDistance(
+            { lng: pendingAdd.lng!, lat: pendingAdd.lat! },
+            { lng: best.lng!, lat: best.lat! },
+          )
+            ? block
+            : best,
+        );
+        const end = rangeToMinutes(nearest.time || '')?.[1];
+        if (end != null) start = end + 15;
+      }
+    }
+    const overlaps = (candidate: [number, number]) =>
+      existingRanges.some(
+        (range) => candidate[0] < range[1] && candidate[1] > range[0],
+      );
+    while (overlaps([start, start + 60]) && start < 23 * 60) {
+      start += 30;
+    }
+    const time = minutesToRange(start);
 
     const sameDayBlock = routePlan.blocks.find((block) => Number(block.day) === day);
     const date = sameDayBlock?.date ?? routePlan.start_date ?? '';
@@ -1263,9 +1362,24 @@ export function AgentPage() {
       time,
       name: pendingAdd.title,
       note: pendingAdd.description ?? '',
+      lng: pendingAdd.lng,
+      lat: pendingAdd.lat,
     };
     setRoutePlan((prev) =>
-      prev ? { ...prev, blocks: [...prev.blocks, block], legs: [] } : prev,
+      prev
+        ? {
+            ...prev,
+            blocks: [...prev.blocks, block].sort(
+              (a, b) =>
+                Number(a.day) - Number(b.day) ||
+                (a.time || '').localeCompare(b.time || ''),
+            ),
+            legs: [],
+          }
+        : prev,
+    );
+    setPlanItemIds((prev) =>
+      prev.includes(pendingAdd.id) ? prev : [...prev, pendingAdd.id],
     );
     setPendingAdd(null);
     addAssistantMessage(
@@ -1282,6 +1396,29 @@ export function AgentPage() {
         next.add(blockId);
       }
       return next;
+    });
+  }
+
+  function toggleFoodOption(block: RouteBlock, option: NonNullable<RouteBlock['options']>[number]) {
+    setSelectedFoodPoints((prev) => {
+      const exists = prev.some((point) => point.id === `food-${option.name}`);
+      if (exists) {
+        return prev.filter((point) => point.id !== `food-${option.name}`);
+      }
+      return [
+        ...prev,
+        {
+          id: `food-${option.name}`,
+          plan_style: block.plan_style,
+          day: block.day,
+          date: block.date,
+          type: '美食',
+          time: block.time,
+          name: option.name,
+          lng: option.lng,
+          lat: option.lat,
+        },
+      ];
     });
   }
 
@@ -1633,6 +1770,16 @@ export function AgentPage() {
                 <strong>{expandedStyle}</strong>
                 <p>{routePlan.summaries[expandedStyle] ?? ''}</p>
               </div>
+              <div className="ta-plan-detail-total">
+                总消费 ¥{' '}
+                {routePlan.blocks
+                  .filter((block) => block.plan_style === expandedStyle)
+                  .reduce((sum, block) => sum + (block.price ?? 0), 0)
+                  .toLocaleString()}
+              </div>
+              {routePlan.budget_status === 'over' && (
+                <div className="ta-plan-budget-warning">⚠ 已超出总预算</div>
+              )}
               {confirmedStyle === expandedStyle && (
                 <div className="ta-plan-confirmed">已确认该计划</div>
               )}
@@ -1683,8 +1830,46 @@ export function AgentPage() {
                               <span>{block.type}</span>
                             </div>
                             <div className="ta-plan-block-body">
-                              <strong>{block.name}</strong>
+                              {block.link ? (
+                                <a
+                                  className="ta-plan-block-link"
+                                  href={block.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {block.name}
+                                </a>
+                              ) : (
+                                <strong>{block.name}</strong>
+                              )}
                               {block.note && <p>{block.note}</p>}
+                              {block.price != null && (
+                                <span className="ta-plan-block-price">
+                                  ¥ {block.price.toLocaleString()}
+                                </span>
+                              )}
+                              {block.options && block.options.length > 0 && (
+                                <div className="ta-plan-block-options">
+                                  {block.options.map((option) => {
+                                    const active = selectedFoodPoints.some(
+                                      (point) => point.id === `food-${option.name}`,
+                                    );
+                                    return (
+                                      <button
+                                        key={option.name}
+                                        type="button"
+                                        className={`ta-food-option${active ? ' active' : ''}`}
+                                        onClick={() => toggleFoodOption(block, option)}
+                                      >
+                                        {option.name}
+                                        {option.price != null && option.price > 0
+                                          ? ` · ¥${option.price}`
+                                          : ''}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -2105,7 +2290,11 @@ export function AgentPage() {
                 </button>
               ))}
             </div>
-            <TripMap blocks={styleBlocks} legs={styleLegs} day={activeDay} />
+            <TripMap
+              blocks={[...styleBlocks, ...selectedFoodPoints]}
+              legs={styleLegs}
+              day={activeDay}
+            />
           </>
         ) : (
           <div className="ta-map-placeholder ta-floating-map-placeholder">
