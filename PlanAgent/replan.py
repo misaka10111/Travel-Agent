@@ -1,0 +1,401 @@
+"""Replace identified slots, then repair their dependent timeline using real routes.
+
+The block list is authoritative for this operation. Model output may only select
+catalog candidates; coordinates, prices, IDs and timing are controlled here.
+Callbacks keep the constraint checks testable without paid/network services.
+"""
+
+from copy import deepcopy
+import math
+import re
+
+
+class ReplanError(ValueError):
+    pass
+
+
+def is_stop(block):
+    return block.get("type") != "交通" and not (block.get("type") == "酒店" and "无住宿" in block.get("name", ""))
+
+
+def minutes(value):
+    match = re.search(r"(?<!\d)([0-2]?\d):([0-5]\d)", str(value or ""))
+    if not match or int(match[1]) > 23:
+        return None
+    return int(match[1]) * 60 + int(match[2])
+
+
+def span(block):
+    clocks = re.findall(r"(?<!\d)([0-2]?\d:[0-5]\d)", str(block.get("time") or ""))
+    start = minutes(clocks[0]) if clocks else None
+    end = minutes(clocks[1]) if len(clocks) > 1 else None
+    return start, end
+
+
+def clock(value):
+    return f"{value // 60:02d}:{value % 60:02d}"
+
+
+def amount(value):
+    match = re.search(r"\d+(?:\.\d+)?", str(value if value is not None else ""))
+    return float(match[0]) if match else None
+
+
+def travel_rows(search):
+    rows = []
+    for source in ("flights", "trains"):
+        items = search.get(source) or []
+        if isinstance(items, dict):
+            items = [*items.get("outbound", []), *items.get("inbound", [])]
+        for row in items:
+            rows.append({**row, "name": f"{row.get('airline') or row.get('transport') or ''}{row.get('flight_no') or row.get('train_no') or ''}", "_travel": True})
+    return rows
+
+
+def catalog(search, target):
+    kind = target.get("type")
+    key = {"景点": "poi", "美食": "food", "酒店": "hotels", "活动": "events"}.get(kind)
+    items = (search.get(key) or []) if key else []
+    if kind == "交通":
+        items = []
+        for row in travel_rows(search):
+            dep = str(row.get("dep_time") or "")
+            arr = str(row.get("arr_time") or "")
+            # Cross-midnight travel needs a multi-day timeline; do not guess.
+            dep_minutes = minutes(dep)
+            arr_minutes = minutes(arr)
+            if dep_minutes is None or arr_minutes is None or arr_minutes <= dep_minutes:
+                continue
+            if target.get("date") and dep[:10] != target["date"]:
+                continue
+            items.append(row)
+    if not isinstance(items, list):
+        return []
+    result = []
+    seen = set()
+    for row in items:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or row.get("title") or "").strip()
+        if not name or name == target.get("name") or name in seen:
+            continue
+        event_dates = re.findall(r"\d{4}-\d{2}-\d{2}", str(row.get("date") or row.get("content") or ""))
+        if kind == "活动" and event_dates and not (event_dates[0] <= target.get("date", "") <= event_dates[-1]):
+            continue
+        seen.add(name)
+        result.append({**row, "name": name, "candidate_id": f"c{len(result)}"})
+    return result
+
+
+def replacement(block, candidate):
+    new = deepcopy(block)
+    for field in ("lng", "lat", "poi_id", "_geo", "options", "price", "link", "note", "opening_hours"):
+        new.pop(field, None)
+    new["name"] = candidate["name"]
+    new["link"] = candidate.get("url") or candidate.get("link") or candidate.get("poi_detail_url") or candidate.get("detail_url") or candidate.get("map_url") or ""
+    new["note"] = "根据你的要求重新选择"
+    price = next((candidate[k] for k in ("price", "price_per_person", "ticketPrice") if candidate.get(k) is not None and candidate.get(k) != ""), None)
+    new["price"] = 0.0 if candidate.get("free") is True else amount(price)
+    new["opening_hours"] = candidate.get("opening_hours") or candidate.get("open_hours") or candidate.get("openHours") or ""
+    if candidate.get("_travel"):
+        new["time"] = f"{clock(minutes(candidate['dep_time']))}-{clock(minutes(candidate['arr_time']))}"
+        new["note"] = f"{candidate.get('dep_station', '')} → {candidate.get('arr_station', '')}"
+        new["fixed_time"] = True
+        old_dep, _ = span(block)
+        # Replacing the outbound leg shifts later activities from arrival time;
+        # return travel remains a deadline for preceding activities.
+        new["direction"] = candidate.get("direction") or ("去" if old_dep is not None and old_dep < 12 * 60 else "返")
+        new["dep_station"] = candidate.get("dep_station")
+        new["arr_station"] = candidate.get("arr_station")
+    if block.get("type") == "活动" and minutes(candidate.get("start_time")) is not None:
+        start = minutes(candidate["start_time"])
+        _, old_end = span(block)
+        old_start, _ = span(block)
+        start = minutes(candidate.get("start_time")) or 0
+        end = minutes(candidate.get("end_time")) or start + ((old_end - old_start) if old_start is not None and old_end is not None else 120)
+        new["time"] = f"{clock(start)}-{clock(end)}"
+        new["fixed_time"] = True
+    return new
+
+
+def route_stops(blocks, style, search):
+    """Include airport/station arrival or departure as the real route boundary."""
+    stops = []
+    for block in blocks:
+        if block.get("plan_style") != style:
+            continue
+        if block.get("type") != "交通":
+            if is_stop(block):
+                stops.append(block)
+            continue
+        row = next((r for r in travel_rows(search) if r["name"] == block["name"]), {})
+        start, _ = span(block)
+        outbound = (block.get("direction") or row.get("direction")) == "去" or (not block.get("direction") and not row.get("direction") and start is not None and start < 12 * 60)
+        name = (block.get("arr_station") or row.get("arr_station")) if outbound else (block.get("dep_station") or row.get("dep_station"))
+        if not name:
+            raise ReplanError("出行项目缺少机场或车站信息，无法检查接续交通。")
+        stops.append({**block, "name": name, "type": "接续交通", "note": "机场或车站接续点"})
+    return stops
+
+
+def expected_pairs(blocks, style):
+    groups = {}
+    for block in blocks:
+        if block.get("plan_style") == style and is_stop(block):
+            if block.get("note") == "餐饮推荐" or not block.get("name"):
+                raise ReplanError("请先确定具体餐厅，再重新规划相关行程。")
+            groups.setdefault(block["day"], []).append(block)
+    pairs = []
+    previous_hotel = None
+    for day, stops in sorted(groups.items()):
+        sequence = ([previous_hotel] if previous_hotel else []) + stops
+        for left, right in zip(sequence, sequence[1:]):
+            if left.get("name") != right.get("name") and (left.get("lng"), left.get("lat")) != (right.get("lng"), right.get("lat")):
+                pairs.append((day, left["id"], right["id"]))
+        hotels = [b for b in stops if b.get("type") == "酒店"]
+        if hotels:
+            previous_hotel = hotels[-1]
+    return pairs
+
+
+def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_ids, directions=None):
+    route_minutes = {(leg["day"], leg["from"], leg["to"]): math.ceil(float(leg["duration_s"]) / 60) + 10 for leg in plan.get("legs", []) if leg.get("plan_style") == style}
+    old_by_id = {b["id"]: b for b in old_blocks}
+    all_days = sorted({b["day"] for b in plan["blocks"] if b.get("plan_style") == style})
+    previous_hotel = None
+    for day in all_days:
+        rows = [b for b in plan["blocks"] if b.get("plan_style") == style and b["day"] == day]
+        cursor = None
+        previous = previous_hotel
+        may_shift = day in affected_days and not any(b["id"] in target_ids for b in rows)
+        for block in rows:
+            if day not in affected_days or (block.get("type") == "酒店" and not is_stop(block)):
+                continue
+            start, end = span(block)
+            original = old_by_id[block["id"]]
+            if block.get("type") == "交通":
+                if block["id"] in target_ids:
+                    may_shift = True
+                if start is None or end is None:
+                    raise ReplanError("出行项目缺少明确的出发与到达时间，无法检查后续安排。")
+                transfer = route_minutes.get((day, previous["id"], block["id"]), 0) if previous else 0
+                if cursor is not None and start < cursor + transfer + 60:
+                    raise ReplanError("调整后赶不上固定出行时间（需至少预留一小时），请换一个候选或减少当天活动。")
+                direction = block.get("direction") or (directions or {}).get(block["id"])
+                if direction == "去" or (not direction and cursor is None and start < 12 * 60):
+                    cursor = end + 60
+                    previous = block
+                continue
+            if block["id"] in target_ids:
+                may_shift = True
+            if not may_shift:
+                cursor = end if end is not None else (start + 30 if start is not None else cursor)
+                previous = block
+                continue
+            travel = route_minutes.get((day, previous["id"], block["id"]), 0) if previous else 0
+            if start is None:
+                if block.get("type") != "酒店":
+                    raise ReplanError(f"「{block['name']}」缺少明确时间，无法安全调整行程。")
+                start = max(cursor + travel if cursor is not None else 18 * 60, 14 * 60)
+                if not may_shift:
+                    previous = block
+                    continue
+            required = (cursor + travel) if cursor is not None else start
+            # Hotel departure on the following day has a known real route. Leave
+            # the planned first start unchanged unless reaching it before 08:00
+            # departure would be required.
+            if cursor is None and previous_hotel and previous is previous_hotel:
+                required = max(required, 8 * 60 + travel)
+            new_start = max(start, required)
+            if block["id"] in locked_ids or block.get("fixed_time") or not may_shift:
+                if new_start > start:
+                    raise ReplanError(f"调整会影响固定项目「{block['name']}」，请换一个替代项。")
+            else:
+                duration = end - start if end is not None and end > start else {"景点": 120, "美食": 60, "酒店": 30, "活动": 120}.get(block.get("type"), 60)
+                end = new_start + duration
+                block["time"] = f"{clock(new_start)}-{clock(end)}"
+                start = new_start
+            cursor = end if end is not None else start + 30
+            if cursor > 23 * 60 + 30:
+                raise ReplanError("调整后的行程超过23:30，请选择更近的地点或减少当天活动。")
+            hours = str(block.get("opening_hours") or "")
+            bounds = re.findall(r"\d{1,2}:\d{2}", hours)
+            if len(bounds) == 2:
+                opens, closes = minutes(bounds[0]), minutes(bounds[1])
+                if opens is not None and closes is not None and closes > opens and (start < opens or cursor > closes):
+                    raise ReplanError(f"「{block['name']}」的营业时间与调整后的安排冲突。")
+            if block["id"] in locked_ids and block != original:
+                raise ReplanError("固定项目不能被更改。")
+            previous = block
+        hotels = [b for b in rows if b.get("type") == "酒店" and is_stop(b)]
+        if hotels:
+            previous_hotel = hotels[-1]
+
+
+def rebuild_itinerary(plan):
+    """Derive compatibility views from authoritative blocks without regenerating IDs."""
+    plans = []
+    for style in dict.fromkeys(b.get("plan_style", "") for b in plan["blocks"]):
+        previous = next((p for p in plan.get("plans", []) if p.get("style") == style), {})
+        itinerary = []
+        days = sorted({b["day"] for b in plan["blocks"] if b.get("plan_style", "") == style})
+        for day in days:
+            rows = [b for b in plan["blocks"] if b.get("plan_style", "") == style and b["day"] == day]
+            prior_day = next((d for d in previous.get("itinerary", []) if d.get("day") == day), {})
+            itinerary.append({"day": day, "date": rows[0].get("date", ""), "theme": prior_day.get("theme", ""), "hotel": next((b["name"] for b in rows if b.get("type") == "酒店"), ""), "schedule": deepcopy(rows)})
+        plans.append({**previous, "style": style, "summary": previous.get("summary") or plan.get("summaries", {}).get(style, ""), "itinerary": itinerary})
+    plan["plans"] = plans
+    return plan
+
+
+def replan_plan(payload, search, choose, attach_routes):
+    original = deepcopy(payload["plan"])
+    blocks = original.get("blocks") or []
+    ids = [b.get("id") for b in blocks]
+    if not blocks or any(not bid for bid in ids) or len(set(ids)) != len(ids):
+        raise ReplanError("方案缺少唯一活动ID，请重新生成方案。")
+    if payload["revision"] != original.get("revision", 0):
+        raise ReplanError("方案版本已变化，请重新选择活动。")
+    target_ids = set(payload["target_block_ids"])
+    locked_ids = set(payload.get("locked_block_ids") or [])
+    style = payload["plan_style"]
+    targets = [b for b in blocks if b["id"] in target_ids]
+    if not targets or len(targets) != len(target_ids) or any(b.get("plan_style") != style for b in targets):
+        raise ReplanError("选中活动不属于当前方案。")
+    if locked_ids - set(ids) or target_ids & locked_ids:
+        raise ReplanError("选中活动已锁定或锁定ID无效。")
+    if any(b.get("type") not in ("景点", "美食", "酒店", "活动", "交通") for b in targets):
+        raise ReplanError("该类别不能重新规划。")
+    if any(b.get("type") == "酒店" and not is_stop(b) for b in targets):
+        raise ReplanError("当晚无住宿，不存在可替换的酒店。")
+    rebuild_itinerary(original)
+    candidate_map = {b["id"]: catalog(search, b) for b in targets}
+    existing_names = {b["name"] for b in blocks if b.get("plan_style") == style and b["id"] not in target_ids}
+    for bid, candidates in candidate_map.items():
+        candidate_map[bid] = [c for c in candidates if c["name"] not in existing_names or next(b for b in targets if b["id"] == bid).get("type") == "酒店"]
+        if not candidate_map[bid]:
+            raise ReplanError("没有可用的同类替代项，请调整原因或重新搜索。")
+    affected_days = {b["day"] for b in targets}
+    feedback = ""
+    for attempt in range(3):
+        updated = deepcopy(original)
+        decisions = choose({"plan": original, "targets": targets, "candidates": candidate_map, "instruction": payload["instruction"], "profile": payload.get("profile"), "basic": payload.get("basic"), "feedback": feedback})
+        picks = decisions.get("replacements") or []
+        if not isinstance(picks, list) or {p.get("block_id") for p in picks} != target_ids or len(picks) != len(target_ids):
+            raise ReplanError("模型未返回完整的替换结果，原方案已保留。")
+        changed_ids = set(target_ids)
+        try:
+            for pick in picks:
+                candidate = next((c for c in candidate_map[pick["block_id"]] if c["candidate_id"] == pick.get("candidate_id")), None)
+                if candidate is None:
+                    raise ReplanError("替代项不在搜索结果中。")
+                old = next(b for b in blocks if b["id"] == pick["block_id"])
+                for i, block in enumerate(updated["blocks"]):
+                    same_stay = old["type"] == "酒店" and block.get("plan_style") == style and block.get("type") == "酒店" and block.get("name") == old.get("name")
+                    if block["id"] == old["id"] or same_stay:
+                        if block["id"] in locked_ids:
+                            raise ReplanError("同一住宿包含锁定项目，无法一起替换。")
+                        updated["blocks"][i] = replacement(block, candidate)
+                        changed_ids.add(block["id"])
+                        affected_days.add(block["day"])
+                        if old["type"] == "酒店":
+                            affected_days.add(block["day"] + 1)
+            names = [b["name"] for b in updated["blocks"] if b.get("plan_style") == style and b.get("type") == "景点"]
+            if len(names) != len(set(names)):
+                raise ReplanError("替换后出现重复景点。")
+            # Recompute just this style. Other styles keep every block and leg.
+            routed = {"blocks": deepcopy(route_stops(updated["blocks"], style, search))}
+            attach_routes(routed, original["destination"])
+            pairs = expected_pairs(routed["blocks"], style)
+            new_legs = routed.get("legs") or []
+            known = {(leg["day"], leg["from"], leg["to"]) for leg in new_legs if isinstance(leg.get("duration_s"), (int, float)) and math.isfinite(leg["duration_s"]) and leg["duration_s"] >= 0}
+            if set(pairs) - known:
+                raise ReplanError("未取得完整的真实交通路线，请检查高德配置后重试。")
+            for b in routed["blocks"]:
+                if is_stop(b) and (b.get("lng") is None or b.get("lat") is None):
+                    raise ReplanError(f"无法定位「{b['name']}」，原方案已保留。")
+            routed_by_id = {b["id"]: b for b in routed["blocks"]}
+            updated["blocks"] = [routed_by_id.get(b["id"], b) if b.get("plan_style") == style and b["day"] in affected_days and is_stop(b) else b for b in updated["blocks"]]
+            updated["legs"] = [leg for leg in original.get("legs", []) if leg.get("plan_style") != style or leg.get("day") not in affected_days] + [leg for leg in new_legs if leg.get("day") in affected_days]
+            directions = {b["id"]: next((r.get("direction") for r in travel_rows(search) if r["name"] == b["name"]), None) for b in updated["blocks"] if b.get("type") == "交通"}
+            repair_timeline(updated, blocks, style, affected_days, changed_ids, locked_ids, directions)
+            old_by_id = {b["id"]: b for b in blocks}
+            if any(b != old_by_id[b["id"]] for b in updated["blocks"] if b["id"] in locked_ids):
+                raise ReplanError("固定项目不能被更改。")
+            costs = {}
+            unknown_prices = []
+            for b in updated["blocks"]:
+                if b.get("price") is None:
+                    unknown_prices.append(b["id"])
+                costs[b.get("plan_style", "")] = round(costs.get(b.get("plan_style", ""), 0) + (amount(b.get("price")) or 0), 2)
+            budget = amount((payload.get("basic") or {}).get("total_budget"))
+            if budget and costs[style] > budget:
+                raise ReplanError("替换后超出总预算，请选择更便宜的替代项。")
+            if budget and any(bid in changed_ids for bid in unknown_prices):
+                raise ReplanError("替代项缺少价格，无法确认是否满足预算。")
+            updated["cost_by_style"] = costs
+            updated["total_cost"] = costs[style]
+            updated["unknown_price_block_ids"] = unknown_prices
+            updated["budget_status"] = "unknown" if unknown_prices else "ok"
+            updated["revision"] = payload["revision"] + 1
+            rebuild_itinerary(updated)
+            changed = [b["id"] for b in updated["blocks"] if b != old_by_id[b["id"]]]
+            changes = []
+            for b in updated["blocks"]:
+                old = old_by_id[b["id"]]
+                if old["name"] != b["name"]:
+                    changes.append(f"第{b['day']}天：{old['name']}替换为{b['name']}")
+                if old.get("time") != b.get("time"):
+                    changes.append(f"{b['name']}：时间调整为{b['time']}")
+            changes.append("已重新计算相关日期的地图路线和费用")
+            return {"revision": updated["revision"], "plan": updated, "changed_block_ids": changed, "affected_days": sorted(affected_days & {b["day"] for b in blocks if b.get("plan_style") == style}), "changes": changes}
+        except ReplanError as exc:
+            feedback = str(exc)
+            if attempt == 2:
+                raise ReplanError(f"{feedback} 原方案已保留。") from exc
+    raise ReplanError("无法重新规划，原方案已保留。")
+
+
+def main():
+    import json
+    import os
+    import sys
+    from pathlib import Path
+    from dotenv import load_dotenv
+    from openai import OpenAI
+    from route_map import attach_routes
+
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+    try:
+        data = json.load(sys.stdin)
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"), base_url=os.getenv("OPENAI_BASE_URL") or None)
+
+        def choose(context):
+            # Route geometry adds no useful candidate-selection context.
+            context = deepcopy(context)
+            context["plan"].pop("legs", None)
+            response = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+                messages=[
+                    {"role": "system", "content": (
+                        "根据用户原因、画像和完整行程，为每个选中活动选择同类替代项。"
+                        "必须遵守忌口、预算、活动日期和固定项目；只能选择对应candidates中的candidate_id。"
+                        "不要修改时间或编造地点。遇到feedback时换一个候选。返回JSON："
+                        '{"replacements":[{"block_id":"...","candidate_id":"..."}]}。'
+                    )},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=2000,
+                timeout=120,
+            )
+            return json.loads(response.choices[0].message.content or "{}")
+
+        output = replan_plan(data, data["search"], choose, attach_routes)
+    except Exception as exc:
+        output = {"error": str(exc)}
+    print(json.dumps(output, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
