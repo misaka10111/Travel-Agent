@@ -70,6 +70,27 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
+  replan: (payload: {
+    plan: unknown;
+    revision: number;
+    plan_style: string;
+    target_block_ids: string[];
+    instruction: string;
+    profile?: unknown;
+    basic?: unknown;
+    locked_block_ids?: string[];
+  }, signal?: AbortSignal) =>
+    request<{
+      revision: number;
+      plan: Record<string, unknown>;
+      changed_block_ids: string[];
+      affected_days: number[];
+      changes: string[];
+    }>('/plan/replan', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    }),
   chat: (messages: ChatMessage[]) =>
     request<ChatResponse>('/agent/chat', {
       method: 'POST',

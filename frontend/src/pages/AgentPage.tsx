@@ -95,6 +95,7 @@ function parsePrice(value: unknown): number {
 }
 
 type RoutePlan = {
+  revision?: number;
   destination: string;
   start_date: string;
   end_date: string;
@@ -389,6 +390,10 @@ export function AgentPage() {
   const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
   const [selectedFoodPoints, setSelectedFoodPoints] = useState<RouteBlock[]>([]);
   const [planning, setPlanning] = useState(false);
+  const [replanning, setReplanning] = useState(false);
+  const replanControllerRef = useRef<AbortController | null>(null);
+  const currentPlanRef = useRef(routePlan);
+  currentPlanRef.current = routePlan;
   const [mapPosition, setMapPosition] = useState(() => {
     if (typeof window === 'undefined') return { x: 760, y: 520 };
 
@@ -686,6 +691,79 @@ export function AgentPage() {
     }
   }
 
+  async function replanSelected(instruction: string) {
+    const snapshot = routePlan;
+    if (!snapshot || !expandedStyle || selectedBlocks.size === 0 || replanControllerRef.current) return;
+    const targets = snapshot.blocks.filter((b) => selectedBlocks.has(b.id) && b.plan_style === expandedStyle);
+    if (!targets.length) return;
+    const controller = new AbortController();
+    replanControllerRef.current = controller;
+    setReplanning(true);
+    setPlanning(true);
+    setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
+    addAssistantMessage(`正在重新规划「${targets.map((b) => b.name).join('、')}」，并检查后续安排…`);
+    try {
+      let profile: unknown = null;
+      let basic: unknown = null;
+      try { profile = JSON.parse(localStorage.getItem('userProfile') || 'null'); } catch { /* 使用空画像 */ }
+      try { basic = JSON.parse(localStorage.getItem('tripInfo') || 'null'); } catch { /* 使用空旅行信息 */ }
+      const result = await api.replan({
+        plan: snapshot,
+        revision: snapshot.revision ?? 0,
+        plan_style: expandedStyle,
+        target_block_ids: targets.map((b) => b.id),
+        instruction,
+        ...(profile ? { profile } : {}),
+        ...(basic ? { basic } : {}),
+        locked_block_ids: snapshot.blocks.filter((b) => (b as RouteBlock & { locked?: boolean }).locked).map((b) => b.id),
+      }, controller.signal);
+      if (controller.signal.aborted) return;
+      if (currentPlanRef.current !== snapshot) {
+        updateLastAssistantMessage('方案已变化，本次重新规划结果未应用，请重新选择活动。');
+        return;
+      }
+      const plan = result.plan;
+      if (!Array.isArray(plan.blocks) || !Array.isArray(plan.legs)
+        || !Array.isArray(result.changes) || !result.changes.every((change) => typeof change === 'string')
+        || result.revision !== (snapshot.revision ?? 0) + 1) {
+        throw new Error('返回的方案不完整，原方案已保留');
+      }
+      setRoutePlan({
+        ...snapshot,
+        blocks: plan.blocks as RouteBlock[],
+        legs: plan.legs as RouteLeg[],
+        revision: result.revision,
+        total_cost: typeof plan.total_cost === 'number' ? plan.total_cost : undefined,
+        budget_status: String(plan.budget_status ?? 'unknown'),
+      });
+      setSelectedBlocks(new Set());
+      setSelectedFoodPoints([]);
+      setDraft('');
+      setConfirmedStyle(null);
+      setPlanRating(null);
+      setPlanFeedback('');
+      setSaveState('idle');
+      setPendingConfirm(null);
+      updateLastAssistantMessage(`重新规划完成：\n${result.changes.join('\n')}`);
+      const userId = localStorage.getItem('currentUser');
+      if (userId) targets.forEach((b) => {
+        void api.reportBehavior(userId, 'remove', b.name, instruction).catch(() => {});
+        const next = (plan.blocks as RouteBlock[]).find((item) => item.id === b.id);
+        if (next) void api.reportBehavior(userId, 'add', next.name, instruction).catch(() => {});
+      });
+    } catch (error) {
+      updateLastAssistantMessage((error as Error).name === 'AbortError'
+        ? '已停止重新规划，原方案和输入原因已保留。'
+        : `重新规划失败：${error instanceof Error ? error.message : String(error)}。原方案和输入原因已保留。`);
+    } finally {
+      if (replanControllerRef.current === controller) {
+        replanControllerRef.current = null;
+        setReplanning(false);
+        setPlanning(false);
+      }
+    }
+  }
+
   async function resolveIntent(history: ChatMessage[], content: string) {
     setPlanning(true);
     try {
@@ -924,6 +1002,7 @@ export function AgentPage() {
   }
 
   function loadMockData() {
+    if (planning) return;
     const styles = ['轻享周末', '深度漫游'];
     const summaries: Record<string, string> = {
       轻享周末: '杭州 2 日轻松游，西湖、灵隐寺与河坊街，节奏舒缓、适合周末放松。',
@@ -1200,6 +1279,11 @@ export function AgentPage() {
     const content = draft.trim();
     if (!content || planning) return;
 
+    if (selectedBlocks.size > 0) {
+      void replanSelected(content);
+      return;
+    }
+
     if (pendingAdd) {
       setMessages((prev) => [
         ...prev,
@@ -1286,6 +1370,7 @@ export function AgentPage() {
   }
 
   function startAdd(item: OptionItem) {
+    if (planning) return;
     setPendingAdd(item);
     addAssistantMessage(
       `要把「${item.title}」加到第几天？请回复例如“第2天 14:00”`,
@@ -1388,6 +1473,13 @@ export function AgentPage() {
   }
 
   function toggleBlock(blockId: string) {
+    if (planning) return;
+    const block = routePlan?.blocks.find((b) => b.id === blockId);
+    if (!block || block.type === '天气') return;
+    setPendingAdd(null);
+    setPendingConfirm(null);
+    setQuestion(null);
+    setCollectStep(null);
     setSelectedBlocks((prev) => {
       const next = new Set(prev);
       if (next.has(blockId)) {
@@ -1434,7 +1526,7 @@ export function AgentPage() {
   }
 
   async function confirmPlan() {
-    if (!expandedStyle || !routePlan) return;
+    if (!expandedStyle || !routePlan || planning || selectedBlocks.size > 0) return;
     setConfirmedStyle(expandedStyle);
     const userId = localStorage.getItem('currentUser') || '';
     if (userId) {
@@ -1735,14 +1827,18 @@ export function AgentPage() {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="继续补充需求…"
+              placeholder={selectedBlocks.size > 0 ? '重新规划的原因...' : '继续补充需求…'}
+              disabled={replanning}
               rows={1}
             />
             {planning ? (
               <button
                 type="button"
                 className="ta-stop-button"
-                onClick={stopPlanStream}
+                onClick={() => {
+                  if (replanning) replanControllerRef.current?.abort();
+                  else stopPlanStream();
+                }}
               >
                 停止
               </button>
@@ -1753,7 +1849,7 @@ export function AgentPage() {
                 onClick={handleSend}
                 disabled={!draft.trim()}
               >
-                发送
+                {selectedBlocks.size > 0 ? '重新规划' : '发送'}
               </button>
             )}
           </div>
@@ -1763,7 +1859,7 @@ export function AgentPage() {
         <section className="ta-plan-card ta-plan-column">
           {expandedStyle && routePlan ? (
             <div className="ta-plan-detail">
-              <button type="button" className="ta-plan-detail-back" onClick={() => setExpandedStyle(null)}>
+              <button type="button" className="ta-plan-detail-back" disabled={planning} onClick={() => { setExpandedStyle(null); setSelectedBlocks(new Set()); }}>
                 ← 返回方案列表
               </button>
               <div className="ta-plan-detail-title">
@@ -1780,7 +1876,10 @@ export function AgentPage() {
               {routePlan.budget_status === 'over' && (
                 <div className="ta-plan-budget-warning">⚠ 已超出总预算</div>
               )}
-              {confirmedStyle === expandedStyle && (
+              {routePlan.budget_status === 'unknown' && (
+                <div className="ta-plan-budget-warning">部分项目价格未知，总消费仅包含已知金额。</div>
+              )}
+              {confirmedStyle === expandedStyle && selectedBlocks.size === 0 && (
                 <div className="ta-plan-confirmed">已确认该计划</div>
               )}
               <div className="ta-plan-detail-scroll">
@@ -1822,7 +1921,15 @@ export function AgentPage() {
                               selectedBlocks.has(block.id) ? ' selected' : ''
                             }`}
                             onClick={() => toggleBlock(block.id)}
+                            onKeyDown={(event) => {
+                              if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
+                                event.preventDefault();
+                                toggleBlock(block.id);
+                              }
+                            }}
                             role="button"
+                            aria-pressed={selectedBlocks.has(block.id)}
+                            aria-disabled={planning}
                             tabIndex={0}
                           >
                             <div className="ta-plan-block-left">
@@ -1859,7 +1966,8 @@ export function AgentPage() {
                                         key={option.name}
                                         type="button"
                                         className={`ta-food-option${active ? ' active' : ''}`}
-                                        onClick={() => toggleFoodOption(block, option)}
+                                        onClick={(event) => { event.stopPropagation(); toggleFoodOption(block, option); }}
+                                        disabled={planning}
                                       >
                                         {option.name}
                                         {option.price != null && option.price > 0
@@ -1877,7 +1985,7 @@ export function AgentPage() {
                     );
                   })}
               </div>
-              {confirmedStyle === expandedStyle ? (
+              {confirmedStyle === expandedStyle && selectedBlocks.size === 0 && !replanning ? (
                 <div className="ta-plan-rating">
                   <div className="ta-plan-rating-label">本次计划满意吗？</div>
                   <div className="ta-plan-rating-buttons">
@@ -1926,6 +2034,7 @@ export function AgentPage() {
                   type="button"
                   className="ta-plan-confirm-button"
                   onClick={confirmPlan}
+                  disabled={planning || selectedBlocks.size > 0}
                 >
                   确认计划
                 </button>
@@ -2003,7 +2112,8 @@ export function AgentPage() {
                       className={`ta-plan-style-card${
                         expandedStyle === style ? ' active' : ''
                       }`}
-                      onClick={() => setExpandedStyle(style)}
+                      disabled={planning}
+                      onClick={() => { setExpandedStyle(style); setActiveStyle(style); setSelectedBlocks(new Set()); }}
                     >
                       <span className="ta-plan-style-name">{style}</span>
                       <p className="ta-plan-style-summary">
