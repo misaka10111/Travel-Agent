@@ -214,6 +214,10 @@ def search_node(state: State) -> dict:
     }
     if basic.get("origin"):
         payload["origin"] = basic["origin"]
+    if basic.get("food_keyword"):
+        payload["food_keyword"] = basic["food_keyword"]
+    if state.get("profile"):
+        payload["profile"] = state.get("profile")
     # 把用户画像里的预算、人数、旅行目的传给搜索，用于餐饮搜索的菜系/预算过滤
     if basic:
         payload["basic"] = {

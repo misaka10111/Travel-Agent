@@ -11,6 +11,19 @@ export type RouteBlock = {
   time: string;
   name: string;
   note?: string;
+  link?: string;
+  price?: number;
+  options?: Array<{
+    name: string;
+    price?: number;
+    link?: string;
+    lng?: number;
+    lat?: number;
+    rating?: number;
+    cuisine?: string;
+    business_area?: string;
+    distance_km?: number | null;
+  }>;
   lng?: number;
   lat?: number;
 };

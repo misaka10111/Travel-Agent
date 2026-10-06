@@ -65,7 +65,7 @@ def validate_plan(
                 {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            reasoning_effort="low",
+            extra_body={"enable_thinking": False},  # 思考模式拖慢审核；与 reasoning_effort 组合会报 400
             max_tokens=12000,
             timeout=120,
         )

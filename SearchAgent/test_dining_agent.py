@@ -142,6 +142,27 @@ class TestRestaurantInfoLocal(unittest.TestCase):
         self.assertEqual(d["rating"], 4.5)
         self.assertEqual(d["price_per_person"], 188.0)
 
+    def test_search_restaurants_uses_nearby_endpoint_for_anchor(self):
+        import amap_service
+
+        poi = {
+            "id": "B0TEST",
+            "name": "附近餐厅",
+            "address": "西湖区测试路",
+            "location": "120.151,30.271",
+            "type": "餐饮服务;中餐厅;杭帮菜",
+            "business": {"rating": "4.7", "cost": "88", "business_area": "西湖"},
+        }
+        with patch("amap_service._get", return_value={"pois": [poi]}) as get:
+            found = amap_service.search_restaurants(
+                "杭州", location="120.15,30.27", radius=6000, limit=5
+            )
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0].poi_detail_url, "https://www.amap.com/place/B0TEST")
+        self.assertEqual(get.call_args.args[0], "/v5/place/around")
+        self.assertEqual(get.call_args.kwargs["location"], "120.15,30.27")
+        self.assertEqual(get.call_args.kwargs["radius"], 5000)
+
 
 class TestFetchFoodFallback(unittest.TestCase):
     """验证 tools._fetch_food 在高德失败时回退到 Tavily。"""
@@ -151,12 +172,42 @@ class TestFetchFoodFallback(unittest.TestCase):
             import tools  # noqa: F401
         except ImportError:
             self.skipTest("tools.py 依赖未安装（需要 Python >= 3.10 和 mcp/langchain）")
-        with patch("amap_service.search_restaurants", side_effect=RuntimeError("amap error")):
+        with patch("tools.search_restaurants", side_effect=RuntimeError("amap error")):
             with patch("tools._fetch_web_search", return_value=[]):
                 with patch("tools._extract_item_features", side_effect=lambda items, prompt: items):
                     import tools
                     result = tools._fetch_food("杭州", max_results=5)
                     self.assertIsInstance(result, list)
+
+    def test_nearby_search_expands_radius_from_plan_anchor(self):
+        try:
+            import tools
+        except ImportError:
+            self.skipTest("tools.py 依赖未安装（需要 Python >= 3.10 和 mcp/langchain）")
+        def fetch(_city, _keyword, _price, max_results, location, radius, allow_web_fallback):
+            self.assertEqual(location, "120.15,30.27")
+            self.assertFalse(allow_web_fallback)
+            if radius == 1500:
+                return []
+            return [
+                {
+                    "name": f"餐厅{radius}-{i}",
+                    "poi_id": f"{radius}-{i}",
+                    "longitude": 120.151,
+                    "latitude": 30.271,
+                }
+                for i in range(2)
+            ]
+
+        with patch("tools._fetch_food", side_effect=fetch) as mocked:
+            result = tools.run_food_search({
+                "destination": "杭州",
+                "anchors": [{"day": 1, "meal": "午餐", "longitude": 120.15, "latitude": 30.27}],
+            })
+        self.assertEqual([call.kwargs["radius"] for call in mocked.call_args_list], [1500, 3000, 5000])
+        options = result["food_by_anchor"][0]["restaurants"]
+        self.assertEqual(len(options), 4)
+        self.assertEqual(result["food_by_anchor"][0]["meal"], "午餐")
 
 
 if __name__ == "__main__":

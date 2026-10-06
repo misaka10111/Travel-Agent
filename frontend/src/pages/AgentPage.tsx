@@ -24,6 +24,8 @@ type BaseOption = {
   description: string;
   url?: string;
   image?: string;
+  lng?: number;
+  lat?: number;
 };
 
 type FlightOption = BaseOption & {
@@ -76,16 +78,6 @@ type FoodOption = BaseOption & {
 
 type OptionItem = FlightOption | HotelOption | SpotOption | EventOption | FoodOption;
 
-const FIXED_QUESTIONS = [
-  { key: 'destination', field: 'destination', question: '您想去哪里？', options: [], kind: 'text' },
-  { key: 'start_date', field: 'start_date', question: '出发日期是哪天？', options: [], kind: 'date' },
-  { key: 'end_date', field: 'end_date', question: '返程日期是哪天？', options: [], kind: 'date' },
-  { key: 'origin', field: 'origin', question: '您从哪里出发？', options: [], kind: 'text' },
-  { key: 'travelers', field: 'travelers', question: '出行人数是？', options: ['1人', '2人', '3人', '4人', '5人以上'], kind: 'options' },
-  { key: 'budget_tiers', field: 'budget_tiers', question: '预算档位是？', options: ['经济', '舒适', '豪华', '不设限'], kind: 'options' },
-  { key: 'purposes', field: 'purposes', question: '这次旅行的主要目的是？', options: ['自然风光', '深度文化', '美食之旅', '亲子', '购物', '摄影', '冒险户外'], kind: 'options' },
-] as const;
-
 function parsePrice(value: unknown): number {
   const n = parseFloat(String(value ?? '').replace(/[^0-9.]/g, ''));
   return Number.isFinite(n) ? n : 0;
@@ -95,6 +87,8 @@ type RoutePlan = {
   destination: string;
   start_date: string;
   end_date: string;
+  total_cost?: number;
+  budget_status?: string;
   styles: string[];
   summaries: Record<string, string>;
   blocks: RouteBlock[];
@@ -183,6 +177,8 @@ function mapHotels(items: unknown): HotelOption[] {
     description: `${h?.name ?? ''}，${h?.star ?? ''}，${h?.location ?? ''}`,
     url: h?.url ?? '',
     image: h?.image ?? '',
+    lng: h?.longitude != null ? Number(h.longitude) : undefined,
+    lat: h?.latitude != null ? Number(h.latitude) : undefined,
   };
   });
 }
@@ -204,6 +200,8 @@ function mapSpots(items: unknown): SpotOption[] {
     description: p?.description ?? '',
     url: p?.url ?? '',
     image: p?.image ?? '',
+    lng: p?.longitude != null ? Number(p.longitude) : undefined,
+    lat: p?.latitude != null ? Number(p.latitude) : undefined,
   }));
 }
 
@@ -237,6 +235,8 @@ function mapFood(items: unknown): FoodOption[] {
     detailUrl: f?.poi_detail_url ?? f?.url ?? '',
     mapUrl: f?.map_url ?? '',
     url: f?.poi_detail_url ?? f?.map_url ?? f?.url ?? '',
+    lng: f?.longitude != null ? Number(f.longitude) : undefined,
+    lat: f?.latitude != null ? Number(f.latitude) : undefined,
     scheduleAt: '',
     scheduleLabel: '',
     location: f?.business_area ?? f?.address ?? '',
@@ -247,6 +247,40 @@ function mapFood(items: unknown): FoodOption[] {
 
 const formatPrice = (price: number) => `¥ ${price.toLocaleString()}`;
 const buildId = () => `${Date.now()}-${Math.random()}`;
+
+function timeToMinutes(value: string) {
+  const match = value.match(/(\d{1,2}):(\d{2})/);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+}
+
+function rangeToMinutes(value: string): [number, number] | null {
+  const match = value.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
+  if (!match) {
+    const start = timeToMinutes(value);
+    return start == null ? null : [start, start + 60];
+  }
+  return [
+    Number(match[1]) * 60 + Number(match[2]),
+    Number(match[3]) * 60 + Number(match[4]),
+  ];
+}
+
+function minutesToRange(start: number) {
+  const h = Math.floor(start / 60);
+  const m = start % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}-${String(
+    Math.floor((start + 60) / 60),
+  ).padStart(2, '0')}:${String((start + 60) % 60).padStart(2, '0')}`;
+}
+
+function coordDistance(
+  a: { lng: number; lat: number },
+  b: { lng: number; lat: number },
+) {
+  const dx = (b.lng - a.lng) * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));
+  const dy = b.lat - a.lat;
+  return Math.hypot(dx, dy);
+}
 
 function getOptionPrice(item: OptionItem) {
   if (item.type === 'flight') return item.price;
@@ -296,7 +330,7 @@ export function AgentPage() {
       id: buildId(),
       role: 'assistant',
       content:
-        '你好，告诉我你想去哪里、什么时候出发，我会为你搜索机票、酒店和景点。',
+        '你好，直接告诉我你的旅行想法就好，例如“下周五从上海去杭州玩3天，2个人，总预算5000元，想逛西湖、吃杭帮菜”。缺少的必要信息我会再请你补充。',
     },
   ]);
 
@@ -311,8 +345,8 @@ export function AgentPage() {
     Array<{ platform: string; title: string; url: string }>
   >([]);
   const [pendingAdd, setPendingAdd] = useState<OptionItem | null>(null);
-  const [collectStep, setCollectStep] = useState<number | null>(null);
-  const [collectData, setCollectData] = useState<Record<string, unknown>>({});
+  const [tripData, setTripData] = useState<Record<string, unknown>>({});
+  const [collectingTrip, setCollectingTrip] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
     summary: string;
     mode: string;
@@ -334,14 +368,12 @@ export function AgentPage() {
   } | null>(null);
   const [originInput, setOriginInput] = useState('');
   const [question, setQuestion] = useState<{
-    field: string;
     question: string;
-    options: string[];
   } | null>(null);
   const [answer, setAnswer] = useState('');
-  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
   const [weatherData, setWeatherData] = useState<{ days?: Array<Record<string, unknown>> } | null>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
+  const [selectedFoodPoints, setSelectedFoodPoints] = useState<RouteBlock[]>([]);
   const [planning, setPlanning] = useState(false);
   const [mapPosition, setMapPosition] = useState(() => {
     if (typeof window === 'undefined') return { x: 760, y: 520 };
@@ -502,6 +534,8 @@ export function AgentPage() {
           plans?: Array<{ style?: string; summary?: string }>;
           blocks?: RouteBlock[];
           legs?: RouteLeg[];
+          total_cost?: number;
+          budget_status?: string;
           error?: string;
         };
         if (plan.error) {
@@ -524,6 +558,8 @@ export function AgentPage() {
           summaries,
           blocks,
           legs,
+          total_cost: plan.total_cost,
+          budget_status: plan.budget_status,
         });
         setActiveStyle(styles[0] ?? '');
         setActiveDay('all');
@@ -550,28 +586,6 @@ export function AgentPage() {
     setPlanning(false);
   }
 
-  async function requestPlan(query: string) {
-    const userId = localStorage.getItem('currentUser') || '';
-    let profile: unknown = null;
-    let basic: unknown = null;
-    try {
-      profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
-    } catch {
-      profile = null;
-    }
-    try {
-      basic = JSON.parse(localStorage.getItem('tripInfo') || 'null');
-    } catch {
-      basic = null;
-    }
-    await runPlan({
-      query,
-      ...(userId ? { user_id: userId } : {}),
-      ...(profile ? { profile } : {}),
-      ...(basic ? { basic } : {}),
-    });
-  }
-
   async function modifyPlan(
     instruction: string,
     mode?: string,
@@ -593,8 +607,7 @@ export function AgentPage() {
       } catch {
         basic = null;
       }
-      const selected = routePlan.blocks.filter((block) => selectedBlocks.has(block.id));
-      const blocks = selected.length > 0 ? selected : routePlan.blocks;
+      const blocks = routePlan.blocks;
       const raw = await api.plan({
         destination: routePlan.destination,
         start_date: routePlan.start_date,
@@ -642,36 +655,61 @@ export function AgentPage() {
     try {
       const result = await api.question({
         messages: history.map((m) => ({ role: m.role, content: m.content })),
-        has_plan: !!routePlan,
+        has_plan: !!routePlan && !collectingTrip,
+        trip_data: tripData,
       });
+      if (result.error) throw new Error(String(result.error));
       const action = String(result.action ?? '');
+      if (action === 'explain') {
+        const answer = String(result.answer ?? '');
+        const links = Array.isArray(result.links)
+          ? (result.links as Array<{ title?: string; url?: string }>)
+          : [];
+        const linkText = links
+          .map((link) => `${link.title ?? ''}：${link.url ?? ''}`)
+          .join('\n');
+        addAssistantMessage(
+          `${answer}${linkText ? `\n\n相关链接：\n${linkText}` : ''}`,
+        );
+        return;
+      }
       if (action === 'ask') {
-        setQuestion({
-          field: String(result.field ?? ''),
-          question: String(result.question ?? ''),
-          options: Array.isArray(result.options)
-            ? (result.options as string[])
-            : [],
-        });
+        setTripData((result.data ?? {}) as Record<string, unknown>);
+        setCollectingTrip(true);
+        setQuestion({ question: String(result.question ?? '') });
+        setAnswer('');
         addAssistantMessage(String(result.question ?? ''));
         return;
       }
       if (action === 'plan') {
         const data = (result.data ?? {}) as Record<string, unknown>;
+        setTripData(data);
+        setCollectingTrip(false);
         setQuestion(null);
+        const basic = { ...data };
+        delete basic.destination;
+        delete basic.start_date;
+        delete basic.end_date;
+        localStorage.setItem('tripInfo', JSON.stringify(basic));
+        const userId = localStorage.getItem('currentUser') || '';
+        let profile: unknown = null;
+        try {
+          profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
+        } catch {
+          profile = null;
+        }
         addAssistantMessage('正在搜索并规划行程…');
         await runPlan({
           destination: data.destination,
           start_date: data.start_date,
           end_date: data.end_date,
-          basic: {
-            origin: data.origin,
-            travelers: data.travelers,
-            budget_tiers: data.budget_tiers,
-            total_budget: data.total_budget,
-            purposes: data.purposes,
-            requested_pois: data.requested_pois,
-          },
+          ...(userId ? { user_id: userId } : {}),
+          ...(profile ? { profile } : {}),
+          basic,
+          answers: history.filter((message) => message.role === 'user').map((message) => ({
+            question: '用户自由输入的旅行需求',
+            answer: message.content,
+          })),
         });
         return;
       }
@@ -714,10 +752,9 @@ export function AgentPage() {
         );
         return;
       }
-      addAssistantMessage('正在搜索并规划行程…');
-      await requestPlan(content);
+      addAssistantMessage('暂时没能理解这条需求，请用文字描述目的地、时间或想调整的内容。');
     } catch (error) {
-      updateLastAssistantMessage(
+      addAssistantMessage(
         `处理失败：${error instanceof Error ? error.message : String(error)}`,
       );
     } finally {
@@ -726,23 +763,9 @@ export function AgentPage() {
   }
 
   async function submitQuestion() {
-    if (!question) return;
-    const value =
-      question.options.length > 0
-        ? selectedOptions.join('、') || answer.trim()
-        : answer.trim();
+    if (!question || planning) return;
+    const value = answer.trim();
     if (!value) return;
-    if (collectStep != null) {
-      setMessages((prev) => [
-        ...prev,
-        { id: buildId(), role: 'user', content: value },
-      ]);
-      setQuestion(null);
-      setAnswer('');
-      handleCollectAnswer(value, [...selectedOptions]);
-      setSelectedOptions([]);
-      return;
-    }
     const history: ChatMessage[] = [
       ...messages,
       { id: buildId(), role: 'user', content: value },
@@ -753,26 +776,7 @@ export function AgentPage() {
     ]);
     setQuestion(null);
     setAnswer('');
-    setSelectedOptions([]);
     await resolveIntent(history, value);
-  }
-
-  function askFixed(index: number) {
-    const item = FIXED_QUESTIONS[index];
-    if (!item) return;
-    setQuestion({
-      field: item.field,
-      question: item.question,
-      options: [...item.options],
-    });
-    setAnswer('');
-    setSelectedOptions([]);
-  }
-
-  function startCollect() {
-    setCollectStep(0);
-    setCollectData({});
-    askFixed(0);
   }
 
   async function confirmModification() {
@@ -783,49 +787,6 @@ export function AgentPage() {
     await modifyPlan(confirm.instruction, confirm.mode, confirm.targets);
   }
 
-  function finishCollect(data: Record<string, unknown>) {
-    setQuestion(null);
-    setCollectStep(null);
-    setCollectData({});
-    addAssistantMessage('正在搜索并规划行程…');
-    const userId = localStorage.getItem('currentUser') || '';
-    let profile: unknown = null;
-    try {
-      profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
-    } catch {
-      profile = null;
-    }
-    void runPlan({
-      destination: data.destination,
-      start_date: data.start_date,
-      end_date: data.end_date,
-      ...(userId ? { user_id: userId } : {}),
-      ...(profile ? { profile } : {}),
-      basic: {
-        origin: data.origin,
-        travelers: data.travelers,
-        budget_tiers: data.budget_tiers,
-        purposes: data.purposes,
-      },
-    });
-  }
-
-  function handleCollectAnswer(content: string, optionValues?: string[]) {
-    if (collectStep == null) return;
-    const item = FIXED_QUESTIONS[collectStep];
-    const value = item.kind === 'options'
-      ? (optionValues ?? selectedOptions)
-      : content.trim();
-    const nextData = { ...collectData, [item.key]: value };
-    setCollectData(nextData);
-    if (collectStep + 1 < FIXED_QUESTIONS.length) {
-      setCollectStep(collectStep + 1);
-      askFixed(collectStep + 1);
-    } else {
-      setCollectData(nextData);
-      finishCollect(nextData);
-    }
-  }
 
   async function submitClarify() {
     if (!clarify || !originInput.trim()) return;
@@ -1158,22 +1119,13 @@ export function AgentPage() {
     ]);
     setDraft('');
 
-    if (routePlan) {
-      const history: ChatMessage[] = [
-        ...messages,
-        { id: buildId(), role: 'user', content },
-      ];
-      void resolveIntent(history, content);
-      return;
-    }
-
-    if (collectStep != null) {
-      handleCollectAnswer(content);
-      return;
-    }
-
-    startCollect();
-    return;
+    const history: ChatMessage[] = [
+      ...messages,
+      { id: buildId(), role: 'user', content },
+    ];
+    setQuestion(null);
+    setAnswer('');
+    void resolveIntent(history, content);
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1247,7 +1199,43 @@ export function AgentPage() {
         : 1;
     const day = Math.min(Math.max(requestedDay, 1), maxDay);
     const timeMatch = content.match(/(\d{1,2}:\d{2})/);
-    const time = timeMatch ? timeMatch[1] : '09:00-11:00';
+    const sameDayBlocks = routePlan.blocks.filter(
+      (block) => Number(block.day) === day,
+    );
+    const existingRanges = sameDayBlocks
+      .map((block) => rangeToMinutes(block.time || ''))
+      .filter((range): range is [number, number] => range != null);
+    const preferredStart = timeToMinutes(timeMatch ? timeMatch[1] : '09:00') ?? 9 * 60;
+    let start = preferredStart;
+    if (!timeMatch && pendingAdd.lng != null && pendingAdd.lat != null) {
+      const located = sameDayBlocks.filter(
+        (block) => block.lng != null && block.lat != null,
+      );
+      if (located.length > 0) {
+        const nearest = located.reduce((best, block) =>
+          coordDistance(
+            { lng: pendingAdd.lng!, lat: pendingAdd.lat! },
+            { lng: block.lng!, lat: block.lat! },
+          ) <
+          coordDistance(
+            { lng: pendingAdd.lng!, lat: pendingAdd.lat! },
+            { lng: best.lng!, lat: best.lat! },
+          )
+            ? block
+            : best,
+        );
+        const end = rangeToMinutes(nearest.time || '')?.[1];
+        if (end != null) start = end + 15;
+      }
+    }
+    const overlaps = (candidate: [number, number]) =>
+      existingRanges.some(
+        (range) => candidate[0] < range[1] && candidate[1] > range[0],
+      );
+    while (overlaps([start, start + 60]) && start < 23 * 60) {
+      start += 30;
+    }
+    const time = minutesToRange(start);
 
     const sameDayBlock = routePlan.blocks.find((block) => Number(block.day) === day);
     const date = sameDayBlock?.date ?? routePlan.start_date ?? '';
@@ -1263,9 +1251,24 @@ export function AgentPage() {
       time,
       name: pendingAdd.title,
       note: pendingAdd.description ?? '',
+      lng: pendingAdd.lng,
+      lat: pendingAdd.lat,
     };
     setRoutePlan((prev) =>
-      prev ? { ...prev, blocks: [...prev.blocks, block], legs: [] } : prev,
+      prev
+        ? {
+            ...prev,
+            blocks: [...prev.blocks, block].sort(
+              (a, b) =>
+                Number(a.day) - Number(b.day) ||
+                (a.time || '').localeCompare(b.time || ''),
+            ),
+            legs: [],
+          }
+        : prev,
+    );
+    setPlanItemIds((prev) =>
+      prev.includes(pendingAdd.id) ? prev : [...prev, pendingAdd.id],
     );
     setPendingAdd(null);
     addAssistantMessage(
@@ -1282,6 +1285,29 @@ export function AgentPage() {
         next.add(blockId);
       }
       return next;
+    });
+  }
+
+  function toggleFoodOption(block: RouteBlock, option: NonNullable<RouteBlock['options']>[number]) {
+    setSelectedFoodPoints((prev) => {
+      const exists = prev.some((point) => point.id === `food-${option.name}`);
+      if (exists) {
+        return prev.filter((point) => point.id !== `food-${option.name}`);
+      }
+      return [
+        ...prev,
+        {
+          id: `food-${option.name}`,
+          plan_style: block.plan_style,
+          day: block.day,
+          date: block.date,
+          type: '美食',
+          time: block.time,
+          name: option.name,
+          lng: option.lng,
+          lat: option.lat,
+        },
+      ];
     });
   }
 
@@ -1513,58 +1539,28 @@ export function AgentPage() {
           {question && (
             <div className="ta-clarify-card">
               <div className="ta-clarify-title">{question.question}</div>
-              {question.options.length > 0 ? (
-                <div className="ta-clarify-options">
-                  {question.options.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      className={`ta-clarify-option${
-                        selectedOptions.includes(option) ? ' active' : ''
-                      }`}
-                      onClick={() =>
-                        setSelectedOptions((prev) =>
-                          prev.includes(option)
-                            ? prev.filter((item) => item !== option)
-                            : [...prev, option],
-                        )
-                      }
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="ta-clarify-row">
-                  <input
-                    type={
-                      question.field.includes('date') ||
-                      question.field === 'start_date' ||
-                      question.field === 'end_date'
-                        ? 'date'
-                        : 'text'
+              <div className="ta-clarify-row">
+                <input
+                  type="text"
+                  value={answer}
+                  onChange={(event) => setAnswer(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      void submitQuestion();
                     }
-                    value={answer}
-                    onChange={(event) => setAnswer(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        void submitQuestion();
-                      }
-                    }}
-                    placeholder="请输入"
-                  />
-                </div>
-              )}
+                  }}
+                  placeholder="用文字补充，可一次输入多项"
+                  disabled={planning}
+                />
+              </div>
               <button
                 type="button"
                 className="ta-clarify-submit"
                 onClick={() => void submitQuestion()}
-                disabled={
-                  !question.options.length && !answer.trim() ? true : false
-                }
+                disabled={!answer.trim() || planning}
               >
-                确定
+                补充信息
               </button>
             </div>
           )}
@@ -1598,7 +1594,7 @@ export function AgentPage() {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder="继续补充需求…"
+              placeholder="描述你的旅行想法，或继续补充信息…"
               rows={1}
             />
             {planning ? (
@@ -1633,6 +1629,16 @@ export function AgentPage() {
                 <strong>{expandedStyle}</strong>
                 <p>{routePlan.summaries[expandedStyle] ?? ''}</p>
               </div>
+              <div className="ta-plan-detail-total">
+                总消费 ¥{' '}
+                {routePlan.blocks
+                  .filter((block) => block.plan_style === expandedStyle)
+                  .reduce((sum, block) => sum + (block.price ?? 0), 0)
+                  .toLocaleString()}
+              </div>
+              {routePlan.budget_status === 'over' && (
+                <div className="ta-plan-budget-warning">⚠ 已超出总预算</div>
+              )}
               {confirmedStyle === expandedStyle && (
                 <div className="ta-plan-confirmed">已确认该计划</div>
               )}
@@ -1683,8 +1689,62 @@ export function AgentPage() {
                               <span>{block.type}</span>
                             </div>
                             <div className="ta-plan-block-body">
-                              <strong>{block.name}</strong>
+                              {block.link ? (
+                                <a
+                                  className="ta-plan-block-link"
+                                  href={block.link}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                >
+                                  {block.name}
+                                </a>
+                              ) : (
+                                <strong>{block.name}</strong>
+                              )}
                               {block.note && <p>{block.note}</p>}
+                              {block.price != null && (
+                                <span className="ta-plan-block-price">
+                                  ¥ {block.price.toLocaleString()}
+                                </span>
+                              )}
+                              {block.options && block.options.length > 0 && (
+                                <div className="ta-plan-block-options">
+                                  {block.options.map((option) => {
+                                    const active = selectedFoodPoints.some(
+                                      (point) => point.id === `food-${option.name}`,
+                                    );
+                                    return (
+                                      <span className="ta-food-option-wrap" key={option.name}>
+                                        <button
+                                          type="button"
+                                          className={`ta-food-option${active ? ' active' : ''}`}
+                                          onClick={() => toggleFoodOption(block, option)}
+                                        >
+                                          {option.name}
+                                          {option.price != null && option.price > 0
+                                            ? ` · ¥${option.price}`
+                                            : ''}
+                                          {option.distance_km != null
+                                            ? ` · ${option.distance_km}km`
+                                            : ''}
+                                          {option.rating != null ? ` · ${option.rating}分` : ''}
+                                        </button>
+                                        {option.link && (
+                                          <a
+                                            className="ta-food-option-link"
+                                            href={option.link}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            aria-label={`打开${option.name}地图链接`}
+                                          >
+                                            地图
+                                          </a>
+                                        )}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ))}
@@ -2105,7 +2165,11 @@ export function AgentPage() {
                 </button>
               ))}
             </div>
-            <TripMap blocks={styleBlocks} legs={styleLegs} day={activeDay} />
+            <TripMap
+              blocks={[...styleBlocks, ...selectedFoodPoints]}
+              legs={styleLegs}
+              day={activeDay}
+            />
           </>
         ) : (
           <div className="ta-map-placeholder ta-floating-map-placeholder">

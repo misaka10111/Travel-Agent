@@ -322,9 +322,10 @@ def _fetch_hotels(
         {"sort": "price_asc", "hotel_stars": "3"},
         {"sort": "no_rank", "key_words": "如家 汉庭 全季 亚朵 维也纳"},
     ]
-    for params in rounds:
+
+    def _round_items(params: dict) -> list[dict]:
         try:
-            items = _fetch_hotels_once(
+            return _fetch_hotels_once(
                 destination,
                 check_in_date,
                 check_out_date,
@@ -335,7 +336,13 @@ def _fetch_hotels(
                 params.get("sort") or sort,
             )
         except Exception:
-            items = []
+            return []
+
+    # 5 轮检索并发执行，再按原顺序合并去重
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        rounds_items = list(executor.map(_round_items, rounds))
+
+    for items in rounds_items:
         for item in items:
             name = item.get("name") or ""
             if not name or name in seen:
@@ -560,6 +567,29 @@ POI_THEMES = {
     "教育博物": ["博物馆", "纪念馆"],
     "城市生活": ["文创街区", "市集"],
 }
+
+STYLE_KEYWORDS = {
+    "亲子乐园": ["亲子", "乐园", "动物园", "海洋馆"],
+    "深度文化": ["博物馆", "历史古迹", "纪念馆"],
+    "自然风光": ["自然风光", "公园", "山湖田园"],
+    "美食探店": ["美食街区", "市集", "老字号"],
+    "摄影旅拍": ["网红打卡", "地标", "拍照出片"],
+    "冒险户外": ["户外活动", "徒步", "露营"],
+    "购物血拼": ["商圈", "购物中心"],
+    "休闲度假": ["湖景", "园林", "温泉"],
+}
+
+
+def _profile_keywords(profile: dict | None) -> list[str]:
+    if not profile:
+        return []
+    styles = profile.get("travel_style") or []
+    if isinstance(styles, str):
+        styles = [styles]
+    keywords: list[str] = []
+    for style in styles:
+        keywords.extend(STYLE_KEYWORDS.get(style, []))
+    return keywords
 def _pick_district(item: dict) -> str:
     for key in ("districtName", "district", "areaName", "region", "address"):
         value = item.get(key)
@@ -665,52 +695,51 @@ def _fetch_poi(
     return _extract_poi_features(pois)
 
 
-def _fetch_poi_distributed(city_name: str, target: int = 50) -> list[dict]:
+def _fetch_poi_distributed(
+    city_name: str,
+    target: int = 50,
+    extra_keywords: list[str] | None = None,
+) -> list[dict]:
     """按 4 个主题分散搜索景点，合并去重后均匀取 target 条。"""
     by_category: dict[str, list[dict]] = {}
     seen: set[str] = set()
+
+    # 所有 POI 检索任务并发执行（原实现串行 15+ 次 flyai 子进程调用，冷启动可达一分钟）
+    # 任务元组：(优先级, 分类标签, 检索参数, 保留条数)；优先级保证合并顺序与原逻辑一致
+    tasks: list[tuple[int, str, dict, int]] = []
     for theme, categories in POI_THEMES.items():
         for category in categories:
-            try:
-                items = _search_poi_items(city_name, category=category)
-            except Exception:
-                items = []
-            for item in items:
-                name = (item.get("name") or "").strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                item["query_category"] = theme
-                by_category.setdefault(theme, []).append(item)
-
-    # 补上飞猪默认热门榜（西湖、雷峰塔、灵隐寺这类经典景点）
-    try:
-        default_items = _search_poi_items(city_name)
-    except Exception:
-        default_items = []
-    for item in default_items:
-        name = (item.get("name") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        item["query_category"] = "经典必去"
-        by_category.setdefault("经典必去", []).append(item)
-
-    # 再用关键词补搜地标/必去，避免漏掉西湖这类超经典景点
+            tasks.append((0, theme, {"category": category}, 0))
+    tasks.append((1, "经典必去", {}, 0))  # 飞猪默认热门榜
     for keyword in ("必去", "地标"):
+        tasks.append((1, "经典必去", {"keyword": keyword}, 0))
+    for keyword in extra_keywords or []:
+        tasks.append((2, "用户偏好", {"keyword": keyword}, 10))
+
+    def _run_poi_task(task: tuple[int, str, dict, int]) -> tuple[int, str, list[dict]]:
+        priority, label, kwargs, limit = task
         try:
-            extra_items = _search_poi_items(city_name, keyword=keyword)
+            items = _search_poi_items(city_name, **kwargs)
         except Exception:
-            extra_items = []
-        for item in extra_items:
+            items = []
+        return priority, label, (items[:limit] if limit else items)
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        fetched = list(executor.map(_run_poi_task, tasks))
+
+    for _priority, label, items in sorted(fetched, key=lambda x: x[0]):
+        for item in items:
             name = (item.get("name") or "").strip()
             if not name or name in seen:
                 continue
             seen.add(name)
-            item["query_category"] = "经典必去"
-            by_category.setdefault("经典必去", []).append(item)
+            item["query_category"] = label
+            by_category.setdefault(label, []).append(item)
 
-    themes = [t for t in list(POI_THEMES) + ["经典必去"] if by_category.get(t)]
+    themes = [
+        t for t in list(POI_THEMES) + ["经典必去", "用户偏好"]
+        if by_category.get(t)
+    ]
     idx = {t: 0 for t in themes}
     district_counts: dict[str, int] = {}
     selected: list[dict] = []
@@ -874,6 +903,9 @@ def _fetch_food(
     keyword: str | None = None,
     max_price: float | None = None,
     max_results: int = 50,
+    location: str | None = None,
+    radius: int = 3000,
+    allow_web_fallback: bool = True,
 ) -> list[dict]:
     """用高德地图 POI 搜索当地餐厅，返回结构化数据。
 
@@ -888,6 +920,8 @@ def _fetch_food(
             destination,
             keyword=keyword,
             limit=max_results,
+            location=location,
+            radius=radius,
         )
         if restaurants:
             items = [r.to_dict() for r in restaurants]
@@ -906,6 +940,11 @@ def _fetch_food(
         amap_error = str(exc)
         print(f"[food] 高德搜索失败，回退 Tavily：{amap_error}", file=sys.stderr)
 
+    # 周边搜索必须有可靠坐标；网页搜索结果没有稳定的 POI 坐标，不能用来
+    # 填充地图路线。常规搜索仍保留原有的网页降级能力。
+    if location and not allow_web_fallback:
+        return []
+
     # 2. 回退：Tavily 网页搜索
     query = f"{destination} 美食 必吃 餐厅 小吃"
     if keyword:
@@ -915,6 +954,52 @@ def _fetch_food(
     for it in items:
         it["_source"] = "tavily"
     return items
+
+
+def run_food_search(input_data: dict) -> dict:
+    """按已生成行程中的餐食锚点，搜索附近餐厅供 PlanAgent 二阶段补餐。"""
+    destination = (input_data.get("destination") or "").strip()
+    anchors = input_data.get("anchors") or []
+    if not destination:
+        raise ValueError("缺少 destination")
+    if not isinstance(anchors, list):
+        raise ValueError("anchors 必须是数组")
+
+    keyword = (input_data.get("food_keyword") or "").strip() or None
+    max_price = input_data.get("max_price")
+
+    def search_anchor(anchor: dict) -> dict:
+        lng, lat = anchor.get("longitude"), anchor.get("latitude")
+        if lng is None or lat is None:
+            return {"day": anchor.get("day"), "meal": anchor.get("meal"), "restaurants": []}
+        location = f"{float(lng)},{float(lat)}"
+        # 先查 1.5km；候选太少时再扩至 3km/5km，避免以远距离餐厅充数。
+        restaurants = _fetch_food(
+            destination, keyword, max_price, max_results=20,
+            location=location, radius=1500, allow_web_fallback=False,
+        )
+        for radius in (3000, 5000):
+            if len(restaurants) >= 3:
+                break
+            more = _fetch_food(
+                destination, keyword, max_price, max_results=20,
+                location=location, radius=radius, allow_web_fallback=False,
+            )
+            seen = {r.get("poi_id") or r.get("name") for r in restaurants}
+            for restaurant in more:
+                identity = restaurant.get("poi_id") or restaurant.get("name")
+                if identity not in seen:
+                    restaurants.append(restaurant)
+                    seen.add(identity)
+        return {
+            "day": anchor.get("day"),
+            "meal": anchor.get("meal"),
+            "restaurants": restaurants,
+        }
+
+    with ThreadPoolExecutor(max_workers=min(max(len(anchors), 1), 6)) as executor:
+        nearby = list(executor.map(search_anchor, anchors))
+    return {"food_by_anchor": nearby}
 
 
 def _fetch_social_food(destination: str, max_results: int = 20) -> list[dict]:
@@ -1202,7 +1287,7 @@ def search_events(destination: str, start_date: str, end_date: str, max_results:
 
 @server.tool(description="搜索目的地餐厅（高德地图），返回名称、菜系、评分、人均、地址、商圈和地图/详情链接。destination 必填。")
 def search_food(destination: str, max_results: int = 10) -> str:
-    return _format_food(_fetch_food(destination, max_results), destination)
+    return _format_food(_fetch_food(destination, max_results=max_results), destination)
 
 
 # ================= 确定性综合编排（JSON in / JSON out） =================
@@ -1243,8 +1328,9 @@ def _write_cache(key: str, result: dict) -> None:
 
 
 def run_search(input_data: dict) -> dict:
-    """输入 {destination, start_date, end_date?, origin?, basic?, food_keyword?}，
-    并行调用 6~8 个工具，返回结构化 JSON。
+    """输入旅行信息并行搜索景点、住宿、天气、活动和交通等数据。
+
+    餐厅搜索延后到 PlanAgent 生成逐日景点安排后，通过 run_food_search 按坐标进行。
 
     basic 可含 total_budget（总预算）、travelers（出行人数）、purposes（旅行目的），
     用于推算餐饮搜索的人均预算上限。
@@ -1279,19 +1365,22 @@ def run_search(input_data: dict) -> dict:
         "start_date": start,
         "end_date": end,
     }
+    if food_keyword:
+        result["food_keyword"] = food_keyword
+    if max_price:
+        result["food_max_price"] = max_price
     if origin:
         result["origin"] = origin
 
     tasks = {
         "weather": lambda: _fetch_weather(destination, start, end),
         "hotels": lambda: _fetch_hotels(destination, start, end),
-        "poi": lambda: _fetch_poi_distributed(destination, target=50),
-        "events": lambda: _fetch_events(destination, start, end),
-        "food": lambda: _fetch_food(
+        "poi": lambda: _fetch_poi_distributed(
             destination,
-            keyword=food_keyword,
-            max_price=max_price,
+            target=50,
+            extra_keywords=_profile_keywords(input_data.get("profile")),
         ),
+        "events": lambda: _fetch_events(destination, start, end),
         "social_food": lambda: _fetch_social_food(destination),
     }
     if origin:
@@ -1334,7 +1423,7 @@ def _estimate_food_budget(basic: dict) -> float | None:
     return round(per_meal, 0)
 
 
-@server.tool(description="综合搜索某目的地（天气+酒店+景点+餐厅+促销+活动），返回结构化 JSON。")
+@server.tool(description="搜索某目的地的天气、酒店、景点、促销和活动；餐厅在行程生成后按景点位置另行搜索。")
 def search_trip(destination: str, start_date: str, end_date: str | None = None) -> str:
     return json.dumps(
         run_search({"destination": destination, "start_date": start_date, "end_date": end_date}),

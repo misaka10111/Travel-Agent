@@ -139,13 +139,17 @@ def search_restaurants(
     city: str,
     keyword: str | None = None,
     limit: int = 20,
+    location: str | None = None,
+    radius: int = 3000,
 ) -> list[RestaurantInfo]:
-    """搜索城市内的餐厅 POI。
+    """搜索城市或指定坐标周边的餐厅 POI。
 
     Args:
         city: 城市名，如 "杭州"
         keyword: 可选关键词，如 "火锅"、"日料"
         limit: 返回数量上限（高德单页最多 25）
+        location: 可选中心坐标，格式为 "经度,纬度"；提供时执行周边搜索
+        radius: 周边搜索半径，单位米
 
     Returns:
         标准化餐厅列表，优先返回评分高且有价格信息的餐厅。
@@ -159,16 +163,18 @@ def search_restaurants(
     while len(results) < limit:
         params: dict[str, Any] = {
             "types": FOOD_TYPES,
-            "region": city,
-            "city_limit": "true",
             "page_size": page_size,
             "page_num": page_num,
             "show_fields": "business",
         }
+        if location:
+            params.update({"location": location, "radius": max(500, min(radius, 5000))})
+        else:
+            params.update({"region": city, "city_limit": "true"})
         if keyword:
             params["keywords"] = keyword
         try:
-            data = _get("/v5/place/text", **params)
+            data = _get("/v5/place/around" if location else "/v5/place/text", **params)
         except Exception as exc:  # noqa: BLE001
             if first_error is None:
                 first_error = exc
@@ -179,10 +185,10 @@ def search_restaurants(
         raw_count = len(pois)
 
         for poi in pois:
-            location = poi.get("location") or ""
-            if not location or "," not in location:
+            poi_location = poi.get("location") or ""
+            if not poi_location or "," not in poi_location:
                 continue
-            lng_s, lat_s = location.split(",")
+            lng_s, lat_s = poi_location.split(",")
             try:
                 lng = float(lng_s)
                 lat = float(lat_s)
@@ -245,6 +251,10 @@ def search_restaurants(
 
 if __name__ == "__main__":
     import sys
+
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
     if len(sys.argv) < 2:
         print("用法: python amap_service.py <城市> [关键词]")

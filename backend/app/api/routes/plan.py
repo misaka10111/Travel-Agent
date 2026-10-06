@@ -164,6 +164,19 @@ def _local_modify(
         return {"error": str(exc)}
 
 
+def _merge_modified_blocks(result: dict, full_blocks: list) -> dict:
+    """把局部修改结果按 id 合并回完整 blocks。"""
+    if isinstance(result, dict) and isinstance(result.get("blocks"), list):
+        by_id = {
+            block.get("id"): block
+            for block in result["blocks"]
+            if block.get("id")
+        }
+        merged = [by_id.get(block.get("id"), block) for block in full_blocks]
+        return {"blocks": merged}
+    return result
+
+
 @router.post("/stream")
 def plan_stream(payload: PlanRequest):
     """SSE 流式规划：逐节点返回 search/plan/validate 进度。"""
@@ -233,16 +246,25 @@ def plan_stream(payload: PlanRequest):
         )
         proc.stdin.write(json.dumps(data, ensure_ascii=False))
         proc.stdin.close()
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            if line:
-                yield f"data: {line}\n\n"
-        proc.wait()
-        if proc.returncode != 0:
-            err = (proc.stderr.read() or "").strip()
-            if err:
-                yield f"data: {json.dumps({'type': 'error', 'error': err}, ensure_ascii=False)}\n\n"
-        yield "data: [DONE]\n\n"
+        try:
+            for line in proc.stdout:
+                line = line.rstrip("\n")
+                if line:
+                    yield f"data: {line}\n\n"
+            proc.wait()
+            if proc.returncode != 0:
+                err = (proc.stderr.read() or "").strip()
+                if err:
+                    yield f"data: {json.dumps({'type': 'error', 'error': err}, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
+        finally:
+            # 客户端断开（关闭页面/切换路由/abort）时终止孤儿编排进程，避免继续消耗 API
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
 
     return StreamingResponse(
         event_stream(),
@@ -378,12 +400,22 @@ def create_plan(payload: PlanRequest) -> dict:
                 for t in targets
             }
             target_names = {n for n in target_names if n}
+            if not any(k in instruction for k in ("换", "替换", "换成")) and any(
+                k in instruction for k in ("删", "去掉", "不要", "取消", "移除")
+            ):
+                all_blocks = payload.modify.get("blocks") or []
+                return {
+                    "blocks": [
+                        b for b in all_blocks
+                        if (b.get("name") or "") not in target_names
+                    ]
+                }
             blocks = [
                 b
                 for b in blocks
                 if (b.get("name") or "") in target_names
             ] or blocks
-        return _local_modify(
+        result = _local_modify(
             destination,
             start_date,
             end_date,
@@ -392,6 +424,7 @@ def create_plan(payload: PlanRequest) -> dict:
             payload.profile,
             basic,
         )
+        return _merge_modified_blocks(result, payload.modify.get("blocks") or [])
 
     # 自然语言修改：没有 mode 时，先让 PlanAgent 判断 global / block，再执行对应修改
     if payload.modify and payload.modify.get("instruction") and payload.modify.get("blocks"):
@@ -416,12 +449,22 @@ def create_plan(payload: PlanRequest) -> dict:
                 for t in targets
             }
             target_names = {n for n in target_names if n}
+            if not any(k in instruction for k in ("换", "替换", "换成")) and any(
+                k in instruction for k in ("删", "去掉", "不要", "取消", "移除")
+            ):
+                all_blocks = payload.modify.get("blocks") or []
+                return {
+                    "blocks": [
+                        b for b in all_blocks
+                        if (b.get("name") or "") not in target_names
+                    ]
+                }
             blocks = [
                 b
                 for b in blocks
                 if (b.get("name") or "") in target_names
             ] or blocks
-        return _local_modify(
+        result = _local_modify(
             destination,
             start_date,
             end_date,
@@ -430,6 +473,7 @@ def create_plan(payload: PlanRequest) -> dict:
             payload.profile,
             basic,
         )
+        return _merge_modified_blocks(result, payload.modify.get("blocks") or [])
 
     # 完整计划修改：modify 含 mode（global/block），且带上一版 plan
     if payload.modify and payload.plan and payload.modify.get("mode"):
@@ -445,7 +489,7 @@ def create_plan(payload: PlanRequest) -> dict:
 
     # 局部修改：modify 含 blocks，只改选中块，不走完整 orchestrator
     if payload.modify and payload.modify.get("blocks"):
-        return _local_modify(
+        result = _local_modify(
             destination,
             start_date,
             end_date,
@@ -454,6 +498,7 @@ def create_plan(payload: PlanRequest) -> dict:
             payload.profile,
             basic,
         )
+        return _merge_modified_blocks(result, payload.modify.get("blocks") or [])
 
     if payload.modify:
         data["modify"] = payload.modify

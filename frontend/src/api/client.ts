@@ -110,7 +110,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  question: (payload: { messages: ChatMessage[]; has_plan?: boolean }) =>
+  question: (payload: {
+    messages: ChatMessage[];
+    has_plan?: boolean;
+    trip_data?: Record<string, unknown>;
+  }) =>
     request<Record<string, unknown>>('/question', {
       method: 'POST',
       body: JSON.stringify(payload),
