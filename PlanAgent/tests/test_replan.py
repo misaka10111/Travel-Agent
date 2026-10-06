@@ -6,6 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from replan import ReplanError, replan_plan, replacement, catalog, expected_pairs, parse_selection, selection_context
+from shared.travel import travel_metadata, match_travel, attach_travel_metadata
 
 
 def block(bid, day, kind, name, time, style="推荐方案"):
@@ -228,6 +229,67 @@ class ReplanTests(unittest.TestCase):
         ]
         with self.assertRaisesRegex(ReplanError, "固定出行时间"):
             self.run_plan()
+
+    def test_airline_alias_and_evening_outbound_use_arrival_airport(self):
+        flight = block("flight", 1, "交通", "厦航 MF3860（去程）", "20:25-21:50")
+        self.original["blocks"].insert(0, flight)
+        self.search["flights"] = [{"airline": "厦门航空", "flight_no": "MF3860",
+            "dep_time": "2026-10-20 20:25", "arr_time": "2026-10-20 21:50",
+            "dep_station": "长乐国际机场", "arr_station": "浦东国际机场", "direction": "去"}]
+        # Route boundaries must use flight direction, not time of day.
+        from replan import route_stops
+        stops = route_stops(self.original["blocks"], "推荐方案", self.search)
+        self.assertEqual(stops[0]["name"], "浦东国际机场")
+        self.assertEqual(travel_metadata(flight, self.search)["direction"], "去")
+
+    def test_legacy_station_note_works_without_flight_in_new_search(self):
+        flight = block("flight", 1, "交通", "旧航班 MU1234 去程", "07:00-08:00")
+        flight["note"] = "虹桥国际机场 → 萧山国际机场"
+        self.original["blocks"].insert(0, flight)
+        result = self.run_plan()["plan"]
+        self.assertTrue(any(leg["from"] == "flight" for leg in result["legs"]))
+        self.assertEqual(result["blocks"][0]["arr_station"], "萧山国际机场")
+
+    def test_local_transfer_is_repaired_as_real_leg_not_airport(self):
+        local = block("local", 1, "交通", "打车前往午餐店", "11:00-11:25")
+        self.original["blocks"].insert(1, local)
+        result = self.run_plan()["plan"]
+        by_id = {b["id"]: b for b in result["blocks"]}
+        self.assertEqual(by_id["local"]["time"], "11:00-12:10")
+        self.assertEqual(by_id["local"]["name"], "博物馆 → 午餐店")
+        self.assertEqual(by_id["b"]["time"], "12:10-13:10")
+        self.assertFalse(any(l["from"] == "local" or l["to"] == "local" for l in result["legs"]))
+
+    def test_missing_airport_reports_specific_block(self):
+        self.original["blocks"].insert(0, block("flight", 1, "交通", "MU1234", "07:00-08:00"))
+        with self.assertRaisesRegex(ReplanError, "MU1234.*机场或车站"):
+            self.run_plan()
+
+    def test_same_flight_on_different_dates_and_ambiguous_airports(self):
+        flight = block("flight", 1, "交通", "厦航MF3860", "08:00-09:00")
+        row = {"airline": "厦门航空", "flight_no": "MF3860", "dep_time": "2026-10-20 08:00",
+               "arr_time": "2026-10-20 09:00", "dep_station": "长乐国际机场", "arr_station": "浦东国际机场"}
+        search = {"flights": {"outbound": [row, {**row, "dep_time": "2026-10-21 08:00"}], "inbound": None}}
+        self.assertEqual(match_travel(flight, search)["dep_time"], "2026-10-20 08:00")
+        search["flights"]["outbound"].append({**row, "arr_station": "虹桥国际机场"})
+        self.assertEqual(match_travel(flight, search), {})
+
+    def test_transport_number_does_not_match_longer_number(self):
+        flight = block("flight", 1, "交通", "MU12345", "08:00-09:00")
+        self.assertEqual(match_travel(flight, {"flights": [{"flight_no": "MU1234"}]}), {})
+
+    def test_blockify_preserves_transport_metadata(self):
+        import ast
+        path = Path(__file__).resolve().parents[1] / "plan.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "blockify"]
+        namespace = {}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
+        item = {"type": "交通", "name": "MF3860", "time": "08:00-09:00", "dep_station": "长乐国际机场",
+                "arr_station": "浦东国际机场", "flight_no": "MF3860", "direction": "去"}
+        result = namespace["blockify"]({"plans": [{"style": "推荐", "itinerary": [{"day": 1, "schedule": [item]}]}]})
+        for field in ("dep_station", "arr_station", "flight_no", "direction"):
+            self.assertEqual(result[0][field], item[field])
 
     def test_continuous_hotel_stays_are_replaced_together(self):
         self.original["blocks"].insert(4, block("h2", 2, "酒店", "酒店甲", "18:00-18:30"))

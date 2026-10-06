@@ -14,6 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from shared.pricing import item_price, parse_price
+from shared.travel import travel_rows, travel_metadata, is_local_transport, attach_travel_metadata
 
 
 class ReplanError(ValueError):
@@ -73,17 +74,6 @@ def clock(value):
 
 def amount(value):
     return parse_price(value)
-
-
-def travel_rows(search):
-    rows = []
-    for source in ("flights", "trains"):
-        items = search.get(source) or []
-        if isinstance(items, dict):
-            items = [*items.get("outbound", []), *items.get("inbound", [])]
-        for row in items:
-            rows.append({**row, "name": f"{row.get('airline') or row.get('transport') or ''}{row.get('flight_no') or row.get('train_no') or ''}", "_travel": True})
-    return rows
 
 
 def catalog(search, target):
@@ -161,12 +151,14 @@ def route_stops(blocks, style, search):
             if is_stop(block):
                 stops.append(block)
             continue
-        row = next((r for r in travel_rows(search) if r["name"] == block["name"]), {})
+        if is_local_transport(block, search):
+            continue
+        row = travel_metadata(block, search)
         start, _ = span(block)
         outbound = (block.get("direction") or row.get("direction")) == "去" or (not block.get("direction") and not row.get("direction") and start is not None and start < 12 * 60)
         name = (block.get("arr_station") or row.get("arr_station")) if outbound else (block.get("dep_station") or row.get("dep_station"))
         if not name:
-            raise ReplanError("出行项目缺少机场或车站信息，无法检查接续交通。")
+            raise ReplanError(f"出行项目「{block['name']}」缺少机场或车站信息，无法检查接续交通。请确认该班次的出发站和到达站。")
         stops.append({**block, "name": name, "type": "接续交通", "note": "机场或车站接续点"})
     return stops
 
@@ -200,6 +192,23 @@ def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_i
         rows = [b for b in plan["blocks"] if b.get("plan_style") == style and b["day"] == day]
         cursor = None
         previous = previous_hotel
+        local_transfers = []
+        def refresh_local_transfers(next_block, travel):
+            if not local_transfers:
+                return
+            if previous is None or cursor is None:
+                raise ReplanError("市内交通缺少前一地点或时间，无法安全调整。")
+            count = len(local_transfers)
+            for index, transfer in enumerate(local_transfers):
+                start = cursor + travel * index // count
+                end = cursor + travel * (index + 1) // count
+                new_time = f"{clock(start)}-{clock(end)}"
+                if (transfer["id"] in locked_ids or transfer.get("fixed_time")) and new_time != transfer.get("time"):
+                    raise ReplanError(f"调整会影响固定项目「{transfer['name']}」，请换一个替代项。")
+                transfer["time"] = new_time
+                transfer["name"] = f"{previous['name']} → {next_block['name']}"
+                transfer["note"] = "已按真实路线重新计算市内交通（含10分钟缓冲）"
+            local_transfers.clear()
         may_shift = day in affected_days and not any(b["id"] in target_ids for b in rows)
         for block in rows:
             if day not in affected_days or (block.get("type") == "酒店" and not is_stop(block)):
@@ -207,11 +216,18 @@ def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_i
             start, end = span(block)
             original = old_by_id[block["id"]]
             if block.get("type") == "交通":
+                if block.get("transport_scope") == "local":
+                    # Real legs between the surrounding stops account for this
+                    # transfer. It is not a scheduled flight/train deadline.
+                    if may_shift:
+                        local_transfers.append(block)
+                    continue
                 if block["id"] in target_ids:
                     may_shift = True
                 if start is None or end is None:
                     raise ReplanError("出行项目缺少明确的出发与到达时间，无法检查后续安排。")
                 transfer = route_minutes.get((day, previous["id"], block["id"]), 0) if previous else 0
+                refresh_local_transfers(block, transfer)
                 if cursor is not None and start < cursor + transfer + 60:
                     raise ReplanError("调整后赶不上固定出行时间（需至少预留一小时），请换一个候选或减少当天活动。")
                 direction = block.get("direction") or (directions or {}).get(block["id"])
@@ -226,6 +242,7 @@ def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_i
                 previous = block
                 continue
             travel = route_minutes.get((day, previous["id"], block["id"]), 0) if previous else 0
+            refresh_local_transfers(block, travel)
             if start is None:
                 if block.get("type") != "酒店":
                     raise ReplanError(f"「{block['name']}」缺少明确时间，无法安全调整行程。")
@@ -260,6 +277,8 @@ def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_i
             if block["id"] in locked_ids and block != original:
                 raise ReplanError("固定项目不能被更改。")
             previous = block
+        if local_transfers:
+            raise ReplanError("市内交通缺少后续地点，无法安全调整。")
         hotels = [b for b in rows if b.get("type") == "酒店" and is_stop(b)]
         if hotels:
             previous_hotel = hotels[-1]
@@ -283,6 +302,7 @@ def rebuild_itinerary(plan):
 
 def replan_plan(payload, search, choose, attach_routes):
     original = deepcopy(payload["plan"])
+    attach_travel_metadata(original.get("blocks") or [], search)
     blocks = original.get("blocks") or []
     ids = [b.get("id") for b in blocks]
     if not blocks or any(not bid for bid in ids) or len(set(ids)) != len(ids):
@@ -353,7 +373,7 @@ def replan_plan(payload, search, choose, attach_routes):
             routed_by_id = {b["id"]: b for b in routed["blocks"]}
             updated["blocks"] = [routed_by_id.get(b["id"], b) if b.get("plan_style") == style and b["day"] in affected_days and is_stop(b) else b for b in updated["blocks"]]
             updated["legs"] = [leg for leg in original.get("legs", []) if leg.get("plan_style") != style or leg.get("day") not in affected_days] + [leg for leg in new_legs if leg.get("day") in affected_days]
-            directions = {b["id"]: next((r.get("direction") for r in travel_rows(search) if r["name"] == b["name"]), None) for b in updated["blocks"] if b.get("type") == "交通"}
+            directions = {b["id"]: travel_metadata(b, search).get("direction") for b in updated["blocks"] if b.get("type") == "交通"}
             repair_timeline(updated, blocks, style, affected_days, changed_ids, locked_ids, directions)
             old_by_id = {b["id"]: b for b in blocks}
             if any(b != old_by_id[b["id"]] for b in updated["blocks"] if b["id"] in locked_ids):

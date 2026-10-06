@@ -32,6 +32,7 @@ load_dotenv(BASE_DIR / ".env")
 ROOT = BASE_DIR.parent
 sys.path.insert(0, str(ROOT))
 from shared.pricing import item_price, parse_price, price_sort_key
+from shared.travel import attach_travel_metadata
 SEARCH_PY = ROOT / "SearchAgent" / "search.py"
 SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
 
@@ -1320,6 +1321,7 @@ def _ensure_hotels(plan: dict, search_result: dict) -> dict:
             else:
                 _add_hotel_to_day(it, hotels, None, poi_map, used)
     plan["blocks"] = blockify(plan)
+    attach_travel_metadata(plan["blocks"], search_result)
     return plan
 
 
@@ -1745,6 +1747,7 @@ def blockify(plan: dict) -> list[dict]:
                         "note": note,
                         "link": item.get("link") or "",
                         "options": item.get("options") or [],
+                        **{key: item[key] for key in ("dep_station", "arr_station", "dep_time", "arr_time", "flight_no", "train_no", "direction", "fixed_time", "transport_scope") if key in item},
                     }
                 )
             for meal in it.get("meals") or []:
@@ -1948,6 +1951,7 @@ def main() -> None:
                 result = _attach_prices(
                     result, search_result, (basic or {}).get("total_budget")
                 )
+                attach_travel_metadata(result["blocks"], search_result)
                 attach_routes(result, result.get("destination") or "")
     except Exception as exc:  # noqa: BLE001
         result = {"error": str(exc)}
