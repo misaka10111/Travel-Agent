@@ -1314,7 +1314,7 @@ def run_search(input_data: dict) -> dict:
         destination, start, end, origin,
         extra=f"{food_keyword or ''}|{max_price or ''}",
     )
-    cached = _read_cache(cache_key)
+    cached = None if input_data.get("force_refresh") else _read_cache(cache_key)
     if cached is not None:
         return cached
 
