@@ -20,10 +20,15 @@ import json
 import os
 import ssl
 import time
+import sys
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from typing import Any
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shared.pricing import parse_price
 
 import certifi
 
@@ -203,7 +208,7 @@ def search_restaurants(
             rating_raw = business.get("rating")
             cost_raw = business.get("cost")
             rating = float(rating_raw) if rating_raw else None
-            price_per_person = float(cost_raw) if cost_raw else None
+            price_per_person = parse_price(cost_raw)
             business_area = business.get("business_area") or poi.get("business_area") or ""
 
             poi_id = poi.get("id") or ""

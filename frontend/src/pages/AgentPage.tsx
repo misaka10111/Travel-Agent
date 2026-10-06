@@ -90,7 +90,10 @@ const FIXED_QUESTIONS = [
 ] as const;
 
 function parsePrice(value: unknown): number {
-  const n = parseFloat(String(value ?? '').replace(/[^0-9.]/g, ''));
+  const text = String(value ?? '').normalize('NFKC').trim();
+  if (text === '免费' || text === '免票') return 0;
+  const match = text.match(/^(?:¥|RMB|CNY|人民币)?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?:元)?\s*(?:起)?\s*(?:\/(?:晚|人|份|次)|每(?:晚|人|份|次))?$/i);
+  const n = match ? Number(match[1].replace(/,/g, '')) : NaN;
   return Number.isFinite(n) ? n : 0;
 }
 
@@ -1954,6 +1957,9 @@ export function AgentPage() {
                                 <span className="ta-plan-block-price">
                                   ¥ {block.price.toLocaleString()}
                                 </span>
+                              )}
+                              {block.price === null && (
+                                <span className="ta-plan-block-price">价格待确认</span>
                               )}
                               {block.options && block.options.length > 0 && (
                                 <div className="ta-plan-block-options">

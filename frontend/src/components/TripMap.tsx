@@ -12,10 +12,10 @@ export type RouteBlock = {
   name: string;
   note?: string;
   link?: string;
-  price?: number;
+  price?: number | null;
   options?: Array<{
     name: string;
-    price?: number;
+    price?: number | null;
     link?: string;
     lng?: number;
     lat?: number;

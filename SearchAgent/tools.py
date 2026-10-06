@@ -31,6 +31,8 @@ from tavily import TavilyClient
 from amap_service import search_restaurants
 
 BASE_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(BASE_DIR.parent))
+from shared.pricing import parse_price
 load_dotenv(BASE_DIR / ".env")
 
 CACHE_DIR = BASE_DIR / "cache"
@@ -1364,11 +1366,8 @@ def _estimate_food_budget(basic: dict) -> float | None:
     total_budget = basic.get("total_budget")
     if not total_budget:
         return None
-    try:
-        total = float(total_budget)
-    except (TypeError, ValueError):
-        return None
-    if total <= 0:
+    total = parse_price(total_budget)
+    if total is None or total <= 0:
         return None
 
     travelers = 1

@@ -30,6 +30,8 @@ from route_map import attach_routes, geocode, geocode_blocks, strip_geo, _km
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 ROOT = BASE_DIR.parent
+sys.path.insert(0, str(ROOT))
+from shared.pricing import item_price, parse_price, price_sort_key
 SEARCH_PY = ROOT / "SearchAgent" / "search.py"
 SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
 
@@ -1032,14 +1034,11 @@ def _pick_restaurant(
         if district_match:
             candidates = district_match
     if budget_tier in ("豪华", "舒适", "经济"):
-        def price_score(f: dict) -> float:
-            price = f.get("price_per_person")
-            return float(price) if price is not None else 0.0
-
-        if budget_tier == "经济":
-            candidates.sort(key=lambda f: (price_score(f), f.get("rating") is None, -(f.get("rating") or 0)))
-        else:
-            candidates.sort(key=lambda f: (-price_score(f), f.get("rating") is None, -(f.get("rating") or 0)))
+        candidates.sort(key=lambda f: (
+            *price_sort_key(f.get("price_per_person"), descending=budget_tier != "经济"),
+            f.get("rating") is None,
+            -(f.get("rating") or 0),
+        ))
     elif center:
         def distance(f: dict) -> float:
             lng = f.get("longitude")
@@ -1093,15 +1092,16 @@ def _pick_restaurants(
             return float("inf")
         return _km(f"{center[0]},{center[1]}", f"{float(lng)},{float(lat)}")
 
-    if budget_tier == "经济":
-        candidates = [f for f in candidates if 0 < float(f.get("price_per_person") or 0) <= 200] or candidates
-        candidates.sort(key=lambda f: (distance(f), float(f.get("price_per_person") or 0)))
-    elif budget_tier == "舒适":
-        candidates = [f for f in candidates if 200 < float(f.get("price_per_person") or 0) <= 400] or candidates
-        candidates.sort(key=lambda f: (distance(f), abs(float(f.get("price_per_person") or 0) - 400)))
-    elif budget_tier == "豪华":
-        candidates = [f for f in candidates if 400 < float(f.get("price_per_person") or 0) <= 800] or candidates
-        candidates.sort(key=lambda f: (distance(f), abs(float(f.get("price_per_person") or 0) - 800)))
+    if budget_tier in ("经济", "舒适", "豪华"):
+        lower, upper = {"经济": (0, 200), "舒适": (200, 400), "豪华": (400, 800)}[budget_tier]
+        in_tier = [f for f in candidates if (price := parse_price(f.get("price_per_person"))) is not None and lower < price <= upper]
+        candidates = in_tier or candidates
+
+        def score(f):
+            price = parse_price(f.get("price_per_person"))
+            return (price is None, distance(f), (price if budget_tier == "经济" else abs(price - upper)) if price is not None else 0)
+
+        candidates.sort(key=score)
     else:
         candidates.sort(key=lambda f: (distance(f), f.get("rating") is None, -(f.get("rating") or 0)))
     return candidates[:limit]
@@ -1214,7 +1214,7 @@ def _add_food_to_day(
                 options.append(
                     {
                         "name": r.get("name"),
-                        "price": r.get("price_per_person") or 0,
+                        "price": parse_price(r.get("price_per_person")),
                         "link": r.get("poi_detail_url") or r.get("map_url") or r.get("url") or "",
                         "lng": r.get("longitude"),
                         "lat": r.get("latitude"),
@@ -1267,14 +1267,7 @@ def _pick_hotel(
     if not candidates:
         return None
     if budget_tier in ("豪华", "舒适", "经济"):
-        def price_score(h: dict) -> float:
-            price = h.get("price")
-            return float(price) if price is not None else 0.0
-
-        if budget_tier == "经济":
-            candidates.sort(key=price_score)
-        else:
-            candidates.sort(key=lambda h: -price_score(h))
+        candidates.sort(key=lambda h: price_sort_key(h.get("price"), descending=budget_tier != "经济"))
     elif center:
         def distance(h: dict) -> float:
             lng = h.get("longitude")
@@ -1795,22 +1788,20 @@ def _attach_prices(
     total_budget: str | float | None = None,
 ) -> dict:
     """给 blocks 补消费金额。"""
-    price_by_name: dict[str, float] = {}
+    price_by_name: dict[str, float | None] = {}
     for key in ("hotels", "poi", "food", "events", "promotions"):
         items = search_result.get(key)
         if not isinstance(items, list):
             continue
         for item in items:
             name = (item.get("name") or item.get("title") or "").strip()
-            price = item.get("price") or item.get("price_per_person") or item.get("ticketPrice") or 0
-            try:
-                price = float(price)
-            except (TypeError, ValueError):
-                price = 0.0
-            if name and name not in price_by_name:
+            price = item_price(item)
+            if name and (name not in price_by_name or price_by_name[name] is None):
                 price_by_name[name] = price
     for key in ("flights", "trains"):
         items = search_result.get(key)
+        if isinstance(items, dict):
+            items = [*(items.get("outbound") or []), *(items.get("inbound") or [])]
         if not isinstance(items, list):
             continue
         for item in items:
@@ -1818,17 +1809,14 @@ def _attach_prices(
                 name = f"{item.get('airline') or ''}{item.get('flight_no') or ''}"
             else:
                 name = f"{item.get('transport') or ''}{item.get('train_no') or ''}"
-            try:
-                price = float(item.get("price") or 0)
-            except (TypeError, ValueError):
-                price = 0.0
-            if name and name not in price_by_name:
+            price = item_price(item)
+            if name and (name not in price_by_name or price_by_name[name] is None):
                 price_by_name[name] = price
 
     for block in plan.get("blocks") or []:
         name = (block.get("name") or "").strip()
         price = price_by_name.get(name)
-        if price is None and name:
+        if price is None and name and name not in price_by_name:
             best = None
             best_len = 0
             for key, value in price_by_name.items():
@@ -1836,18 +1824,19 @@ def _attach_prices(
                     if len(key) > best_len:
                         best_len = len(key)
                         best = value
-            price = best if best is not None else 0.0
-        block["price"] = price if price is not None else 0.0
+            price = best
+        if block.get("type") == "酒店" and "无住宿" in name:
+            price = 0.0
+        block["price"] = price
+    unknown_ids = [block["id"] for block in plan.get("blocks") or [] if block.get("price") is None]
+    plan["unknown_price_block_ids"] = unknown_ids
     total_cost = round(
-        sum(float(block.get("price") or 0) for block in plan.get("blocks") or []),
+        sum(parse_price(block.get("price")) or 0 for block in plan.get("blocks") or []),
         2,
     )
     plan["total_cost"] = total_cost
-    try:
-        budget = float(total_budget or 0)
-    except (TypeError, ValueError):
-        budget = 0.0
-    plan["budget_status"] = "over" if budget > 0 and total_cost > budget else "ok"
+    budget = parse_price(total_budget) or 0
+    plan["budget_status"] = "over" if budget > 0 and total_cost > budget else ("unknown" if unknown_ids else "ok")
     return plan
 
 

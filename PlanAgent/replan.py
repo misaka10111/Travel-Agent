@@ -8,6 +8,11 @@ Callbacks keep the constraint checks testable without paid/network services.
 from copy import deepcopy
 import math
 import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from shared.pricing import item_price, parse_price
 
 
 class ReplanError(ValueError):
@@ -37,8 +42,7 @@ def clock(value):
 
 
 def amount(value):
-    match = re.search(r"\d+(?:\.\d+)?", str(value if value is not None else ""))
-    return float(match[0]) if match else None
+    return parse_price(value)
 
 
 def travel_rows(search):
@@ -94,8 +98,7 @@ def replacement(block, candidate):
     new["name"] = candidate["name"]
     new["link"] = candidate.get("url") or candidate.get("link") or candidate.get("poi_detail_url") or candidate.get("detail_url") or candidate.get("map_url") or ""
     new["note"] = "根据你的要求重新选择"
-    price = next((candidate[k] for k in ("price", "price_per_person", "ticketPrice") if candidate.get(k) is not None and candidate.get(k) != ""), None)
-    new["price"] = 0.0 if candidate.get("free") is True else amount(price)
+    new["price"] = item_price(candidate)
     new["opening_hours"] = candidate.get("opening_hours") or candidate.get("open_hours") or candidate.get("openHours") or ""
     if candidate.get("_travel"):
         new["time"] = f"{clock(minutes(candidate['dep_time']))}-{clock(minutes(candidate['arr_time']))}"
@@ -325,7 +328,7 @@ def replan_plan(payload, search, choose, attach_routes):
             costs = {}
             unknown_prices = []
             for b in updated["blocks"]:
-                if b.get("price") is None:
+                if amount(b.get("price")) is None:
                     unknown_prices.append(b["id"])
                 costs[b.get("plan_style", "")] = round(costs.get(b.get("plan_style", ""), 0) + (amount(b.get("price")) or 0), 2)
             budget = amount((payload.get("basic") or {}).get("total_budget"))
