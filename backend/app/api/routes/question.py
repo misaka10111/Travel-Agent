@@ -43,9 +43,11 @@ def ask_question(payload: QuestionRequest) -> dict:
             capture_output=True,
             text=True,
             env=_subprocess_env(),
-            timeout=120,
+            timeout=75,
         )
         result = json.loads(proc.stdout)
+        if not isinstance(result, dict):
+            return {"error": "需求识别返回异常，请重新描述旅行需求"}
         if result.get("action") == "explain" and result.get("query"):
             try:
                 web = subprocess.run(
@@ -65,6 +67,8 @@ def ask_question(payload: QuestionRequest) -> dict:
                 result["links"] = []
         return result
     except json.JSONDecodeError:
-        return {"error": (proc.stdout or proc.stderr).strip()}
+        return {"error": "需求识别返回异常，请重新描述旅行需求"}
+    except subprocess.TimeoutExpired:
+        return {"error": "需求识别超时，请重试；已经填写的信息会保留"}
     except Exception as exc:  # noqa: BLE001
         return {"error": str(exc)}

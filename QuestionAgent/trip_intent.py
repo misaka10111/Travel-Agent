@@ -1,8 +1,9 @@
-"""旅行参数校验：保留已知信息，只追问规划仍缺少的必要信息。"""
+"""旅行参数校验与按需问卷：已知信息不重复问，可用自由文本补充。"""
 
 import math
 import re
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 REQUIRED_FIELDS = (
@@ -15,6 +16,11 @@ REQUIRED_FIELDS = (
 )
 TEXT_FIELDS = ("destination", "origin", "food_keyword", "notes")
 LIST_FIELDS = ("purposes", "requested_pois", "budget_tiers")
+_UNSET_TEXT = {"", "不确定", "未确定", "还没定", "待定", "暂未确定", "不知道", "清除"}
+
+
+def local_today() -> date:
+    return datetime.now(ZoneInfo("Asia/Shanghai")).date()
 
 
 def _number(value) -> float | None:
@@ -28,13 +34,31 @@ def _number(value) -> float | None:
     return number if math.isfinite(number) and number > 0 else None
 
 
+def _unset(value) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() in _UNSET_TEXT) or value == []
+
+
+def _valid_date(value, today: date) -> date | None:
+    try:
+        parsed = date.fromisoformat(str(value or ""))
+        return parsed if parsed >= today else None
+    except ValueError:
+        return None
+
+
 def normalize_trip_data(extracted: dict, previous: dict | None = None, today: date | None = None) -> dict:
-    today = today or date.today()
+    """合并本轮明确的修正；null 表示撤销，不把旧值当作最新事实。"""
+    today = today or local_today()
     known = dict(previous or {})
-    known.update({key: value for key, value in extracted.items() if value is not None and value != ""})
+    for key, value in extracted.items():
+        if _unset(value):
+            known.pop(key, None)
+        else:
+            known[key] = value
+
     result = {}
     for key in TEXT_FIELDS:
-        if isinstance(known.get(key), str) and known[key].strip():
+        if isinstance(known.get(key), str) and not _unset(known[key]):
             result[key] = known[key].strip()
     for key in LIST_FIELDS:
         value = known.get(key)
@@ -53,49 +77,109 @@ def normalize_trip_data(extracted: dict, previous: dict | None = None, today: da
     if count and int(count) == count:
         result["travelers"] = f"{int(count)}人"
 
+    # 移动出发日时保留旅行长度；改返程日则重算天数。
+    if "duration_days" in extracted and "end_date" not in extracted:
+        known.pop("end_date", None)
+    if (
+        "end_date" in extracted and _unset(extracted["end_date"]) and "duration_days" not in extracted
+        and not ("start_date" in extracted and _unset(extracted["start_date"]))
+    ):
+        known.pop("duration_days", None)
+    if "start_date" in extracted and "end_date" not in extracted and known.get("duration_days"):
+        known.pop("end_date", None)
     duration = _number(known.get("duration_days"))
     if duration and int(duration) == duration and duration <= 365:
         result["duration_days"] = int(duration)
-    # 用户更新天数后，按新天数重算返程日期，避免沿用旧值。
-    if extracted.get("duration_days") and not extracted.get("end_date"):
-        known.pop("end_date", None)
-    for key in ("start_date", "end_date"):
-        try:
-            parsed = date.fromisoformat(str(known.get(key) or ""))
-            if parsed >= today:
-                result[key] = parsed.isoformat()
-        except ValueError:
-            pass
-    if result.get("start_date"):
-        start = date.fromisoformat(result["start_date"])
-        if result.get("end_date") and result["end_date"] < result["start_date"]:
-            result.pop("end_date")
-        if not result.get("end_date") and result.get("duration_days"):
-            result["end_date"] = (start + timedelta(days=result["duration_days"] - 1)).isoformat()
+    start = _valid_date(known.get("start_date"), today)
+    end = _valid_date(known.get("end_date"), today)
+    if start:
+        result["start_date"] = start.isoformat()
+    if end and (not start or end >= start):
+        result["end_date"] = end.isoformat()
+        if start:
+            result["duration_days"] = (end - start).days + 1
+    elif start and result.get("duration_days") and "end_date" not in extracted:
+        result["end_date"] = (start + timedelta(days=result["duration_days"] - 1)).isoformat()
 
-    if known.get("budget_per_person") and ("budget_per_person" in extracted or "travelers" in extracted) and "total_budget" not in extracted:
+    # 切换成总额后丢弃旧人均值，防止改人数时重算用户明确的总预算。
+    unlimited_values = ("不限", "不设限", "无上限")
+    if extracted.get("budget_unlimited") is True or extracted.get("total_budget") in unlimited_values:
+        known["budget_mode"] = "unlimited"
+        known["budget_unlimited"] = True
         known.pop("total_budget", None)
-    total = _number(known.get("total_budget"))
-    per_person = _number(known.get("budget_per_person"))
-    if per_person:
-        result["budget_per_person"] = per_person
-        if count and not total:
-            total = per_person * int(count)
-    if total:
-        result["total_budget"] = total
-        if result.get("budget_tiers") == ["不设限"]:
-            result.pop("budget_tiers")
-    unlimited = known.get("budget_unlimited") is True or known.get("total_budget") in ("不限", "不设限")
-    if extracted.get("total_budget") and _number(extracted["total_budget"]):
-        unlimited = False
-    if unlimited:
-        result["budget_unlimited"] = True
-        result.pop("total_budget", None)
-        result["budget_tiers"] = ["不设限"]
+        known.pop("budget_per_person", None)
+    elif _number(extracted.get("total_budget")) or ("total_budget" in extracted and "budget_per_person" not in extracted):
+        known.pop("budget_per_person", None)
+        known.pop("budget_unlimited", None)
+        known["budget_mode"] = "total"
+    elif "budget_per_person" in extracted:
+        known.pop("total_budget", None)
+        known.pop("budget_unlimited", None)
+        known["budget_mode"] = "per_person"
+    elif "budget_unlimited" in extracted and extracted["budget_unlimited"] is not True:
+        known.pop("budget_unlimited", None)
+        if known.get("budget_mode") == "unlimited":
+            known.pop("budget_mode", None)
+    mode = known.get("budget_mode")
+    if mode not in ("total", "per_person", "unlimited"):
+        mode = "unlimited" if known.get("budget_unlimited") is True else "per_person" if _number(known.get("budget_per_person")) else "total"
+    if mode == "unlimited" and known.get("budget_unlimited") is True:
+        result.update(budget_unlimited=True, budget_mode="unlimited", budget_tiers=["不设限"])
+    elif mode == "per_person":
+        per_person = _number(known.get("budget_per_person"))
+        if per_person:
+            result.update(budget_per_person=per_person, budget_mode="per_person")
+            if result.get("travelers"):
+                result["total_budget"] = per_person * int(count)
+    else:
+        total = _number(known.get("total_budget"))
+        if total:
+            result.update(total_budget=total, budget_mode="total")
+    if not result.get("budget_unlimited") and result.get("budget_tiers") == ["不设限"]:
+        result.pop("budget_tiers")
     return result
 
 
-def complete_trip_request(extracted: dict, previous: dict | None = None, today: date | None = None) -> dict:
+def _fallback_question(field: str, data: dict, today: date) -> dict:
+    destination = data.get("destination")
+    if field == "destination":
+        return {"field": field, "question": "这次想去哪个城市或地区？", "options": []}
+    if field == "start_date":
+        tomorrow = today + timedelta(days=1)
+        saturday = today + timedelta(days=(5 - today.weekday()) % 7 or 7)
+        return {"field": field, "question": f"计划什么时候出发{'去' + destination if destination else ''}？", "options": [f"明天（{tomorrow.isoformat()}）", f"周末（{saturday.isoformat()}）", f"下周末（{(saturday + timedelta(days=7)).isoformat()}）"]}
+    if field == "end_date":
+        return {"field": field, "question": "计划玩几天，或者哪天返程？", "options": ["2天", "3天", "5天"]}
+    if field == "origin":
+        return {"field": field, "question": "从哪个城市出发？", "options": []}
+    if field == "travelers":
+        return {"field": field, "question": "这次共有几个人出行？成人和孩子都要算上。", "options": ["1人", "2人", "3人", "4人"]}
+    people = _number(str(data.get("travelers", "")).removesuffix("人")) or 1
+    days = data.get("duration_days") or 3
+    base = int(math.ceil(people * days * 500 / 500) * 500)
+    return {"field": field, "question": "这次旅行的预算是多少？可以填所有人的总预算、每人预算，或不限。", "options": [f"总预算{base}元", f"总预算{base * 2}元", "预算不限"]}
+
+
+def _questions(missing: list[str], data: dict, suggestions, today: date) -> list[dict]:
+    # 模型只负责措辞和候选，实际缺项由代码决定。
+    by_field = {}
+    for item in suggestions if isinstance(suggestions, list) else []:
+        if not isinstance(item, dict) or item.get("field") not in missing:
+            continue
+        field = item["field"]
+        if field in by_field:
+            continue
+        question = item.get("question")
+        options = item.get("options")
+        if not isinstance(question, str) or not question.strip():
+            continue
+        clean_options = list(dict.fromkeys(v.strip() for v in options if isinstance(v, str) and v.strip()))[:4] if isinstance(options, list) else []
+        by_field[field] = {"field": field, "question": question.strip()[:200], "options": clean_options}
+    return [by_field.get(field) or _fallback_question(field, data, today) for field in missing[:3]]
+
+
+def complete_trip_request(extracted: dict, previous: dict | None = None, today: date | None = None, questions=None) -> dict:
+    today = today or local_today()
     data = normalize_trip_data(extracted, previous, today)
     missing = [
         field for field, _ in REQUIRED_FIELDS
@@ -104,13 +188,13 @@ def complete_trip_request(extracted: dict, previous: dict | None = None, today: 
         and not (field == "end_date" and not data.get("start_date") and data.get("duration_days"))
     ]
     if not missing:
-        return {"action": "plan", "data": data}
-    labels = [label for field, label in REQUIRED_FIELDS if field in missing]
+        return {"action": "confirm_trip", "data": data}
     return {
         "action": "ask",
         "field": "trip_details",
         "missing": missing,
         "data": data,
-        "question": f"还需要补充：{'、'.join(labels)}。直接用文字告诉我即可，也可以一次补充多项。",
+        "question": "补充下面必要的信息就可以开始规划。选一个建议，或直接填写；也可以在聊天框一次说完整。",
+        "questions": _questions(missing, data, questions, today),
         "options": [],
     }

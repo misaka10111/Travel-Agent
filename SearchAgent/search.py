@@ -5,6 +5,8 @@
 
 用法（自然语言输入，会先用 LLM 解析成 JSON）：
   python search.py "宁波 10月1日到10月5日"
+
+餐厅第二阶段：以 JSON 输入已排定的餐点景点锚点，运行 search.py --food-nearby。
 """
 
 import json
@@ -47,7 +49,7 @@ def parse_nl(query: str) -> dict:
         kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
     client = OpenAI(**kwargs)
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
         messages=[
             {"role": "system", "content": PARSE_SYSTEM_PROMPT},
             {"role": "user", "content": query},

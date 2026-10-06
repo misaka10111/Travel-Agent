@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -34,10 +35,10 @@ from amap_service import (  # noqa: E402
 
 
 def _has_amap_key() -> bool:
-    return bool(os.getenv("AMAP_KEY"))
+    return bool(os.getenv("AMAP_KEY")) and os.getenv("RUN_AMAP_INTEGRATION_TESTS") == "1"
 
 
-@unittest.skipUnless(_has_amap_key(), "未配置 AMAP_KEY，跳过网络测试")
+@unittest.skipUnless(_has_amap_key(), "设置 RUN_AMAP_INTEGRATION_TESTS=1 才运行真实高德测试")
 class TestAmapRestaurantSearch(unittest.TestCase):
     """高德地图餐厅搜索集成测试。"""
 
@@ -163,6 +164,25 @@ class TestRestaurantInfoLocal(unittest.TestCase):
         self.assertEqual(get.call_args.kwargs["location"], "120.15,30.27")
         self.assertEqual(get.call_args.kwargs["radius"], 5000)
 
+    def test_lunch_search_excludes_drinks_and_pastries_by_classification(self):
+        categories = ["冷饮店", "饮品店", "奶茶店", "咖啡厅", "果汁店", "甜品店", "甜点店",
+                      "冰淇淋店", "糕饼店", "糕点店", "蛋糕店", "面包店", "烘焙店", "茶艺馆"]
+        pois = [{"id": f"B0BAD{i}", "name": "1点点(九溪烟树店)" if i == 0 else f"饮品糕点{i}",
+                 "location": "120.151,30.271", "type": f"餐饮服务;{category}"}
+                for i, category in enumerate(categories)]
+        with patch("amap_service._get", return_value={"pois": pois}):
+            self.assertEqual(search_restaurants("杭州", location="120.15,30.27", limit=25), [])
+
+    def test_meal_classification_keeps_noodles_fast_food_and_tea_named_restaurants(self):
+        entries = [("小吃面馆", "小吃店"), ("快餐饭店", "快餐厅"), ("面馆", "中餐厅"),
+                   ("茶字中餐馆", "中餐厅;杭帮菜"), ("港式茶餐厅", "茶餐厅"),
+                   ("啡尝卷·花园餐厅", "中餐厅")]
+        pois = [{"id": f"B0GOOD{i}", "name": name, "location": "120.151,30.271", "type": f"餐饮服务;{category}"}
+                for i, (name, category) in enumerate(entries)]
+        with patch("amap_service._get", return_value={"pois": pois}):
+            found = search_restaurants("杭州", location="120.15,30.27", limit=25)
+        self.assertEqual({item.name for item in found}, {name for name, _ in entries})
+
 
 class TestFetchFoodFallback(unittest.TestCase):
     """验证 tools._fetch_food 在高德失败时回退到 Tavily。"""
@@ -199,7 +219,8 @@ class TestFetchFoodFallback(unittest.TestCase):
                 for i in range(2)
             ]
 
-        with patch("tools._fetch_food", side_effect=fetch) as mocked:
+        with patch("tools._fetch_food", side_effect=fetch) as mocked, \
+             patch("tools._read_cache", return_value=None), patch("tools._write_cache"):
             result = tools.run_food_search({
                 "destination": "杭州",
                 "anchors": [{"day": 1, "meal": "午餐", "longitude": 120.15, "latitude": 30.27}],
@@ -208,6 +229,175 @@ class TestFetchFoodFallback(unittest.TestCase):
         options = result["food_by_anchor"][0]["restaurants"]
         self.assertEqual(len(options), 4)
         self.assertEqual(result["food_by_anchor"][0]["meal"], "午餐")
+
+    def test_nearby_does_not_fall_back_to_citywide_web_results(self):
+        import tools
+        with patch("tools.search_restaurants", side_effect=RuntimeError("unavailable")), \
+             patch("tools._fetch_web_search") as web:
+            result = tools._fetch_food("杭州", location="120.15,30.27")
+        self.assertEqual(result, [])
+        web.assert_not_called()
+
+    def test_invalid_anchor_is_not_searched(self):
+        import tools
+        with patch("tools._fetch_food") as fetch:
+            result = tools.run_food_search({
+                "destination": "杭州",
+                "anchors": [{"day": 1, "meal": "午餐"}, {"longitude": 0, "latitude": 0}],
+            })
+        self.assertEqual(result["food_by_anchor"], [])
+        fetch.assert_not_called()
+
+    def test_food_budget_uses_actual_days_and_people(self):
+        import tools
+        budget = tools._estimate_food_budget({
+            "total_budget": 3600, "travelers": "2人", "days": 3,
+        })
+        self.assertEqual(budget, 50)
+
+    def test_first_search_defers_restaurants_until_plan_exists(self):
+        import tools
+        with patch("tools._read_cache", return_value=None), patch("tools._write_cache"), \
+             patch("tools._fetch_weather", return_value={}), \
+             patch("tools._fetch_hotels", return_value=[]), \
+             patch("tools._fetch_poi_distributed", return_value=[]), \
+             patch("tools._fetch_events", return_value=[]), \
+             patch("tools._fetch_social_food", return_value=[]), \
+             patch("tools._fetch_food") as food:
+            result = tools.run_search({"destination": "杭州", "start_date": "2026-10-10"})
+        food.assert_not_called()
+        self.assertEqual(result["food"], [])
+        self.assertTrue(result["food_search_pending"])
+
+    def test_repeated_anchors_are_deduplicated_and_searched_concurrently(self):
+        import tools
+        barrier = threading.Barrier(3)
+        def fetch(_city, _keyword, _price, **kwargs):
+            barrier.wait(timeout=2)
+            return [{"poi_id": f"{kwargs['location']}-{i}", "name": f"餐厅{i}"} for i in range(6)]
+        anchors = [
+            {"day": 1, "meal": "午餐", "longitude": 120.15, "latitude": 30.27},
+            {"day": 1, "meal": "晚餐", "longitude": 120.16, "latitude": 30.28},
+            {"day": 2, "meal": "午餐", "longitude": 120.15, "latitude": 30.27},
+            {"day": 2, "meal": "晚餐", "longitude": 120.17, "latitude": 30.29},
+        ]
+        with patch("tools._fetch_food", side_effect=fetch) as mocked, \
+             patch("tools._read_cache", return_value=None), patch("tools._write_cache"):
+            result = tools.run_food_search({"destination": "杭州", "anchors": anchors})
+        self.assertEqual(mocked.call_count, 3)
+        self.assertEqual([item["day"] for item in result["food_by_anchor"]], [1, 1, 2, 2])
+        self.assertEqual(result["food_by_anchor"][0]["restaurants"], result["food_by_anchor"][2]["restaurants"])
+
+    def test_cuisine_keyword_falls_back_to_same_nearby_radius(self):
+        import tools
+        nearby = [{"poi_id": f"{i}", "name": f"真实餐厅{i}", "cuisine": "江浙菜"} for i in range(6)]
+        with patch("tools._fetch_food", side_effect=[[], nearby]) as fetch, \
+             patch("tools._read_cache", return_value=None), patch("tools._write_cache"):
+            result = tools.run_food_search({
+                "destination": "杭州", "basic": {"food_keyword": "杭帮菜"},
+                "anchors": [{"longitude": 120.15, "latitude": 30.27}],
+            })
+        self.assertEqual([call.args[1] for call in fetch.call_args_list], ["杭帮菜", None])
+        self.assertEqual([call.kwargs["radius"] for call in fetch.call_args_list], [1500, 1500])
+        self.assertTrue(all(call.kwargs["location"] == "120.15,30.27" for call in fetch.call_args_list))
+        self.assertEqual(result["food_by_anchor"][0]["restaurants"][0]["cuisine"], "江浙菜")
+
+    def test_nearby_meal_cache_uses_new_classification_version(self):
+        import tools
+        nearby = [{"poi_id": f"{i}", "name": f"真实餐厅{i}"} for i in range(6)]
+        with patch("tools._cache_key", wraps=tools._cache_key) as key, \
+             patch("tools._read_cache", return_value=None), patch("tools._write_cache"), \
+             patch("tools._fetch_food", return_value=nearby):
+            tools.run_food_search({"destination": "杭州", "anchors": [{"longitude": 120.15, "latitude": 30.27}]})
+        self.assertEqual(key.call_args.args[1], "food-nearby-v2-meals")
+
+
+class TestSearchOrchestrationLocal(unittest.TestCase):
+    def test_search_cache_is_scoped_to_profile_and_requested_pois(self):
+        import tools
+        with patch("tools._read_cache", return_value=None) as cache, patch("tools._write_cache"), \
+             patch("tools._fetch_weather", return_value={}), patch("tools._fetch_hotels", return_value=[]), \
+             patch("tools._fetch_events", return_value=[]), patch("tools._fetch_social_food", return_value=[]), \
+             patch("tools._fetch_poi_distributed", return_value=[]) as poi:
+            base = {"destination": "杭州", "start_date": "2026-10-16", "end_date": "2026-10-17"}
+            tools.run_search({**base, "profile": {"travel_style": ["自然风光"]}})
+            tools.run_search({**base, "profile": {"travel_style": ["深度文化"]}})
+            tools.run_search({**base, "profile": {"travel_style": ["深度文化"]}, "basic": {"requested_pois": ["浙江省博物馆"]}})
+        self.assertEqual(len({call.args[0] for call in cache.call_args_list}), 3)
+        self.assertIn("浙江省博物馆", poi.call_args.kwargs["extra_keywords"])
+
+    def test_actual_dates_and_basic_food_keyword_are_used(self):
+        import tools
+        with patch("tools._read_cache", return_value=None), patch("tools._write_cache"), \
+             patch("tools._fetch_weather", return_value={}), patch("tools._fetch_hotels", return_value=[]), \
+             patch("tools._fetch_events", return_value=[]), patch("tools._fetch_social_food", return_value=[]), \
+             patch("tools._fetch_poi_distributed", return_value=[]), \
+             patch("tools._estimate_food_budget", wraps=tools._estimate_food_budget) as budget:
+            result = tools.run_search({
+                "destination": "杭州", "start_date": "2026-10-16", "end_date": "2026-10-17",
+                "basic": {"total_budget": 4000, "travelers": "2人", "food_keyword": "杭帮菜"},
+            })
+        self.assertEqual(result["food_keyword"], "杭帮菜")
+        self.assertEqual(tools._estimate_food_budget(budget.call_args.args[0]), 83)
+
+    def test_poi_queries_are_concurrent_and_one_failure_keeps_other_results(self):
+        import tools
+        barrier = threading.Barrier(6)
+        lock = threading.Lock()
+        calls = 0
+        def search(_city, **kwargs):
+            nonlocal calls
+            with lock:
+                calls += 1
+                position = calls
+            if position <= 6:
+                barrier.wait(timeout=2)
+            if kwargs.get("category") == "宗教场所":
+                raise RuntimeError("一个来源不可用")
+            return [{"name": f"景点{position}", "district": "西湖区"}]
+        with patch("tools._search_poi_items", side_effect=search), \
+             patch("tools._extract_poi_features", side_effect=lambda items: items):
+            result = tools._fetch_poi_distributed("杭州")
+        self.assertEqual(calls, 14)
+        self.assertEqual(len(result), 13)
+
+    def test_return_transport_remains_when_outbound_fails(self):
+        import tools
+        barrier = threading.Barrier(2)
+        def fetch(origin, destination, day, **kwargs):
+            barrier.wait(timeout=2)
+            if origin == "上海":
+                raise RuntimeError("去程不可用")
+            return [{"train_no": "G123"}]
+        result = tools._fetch_round_trip(fetch, "上海", "杭州", "2026-10-16", "2026-10-17")
+        self.assertEqual(result, [{"train_no": "G123", "direction": "回"}])
+
+    def test_day_trip_still_searches_return_transport(self):
+        import tools
+        with patch("tools._fetch_trains", return_value=[{"train_no": "G123"}]) as fetch:
+            # 每次调用必须返回独立记录，避免 mock 的共享对象被 direction 改写。
+            fetch.side_effect = lambda *_args, **_kwargs: [{"train_no": "G123"}]
+            result = tools._fetch_round_trip(tools._fetch_trains, "上海", "杭州", "2026-10-16", "2026-10-16")
+        self.assertEqual(fetch.call_count, 2)
+        self.assertEqual([item["direction"] for item in result], ["去", "回"])
+
+    def test_day_trip_does_not_search_zero_night_hotels(self):
+        import tools
+        with patch("tools._read_cache", return_value=None), patch("tools._write_cache"), \
+             patch("tools._fetch_weather", return_value={}), patch("tools._fetch_hotels") as hotels, \
+             patch("tools._fetch_events", return_value=[]), patch("tools._fetch_social_food", return_value=[]), \
+             patch("tools._fetch_poi_distributed", return_value=[]):
+            result = tools.run_search({"destination": "杭州", "start_date": "2026-10-16"})
+        hotels.assert_not_called()
+        self.assertEqual(result["hotels"], [])
+
+    def test_repeated_filtered_amap_pages_are_bounded(self):
+        import amap_service
+        coffee = {"name": "咖啡", "location": "120.15,30.27", "type": "餐饮服务;咖啡厅"}
+        with patch("amap_service._get", return_value={"pois": [coffee] * 25}) as get:
+            result = amap_service.search_restaurants("杭州", location="120.15,30.27", limit=25)
+        self.assertEqual(result, [])
+        self.assertEqual(get.call_count, 3)
 
 
 if __name__ == "__main__":

@@ -3,7 +3,7 @@
 图结构：
   START → search → plan → validate
             validate --通过/达到最大轮数--> END
-            validate --不通过--> plan（携带 feedback 重新生成）
+            validate --存在可修复严重问题--> plan（携带 feedback，至多修正一次）
 
 用法：
   echo '{"destination":"宁波","start_date":"2026-10-01","end_date":"2026-10-03","profile":{...},"basic":{...},"answers":[...]}' \
@@ -14,6 +14,7 @@
 """
 
 import json
+from copy import deepcopy
 import hashlib
 import os
 import subprocess
@@ -35,7 +36,7 @@ PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
 VALIDATE_PY = ROOT / "ValidateAgent" / "validate.py"
 VALIDATE_PYTHON = ROOT / "ValidateAgent" / ".venv" / "bin" / "python"
 
-MAX_ITERATIONS = 1
+MAX_ITERATIONS = 2
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://127.0.0.1:8000/api")
 
@@ -218,13 +219,9 @@ def search_node(state: State) -> dict:
         payload["food_keyword"] = basic["food_keyword"]
     if state.get("profile"):
         payload["profile"] = state.get("profile")
-    # 把用户画像里的预算、人数、旅行目的传给搜索，用于餐饮搜索的菜系/预算过滤
+    # 保留完整需求，搜索与规划使用同一套人数、日期、预算和偏好。
     if basic:
-        payload["basic"] = {
-            k: basic.get(k)
-            for k in ("total_budget", "travelers", "purposes")
-            if basic.get(k)
-        }
+        payload["basic"] = {**basic, "start_date": state["start_date"], "end_date": state.get("end_date")}
     result = _call(SEARCH_PYTHON, SEARCH_PY, payload)
     return {"search": result}
 
@@ -245,16 +242,53 @@ def plan_node(state: State) -> dict:
     if state.get("modify"):
         payload["modify"] = state["modify"]
     result = _call(PLAN_PYTHON, PLAN_PY, payload)
-    return {"plan": result, "iteration": state.get("iteration", 0) + 1}
+    search = dict(state.get("search") or {})
+    if isinstance(result.get("food"), list):
+        search["food"] = result["food"]
+        search["food_by_anchor"] = result.get("food_by_anchor") or []
+    return {"plan": result, "search": search, "iteration": state.get("iteration", 0) + 1}
 
 
 def _plan_for_validate(plan: dict | None) -> dict | None:
-    """折线只给前端画图用，送审时去掉，只保留每段路线的方式和耗时。"""
-    if not isinstance(plan, dict) or not plan.get("legs"):
+    """审核实际选择和交通耗时，不重复发送地图折线或全部备选餐厅。"""
+    if not isinstance(plan, dict):
         return plan
-    trimmed = dict(plan)
-    trimmed["legs"] = [{k: v for k, v in leg.items() if k != "polyline"} for leg in plan["legs"]]
+    trimmed = deepcopy(plan)
+    trimmed.pop("food", None)
+    trimmed.pop("food_by_anchor", None)
+    trimmed["legs"] = [{k: v for k, v in leg.items() if k != "polyline"} for leg in plan.get("legs") or []]
+    for block in trimmed.get("blocks") or []:
+        block.pop("options", None)
+    for style in trimmed.get("plans") or []:
+        for day in style.get("itinerary") or []:
+            for item in day.get("schedule") or []:
+                item.pop("options", None)
     return trimmed
+
+
+def _search_for_validate(search: dict | None, plan: dict | None) -> dict:
+    """保留天气与已选资源的来源信息，减少无关候选带来的审核等待。"""
+    search = search or {}
+    names = {str(block.get("name") or "") for block in (plan or {}).get("blocks") or []}
+    compact = {key: deepcopy(search[key]) for key in ("destination", "start_date", "end_date", "weather") if key in search}
+    for key in ("poi", "hotels", "food", "events", "flights", "trains"):
+        value = search.get(key)
+        if isinstance(value, list):
+            compact[key] = [item for item in value if isinstance(item, dict) and str(item.get("name") or item.get("title") or "") in names]
+        elif isinstance(value, dict) and key in ("flights", "trains"):
+            compact[key] = {direction: items[:5] for direction, items in value.items() if isinstance(items, list)}
+    return compact
+
+
+def _high_actionable_issues(audit: dict | None) -> list[dict]:
+    """仅返回能够用现有行程/候选修复的严重问题；轻微建议不触发重跑。"""
+    if not isinstance(audit, dict) or not isinstance(audit.get("issues"), list):
+        return []
+    return [issue for issue in audit["issues"] if isinstance(issue, dict)
+            and str(issue.get("severity") or "").strip().lower() == "high"
+            and issue.get("actionable") is not False
+            and isinstance(issue.get("detail"), str) and issue["detail"].strip()
+            and isinstance(issue.get("suggestion"), str) and issue["suggestion"].strip()]
 
 
 def validate_node(state: State) -> dict:
@@ -266,28 +300,48 @@ def validate_node(state: State) -> dict:
             "profile": state.get("profile"),
             "preferences": state.get("preferences"),
             "recent_trips": state.get("recent_trips"),
-            "search": state.get("search"),
+            "search": _search_for_validate(state.get("search"), state.get("plan")),
             "basic": state.get("basic"),
             "answers": state.get("answers"),
         },
     )
+    if not isinstance(result, dict) or not isinstance(result.get("passed"), bool):
+        error = (result.get("error") if isinstance(result, dict) else None) or "审核结果不可用"
+        result = {"passed": False, "issues": [], "feedback": "审核未返回有效结论", "error": error}
+    elif result.get("error"):
+        # 服务错误不是有效审核结论，不能报告已经通过。
+        result = {**result, "passed": False}
     history = list(state.get("history") or [])
     history.append(
         {
             "iteration": state.get("iteration", 0),
             "passed": result.get("passed"),
             "issues": result.get("issues"),
+            **({"error": result["error"]} if result.get("error") else {}),
         }
     )
+    high_issues = _high_actionable_issues(result)
+    feedback = None
+    if result.get("passed") is False and not result.get("error") and high_issues:
+        feedback = (
+            "审核发现以下有证据、影响执行且可修复的严重问题。请针对这些问题重新规划，"
+            "保持用户的目的地、日期、硬预算、必去地点及偏好，使用已有真实候选；"
+            "不要把轻微优化建议当成新增硬约束，也不要捏造未知报价。严重问题："
+            + json.dumps(high_issues, ensure_ascii=False)
+        )
     return {
         "audit": result,
         "history": history,
-        "feedback": result.get("feedback"),
+        "feedback": feedback,
     }
 
 
 def should_continue(state: State) -> str:
-    if state.get("audit", {}).get("passed") or state.get("iteration", 0) >= MAX_ITERATIONS:
+    audit = state.get("audit") or {}
+    if (audit.get("error") or audit.get("passed") is not False
+            or (state.get("plan") or {}).get("error")
+            or state.get("iteration", 0) >= MAX_ITERATIONS
+            or not _high_actionable_issues(audit)):
         return "end"
     return "plan"
 
@@ -347,6 +401,7 @@ def _result_output(result: dict, data: dict) -> dict:
         "search": result.get("search"),
         "plan": result.get("plan"),
         "passed": (result.get("audit") or {}).get("passed"),
+        "audit": result.get("audit"),
         "history": result.get("history"),
         "saved_memory": saved_memory,
     }

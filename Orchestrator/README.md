@@ -1,11 +1,12 @@
 # Orchestrator - 多 Agent 编排
 
-用 LangGraph 把四个 agent 串成一条流水线：
+用 LangGraph 把三个 agent 串成一条流水线：
 
 ```text
-search → questionnaire → plan → validate
-                              ↑       │
-                              └─不通过─┘（携带 feedback，最多 3 轮）
+search ─┐
+        ├→ plan → validate
+prepare_memory ─┘    ↑       │
+                     └─不通过─┘（携带 feedback，最多 1 轮）
 ```
 
 ## 安装

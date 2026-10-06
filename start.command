@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 if lsof -ti :8000 >/dev/null 2>&1; then
   echo "✅ 后端已在运行，跳过"
 else
-  nohup backend/.venv/bin/uvicorn app.main:app --port 8000 --reload > /tmp/ta-backend.log 2>&1 &
+  (cd backend && nohup .venv/bin/uvicorn app.main:app --port 8000 --reload > /tmp/ta-backend.log 2>&1 &)
   disown
   echo "⏳ 后端启动中...（日志: /tmp/ta-backend.log）"
 fi

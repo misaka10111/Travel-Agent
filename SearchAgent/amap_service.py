@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import ssl
 import time
@@ -39,8 +40,25 @@ BAD_FOOD_KEYWORDS = (
     "休闲场所",
     "美容美发",
     "茶艺馆",
-    "咖啡厅",
-    "星巴克咖啡",
+    "茶馆",
+    "茶室",
+    "茶饮",
+    "咖啡",
+    "饮品",
+    "奶茶",
+    "果汁",
+    "冷饮",
+    "甜品",
+    "甜点",
+    "冰淇淋",
+    "冰激凌",
+    "雪糕",
+    "糕饼",
+    "糕点",
+    "蛋糕",
+    "面包店",
+    "面包房",
+    "烘焙",
 )
 
 
@@ -160,7 +178,9 @@ def search_restaurants(
     page_size = min(25, max(1, limit))
     first_error: Exception | None = None
 
-    while len(results) < limit:
+    # 过滤咖啡/茶馆或上游重复页时，避免无限翻页拖住餐点搜索。
+    max_pages = min(8, max(2, math.ceil(max(1, limit) / 25) + 2))
+    while len(results) < limit and page_num <= max_pages:
         params: dict[str, Any] = {
             "types": FOOD_TYPES,
             "page_size": page_size,
@@ -168,7 +188,11 @@ def search_restaurants(
             "show_fields": "business",
         }
         if location:
-            params.update({"location": location, "radius": max(500, min(radius, 5000))})
+            params.update({
+                "location": location,
+                "radius": max(500, min(radius, 5000)),
+                "sortrule": "distance",
+            })
         else:
             params.update({"region": city, "city_limit": "true"})
         if keyword:
@@ -194,6 +218,8 @@ def search_restaurants(
                 lat = float(lat_s)
             except ValueError:
                 continue
+            if not (-180 <= lng <= 180 and -90 <= lat <= 90) or (lng == 0 and lat == 0):
+                continue
 
             name = poi.get("name") or ""
             if not name or name in seen_names:
@@ -208,8 +234,15 @@ def search_restaurants(
             business = poi.get("business") or {}
             rating_raw = business.get("rating")
             cost_raw = business.get("cost")
-            rating = float(rating_raw) if rating_raw else None
-            price_per_person = float(cost_raw) if cost_raw else None
+            def positive_number(value: Any) -> float | None:
+                try:
+                    number = float(value)
+                    return number if math.isfinite(number) and number > 0 else None
+                except (TypeError, ValueError):
+                    return None
+
+            rating = positive_number(rating_raw)
+            price_per_person = positive_number(cost_raw)
             business_area = business.get("business_area") or poi.get("business_area") or ""
 
             poi_id = poi.get("id") or ""

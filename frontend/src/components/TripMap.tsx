@@ -13,6 +13,15 @@ export type RouteBlock = {
   note?: string;
   link?: string;
   price?: number;
+  price_known?: boolean;
+  meal?: string;
+  anchor_name?: string;
+  selected_option?: string;
+  source_option_id?: string;
+  distance_m?: number;
+  walking_distance_m?: number | null;
+  walking_duration_s?: number | null;
+  walking_origin?: string | null;
   options?: Array<{
     name: string;
     price?: number;
@@ -23,6 +32,10 @@ export type RouteBlock = {
     cuisine?: string;
     business_area?: string;
     distance_km?: number | null;
+    distance_m?: number;
+    walking_distance_m?: number | null;
+    walking_duration_s?: number | null;
+    walking_origin?: string | null;
   }>;
   lng?: number;
   lat?: number;

@@ -2328,6 +2328,69 @@ button:disabled {
   color: #4356e8;
 }
 
+.ta-trip-question {
+  padding: 0;
+  margin: 12px 0;
+  border: 0;
+  min-width: 0;
+}
+
+.ta-trip-question legend {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 7px;
+}
+
+.ta-trip-question input,
+.ta-clarify-row select {
+  width: 100%;
+  border: 1px solid #dce3f0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+  margin-top: 6px;
+  background: #fff;
+}
+
+.ta-question-hint {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ta-plan-select-button {
+  border: 1px solid #cdd5f5;
+  border-radius: 8px;
+  background: white;
+  color: #4555cf;
+  padding: 5px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ta-plan-select-button[aria-pressed="true"] { background: #4d63ee; color: white; }
+.ta-plan-select-button:disabled { opacity: .55; cursor: default; }
+.ta-selection-hint {
+  grid-column: 1 / -1;
+  flex: 0 0 100%;
+  color: #4356e8;
+  font-size: 12px;
+  padding-bottom: 8px;
+}
+
+.ta-trip-questions {
+  max-height: 48vh;
+  overflow-y: auto;
+}
+
+.ta-selection-hint button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  margin-left: 8px;
+}
+
 .ta-plan-detail-total {
   flex: 0 0 auto;
   margin-bottom: 8px;

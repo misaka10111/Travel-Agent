@@ -65,10 +65,13 @@ export const api = {
     basic?: unknown;
     answers?: unknown[];
     modify?: unknown;
-  }) =>
+    plan?: unknown;
+    search?: unknown;
+  }, signal?: AbortSignal) =>
     request<Record<string, unknown>>('/plan', {
       method: 'POST',
       body: JSON.stringify(payload),
+      signal,
     }),
   chat: (messages: ChatMessage[]) =>
     request<ChatResponse>('/agent/chat', {
@@ -114,9 +117,10 @@ export const api = {
     messages: ChatMessage[];
     has_plan?: boolean;
     trip_data?: Record<string, unknown>;
-  }) =>
+  }, signal?: AbortSignal) =>
     request<Record<string, unknown>>('/question', {
       method: 'POST',
       body: JSON.stringify(payload),
+      signal,
     }),
 };
