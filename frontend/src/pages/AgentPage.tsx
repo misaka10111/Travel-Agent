@@ -699,10 +699,28 @@ export function AgentPage() {
     if (!snapshot || !expandedStyle || selectedBlocks.size === 0 || replanControllerRef.current) return;
     const targets = snapshot.blocks.filter((b) => selectedBlocks.has(b.id) && b.plan_style === expandedStyle);
     if (!targets.length) return;
+    const missingMeals: string[] = [];
+    const requestBlocks = snapshot.blocks.map((block) => {
+      if (block.plan_style !== expandedStyle || block.note !== '餐饮推荐' || selectedBlocks.has(block.id)) return block;
+      const choice = selectedFoodPoints.find((point) => point.id.startsWith(`food-${block.id}::`));
+      if (!choice) {
+        missingMeals.push(`第${block.day}天的${block.name}`);
+        return block;
+      }
+      return { ...block, name: choice.name, note: '用户选择的餐厅', options: undefined,
+        price: choice.price ?? null, link: choice.link, lng: choice.lng, lat: choice.lat };
+    });
+    if (missingMeals.length) {
+      setDraft('');
+      setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
+      addAssistantMessage(`请先为${missingMeals.join('、')}各选一家餐厅，再重新规划，以便检查真实交通时间。原因已保留在聊天记录中。`);
+      return;
+    }
     const controller = new AbortController();
     replanControllerRef.current = controller;
     setReplanning(true);
     setPlanning(true);
+    setDraft('');
     setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
     addAssistantMessage(`正在重新规划「${targets.map((b) => b.name).join('、')}」，并检查后续安排…`);
     try {
@@ -711,7 +729,7 @@ export function AgentPage() {
       try { profile = JSON.parse(localStorage.getItem('userProfile') || 'null'); } catch { /* 使用空画像 */ }
       try { basic = JSON.parse(localStorage.getItem('tripInfo') || 'null'); } catch { /* 使用空旅行信息 */ }
       const result = await api.replan({
-        plan: snapshot,
+        plan: { ...snapshot, blocks: requestBlocks },
         revision: snapshot.revision ?? 0,
         plan_style: expandedStyle,
         target_block_ids: targets.map((b) => b.id),
@@ -741,7 +759,6 @@ export function AgentPage() {
       });
       setSelectedBlocks(new Set());
       setSelectedFoodPoints([]);
-      setDraft('');
       setConfirmedStyle(null);
       setPlanRating(null);
       setPlanFeedback('');
@@ -756,8 +773,8 @@ export function AgentPage() {
       });
     } catch (error) {
       updateLastAssistantMessage((error as Error).name === 'AbortError'
-        ? '已停止重新规划，原方案和输入原因已保留。'
-        : `重新规划失败：${error instanceof Error ? error.message : String(error)}。原方案和输入原因已保留。`);
+        ? '已停止重新规划，原方案已保留，原因可在聊天记录中查看。'
+        : `重新规划失败：${error instanceof Error ? error.message : String(error)}。原因可在聊天记录中查看。`);
     } finally {
       if (replanControllerRef.current === controller) {
         replanControllerRef.current = null;
@@ -1496,20 +1513,23 @@ export function AgentPage() {
 
   function toggleFoodOption(block: RouteBlock, option: NonNullable<RouteBlock['options']>[number]) {
     setSelectedFoodPoints((prev) => {
-      const exists = prev.some((point) => point.id === `food-${option.name}`);
+      const optionId = `food-${block.id}::${option.name}`;
+      const exists = prev.some((point) => point.id === optionId);
       if (exists) {
-        return prev.filter((point) => point.id !== `food-${option.name}`);
+        return prev.filter((point) => point.id !== optionId);
       }
       return [
-        ...prev,
+        ...prev.filter((point) => !point.id.startsWith(`food-${block.id}::`)),
         {
-          id: `food-${option.name}`,
+          id: optionId,
           plan_style: block.plan_style,
           day: block.day,
           date: block.date,
           type: '美食',
           time: block.time,
           name: option.name,
+          price: option.price,
+          link: option.link,
           lng: option.lng,
           lat: option.lat,
         },
@@ -1965,7 +1985,7 @@ export function AgentPage() {
                                 <div className="ta-plan-block-options">
                                   {block.options.map((option) => {
                                     const active = selectedFoodPoints.some(
-                                      (point) => point.id === `food-${option.name}`,
+                                      (point) => point.id === `food-${block.id}::${option.name}`,
                                     );
                                     return (
                                       <button

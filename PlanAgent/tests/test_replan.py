@@ -5,7 +5,7 @@ import sys
 import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from replan import ReplanError, replan_plan, replacement, catalog, expected_pairs
+from replan import ReplanError, replan_plan, replacement, catalog, expected_pairs, parse_selection, selection_context
 
 
 def block(bid, day, kind, name, time, style="推荐方案"):
@@ -36,6 +36,61 @@ class ReplanTests(unittest.TestCase):
         self.assertEqual(by_id["b"]["time"], "12:10-13:10")
         self.assertEqual(by_id["a"]["id"], "a")
         self.assertEqual(result["revision"], 1)
+
+    def test_incomplete_model_response_retries_with_feedback(self):
+        calls = []
+        def choose(context):
+            calls.append(context["feedback"])
+            return {} if len(calls) == 1 else self.choose(context)
+        self.assertEqual(self.run_plan(choose=choose)["revision"], 1)
+        self.assertEqual(len(calls), 2)
+        self.assertIn("block_id", calls[1])
+
+    def test_invalid_model_shapes_retry_three_times_and_preserve_input(self):
+        for bad in (None, [], {"replacements": ["a"]}, {"replacements": [{"block_id": [], "candidate_id": "c"}]},
+                    {"replacements": [{"block_id": "wrong", "candidate_id": "c"}]}):
+            with self.subTest(bad=bad):
+                calls = []
+                before = deepcopy(self.payload)
+                def choose(context):
+                    calls.append(context)
+                    return bad
+                with self.assertRaisesRegex(ReplanError, "完整的替换结果"):
+                    self.run_plan(choose=choose)
+                self.assertEqual(len(calls), 3)
+                self.assertEqual(self.payload, before)
+
+    def test_empty_and_truncated_output_retry(self):
+        calls = []
+        def choose(context):
+            calls.append(context)
+            if len(calls) == 1:
+                return parse_selection(None)
+            if len(calls) == 2:
+                return parse_selection('{"replacements":', "length")
+            return self.choose(context)
+        self.assertEqual(self.run_plan(choose=choose)["revision"], 1)
+        self.assertEqual(len(calls), 3)
+
+    def test_selection_parser(self):
+        self.assertEqual(parse_selection('```json\n{"replacements": []}\n```'), {"replacements": []})
+        for content in (" ", "invalid", "[]", None):
+            with self.subTest(content=content), self.assertRaises(ReplanError):
+                parse_selection(content)
+
+    def test_compact_context_retains_constraints_without_mutation(self):
+        context = {"plan": deepcopy(self.original), "targets": [self.original["blocks"][0]],
+                   "candidates": {"a": self.search["poi"]}, "instruction": "不去寺庙",
+                   "profile": {"diet": "素食"}, "basic": {"total_budget": 1000}}
+        context["plan"]["plans"] = [{"duplicate": "itinerary"}]
+        before = deepcopy(context)
+        compact = selection_context(context)
+        self.assertNotIn("plans", compact["plan"])
+        self.assertNotIn("legs", compact["plan"])
+        self.assertEqual(compact["required_block_ids"], ["a"])
+        for key in ("targets", "candidates", "profile", "basic", "instruction"):
+            self.assertEqual(compact[key], context[key])
+        self.assertEqual(context, before)
 
     def test_failure_or_success_never_mutates_input(self):
         before = deepcopy(self.payload)

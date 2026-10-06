@@ -20,7 +20,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`请求失败 (${response.status}): ${body}`);
+    let detail = body;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (parsed && typeof parsed === 'object' && 'detail' in parsed) {
+        const value = (parsed as { detail: unknown }).detail;
+        if (typeof value === 'string') detail = value;
+      }
+    } catch { /* 非JSON错误保留原始文本 */ }
+    throw new Error(`请求失败 (${response.status}): ${detail}`);
   }
 
   if (response.status === 204) {

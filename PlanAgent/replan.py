@@ -6,6 +6,7 @@ Callbacks keep the constraint checks testable without paid/network services.
 """
 
 from copy import deepcopy
+import json
 import math
 import re
 import sys
@@ -17,6 +18,35 @@ from shared.pricing import item_price, parse_price
 
 class ReplanError(ValueError):
     pass
+
+
+def parse_selection(content, finish_reason=None):
+    if finish_reason == "length":
+        raise ReplanError("模型输出被截断，请仅返回替换项JSON。")
+    if not isinstance(content, str) or not content.strip():
+        raise ReplanError("模型返回空内容，请返回replacements列表。")
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.IGNORECASE)
+    try:
+        result = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ReplanError("模型返回的JSON格式无效，请仅返回替换项JSON。") from exc
+    if not isinstance(result, dict):
+        raise ReplanError("模型必须返回包含replacements的JSON对象。")
+    return result
+
+
+def selection_context(context):
+    """Remove duplicate nested plans and route geometry without losing constraints."""
+    compact = deepcopy(context)
+    compact["plan"] = {k: v for k, v in compact["plan"].items() if k not in ("plans", "legs")}
+    compact["plan"]["blocks"] = [
+        {k: v for k, v in block.items() if k not in ("polyline", "geometry")}
+        for block in compact["plan"].get("blocks", [])
+    ]
+    compact["required_block_ids"] = [b["id"] for b in compact["targets"]]
+    return compact
 
 
 def is_stop(block):
@@ -282,12 +312,15 @@ def replan_plan(payload, search, choose, attach_routes):
     feedback = ""
     for attempt in range(3):
         updated = deepcopy(original)
-        decisions = choose({"plan": original, "targets": targets, "candidates": candidate_map, "instruction": payload["instruction"], "profile": payload.get("profile"), "basic": payload.get("basic"), "feedback": feedback})
-        picks = decisions.get("replacements") or []
-        if not isinstance(picks, list) or {p.get("block_id") for p in picks} != target_ids or len(picks) != len(target_ids):
-            raise ReplanError("模型未返回完整的替换结果，原方案已保留。")
         changed_ids = set(target_ids)
         try:
+            decisions = choose({"plan": original, "targets": targets, "candidates": candidate_map, "instruction": payload["instruction"], "profile": payload.get("profile"), "basic": payload.get("basic"), "feedback": feedback})
+            picks = decisions.get("replacements") if isinstance(decisions, dict) else None
+            if (not isinstance(picks, list) or len(picks) != len(target_ids)
+                    or any(not isinstance(p, dict) or not isinstance(p.get("block_id"), str)
+                           or not isinstance(p.get("candidate_id"), str) for p in picks)
+                    or {p["block_id"] for p in picks} != target_ids):
+                raise ReplanError("模型未返回完整的替换结果：请为每个选中活动返回准确的block_id和candidate_id。")
             for pick in picks:
                 candidate = next((c for c in candidate_map[pick["block_id"]] if c["candidate_id"] == pick.get("candidate_id")), None)
                 if candidate is None:
@@ -375,24 +408,27 @@ def main():
 
         def choose(context):
             # Route geometry adds no useful candidate-selection context.
-            context = deepcopy(context)
-            context["plan"].pop("legs", None)
+            context = selection_context(context)
             response = client.chat.completions.create(
                 model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
                 messages=[
                     {"role": "system", "content": (
                         "根据用户原因、画像和完整行程，为每个选中活动选择同类替代项。"
                         "必须遵守忌口、预算、活动日期和固定项目；只能选择对应candidates中的candidate_id。"
-                        "不要修改时间或编造地点。遇到feedback时换一个候选。返回JSON："
+                        "不要修改时间或编造地点。required_block_ids中的每个ID必须恰好出现一次。"
+                        "遇到feedback时修正输出或选择可行候选。不要解释，只返回JSON："
                         '{"replacements":[{"block_id":"...","candidate_id":"..."}]}。'
                     )},
                     {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
                 ],
                 response_format={"type": "json_object"},
-                max_tokens=2000,
+                max_tokens=12000 if context.get("feedback") else 6000,
                 timeout=120,
             )
-            return json.loads(response.choices[0].message.content or "{}")
+            if not response.choices:
+                raise ReplanError("模型未返回候选结果，请重试。")
+            choice = response.choices[0]
+            return parse_selection(choice.message.content, choice.finish_reason)
 
         output = replan_plan(data, data["search"], choose, attach_routes)
     except Exception as exc:
