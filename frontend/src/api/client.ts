@@ -4,6 +4,7 @@ import type {
   Destination,
   Trip,
   TripCreatePayload,
+  TripMemory,
   UserProfile,
 } from './types';
 
@@ -96,9 +97,13 @@ export const api = {
     rating?: number;
     feedback?: string;
   }) =>
-    request('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
+    request<TripMemory>('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
   listTripMemory: (userId: string) =>
-    request<Array<Record<string, unknown>>>(`/trip-memory/${encodeURIComponent(userId)}`),
+    request<TripMemory[]>(`/trip-memory/${encodeURIComponent(userId)}`),
+  getTripMemory: (id: number, userId?: string) =>
+    request<TripMemory>(
+      `/trip-memory/item/${id}${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`,
+    ),
   search: (payload: {
     query?: string;
     destination?: string;

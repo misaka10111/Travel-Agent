@@ -86,3 +86,64 @@ export interface TripInfo {
   purposes: string[];
   special_needs: string[];
 }
+
+
+export interface SavedRouteBlock {
+  id: string;
+  plan_style?: string;
+  day: number;
+  date?: string;
+  type: string;
+  time: string;
+  name: string;
+  note?: string;
+  lng?: number;
+  lat?: number;
+}
+
+export interface SavedRouteLeg {
+  plan_style?: string;
+  day: number;
+  from: string;
+  to: string;
+  mode: 'walk' | 'transit' | 'drive';
+  distance_m: number;
+  duration_s: number;
+  lines?: string[];
+  polyline: [number, number][];
+}
+
+export interface SavedWeatherDay {
+  date?: string;
+  weather?: string;
+  temp_min?: string | number;
+  temp_max?: string | number;
+  humidity?: string | number;
+  [key: string]: unknown;
+}
+
+export interface SavedTripPlan {
+  destination?: string;
+  start_date?: string;
+  end_date?: string;
+  styles?: string[];
+  summaries?: Record<string, string>;
+  blocks?: SavedRouteBlock[];
+  legs?: SavedRouteLeg[];
+  weather?: { days?: SavedWeatherDay[] } | null;
+}
+
+export interface TripMemory {
+  id: number;
+  user_id: string;
+  destination: string;
+  start_date: string;
+  end_date: string;
+  chosen_plan_style: string | null;
+  final_plan: SavedTripPlan;
+  conversation: unknown[];
+  user_edits: unknown[];
+  feedback: string;
+  rating: number | null;
+  created_at: string;
+}
