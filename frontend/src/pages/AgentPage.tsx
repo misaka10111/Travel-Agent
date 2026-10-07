@@ -91,16 +91,13 @@ function parsePrice(value: unknown): number {
 }
 
 function knownPrice(value: unknown): number | null {
-  if (typeof value === 'boolean' || value == null) return null;
-  const text = String(value).normalize('NFKC').trim();
-  if (text === '免费' || text === '免票') return 0;
-  const match = text.match(/^(?:¥|RMB|CNY|人民币)?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?:元)?\s*(?:起)?\s*(?:\/(?:晚|人|份|次)|每(?:晚|人|份|次))?$/i);
-  const amount = match ? Number(match[1].replace(/,/g, '')) : NaN;
-  return Number.isFinite(amount) ? amount : null;
+  const text = String(value ?? '').trim().replace(/^(?:¥|￥|RMB|CNY)\s*/i, '').replace(/\s*元$/, '').replace(/,/g, '');
+  if (!/^\d+(?:\.\d+)?$/.test(text)) return null;
+  const number = Number(text);
+  return Number.isFinite(number) ? number : null;
 }
 
 type RoutePlan = {
-  revision?: number;
   destination: string;
   start_date: string;
   end_date: string;
@@ -404,10 +401,6 @@ export function AgentPage() {
   const intentVersionRef = useRef(0);
   const requestControllerRef = useRef<(AbortController & { mutation?: boolean }) | null>(null);
   const [planning, setPlanning] = useState(false);
-  const [replanning, setReplanning] = useState(false);
-  const replanControllerRef = useRef<AbortController | null>(null);
-  const currentPlanRef = useRef(routePlan);
-  currentPlanRef.current = routePlan;
   const [mapPosition, setMapPosition] = useState(() => {
     if (typeof window === 'undefined') return { x: 760, y: 520 };
 
@@ -723,94 +716,6 @@ export function AgentPage() {
     }, '已按你的需求更新计划，餐饮和地图路线也已同步。');
   }
 
-
-  async function replanSelected(instruction: string) {
-    const snapshot = routePlan;
-    const style = expandedStyle || activeStyle;
-    if (!snapshot || !style || selectedBlocks.size === 0 || replanControllerRef.current) return;
-    const targets = snapshot.blocks.filter((block) => selectedBlocks.has(block.id) && block.plan_style === style);
-    if (!targets.length) return;
-    setDraft('');
-    setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
-    const pendingMeals = snapshot.blocks.filter((block) =>
-      block.plan_style === style && block.note === '餐饮推荐' && !selectedBlocks.has(block.id));
-    if (pendingMeals.length) {
-      addAssistantMessage('请先为' + pendingMeals.map((block) => '第' + block.day + '天的' + block.name).join('、') + '选择具体餐厅，再重新规划。原因已保留在聊天记录中。');
-      return;
-    }
-    const controller = new AbortController();
-    replanControllerRef.current = controller;
-    requestControllerRef.current = controller;
-    setReplanning(true);
-    setPlanning(true);
-    addAssistantMessage('正在重新规划「' + targets.map((block) => block.name).join('、') + '」，并检查后续安排…');
-    try {
-      let profile: unknown = null;
-      let basic: unknown = null;
-      try { profile = JSON.parse(localStorage.getItem('userProfile') || 'null'); } catch { /* 空画像 */ }
-      try { basic = JSON.parse(localStorage.getItem('tripInfo') || 'null'); } catch { /* 空旅行信息 */ }
-      const result = await api.replan({
-        plan: snapshot,
-        revision: snapshot.revision ?? 0,
-        plan_style: style,
-        target_block_ids: targets.map((block) => block.id),
-        instruction,
-        ...(profile ? { profile } : {}),
-        ...(basic ? { basic } : {}),
-        locked_block_ids: snapshot.blocks.filter((block) => block.locked).map((block) => block.id),
-      }, controller.signal);
-      if (controller.signal.aborted || requestControllerRef.current !== controller) return;
-      if (currentPlanRef.current !== snapshot) {
-        updateLastAssistantMessage('方案已变化，本次重新规划结果未应用，请重新选择活动。');
-        return;
-      }
-      const plan = result.plan;
-      if (!Array.isArray(plan.blocks) || !Array.isArray(plan.legs)
-        || !Array.isArray(result.changes) || !result.changes.every((change) => typeof change === 'string')
-        || result.revision !== (snapshot.revision ?? 0) + 1) {
-        throw new Error('返回的方案不完整，原方案已保留');
-      }
-      setRoutePlan({
-        ...snapshot,
-        blocks: plan.blocks as RouteBlock[],
-        legs: plan.legs as RouteLeg[],
-        revision: result.revision,
-        total_cost: typeof plan.total_cost === 'number' ? plan.total_cost : undefined,
-        budget_status: String(plan.budget_status ?? 'unknown'),
-        cost_by_style: plan.cost_by_style as RoutePlan['cost_by_style'],
-        budget_by_style: plan.budget_by_style as RoutePlan['budget_by_style'],
-        unpriced_items: plan.unpriced_items as RoutePlan['unpriced_items'],
-      });
-      applySearchData({ ...lastSearchRef.current,
-        ...(Array.isArray(plan.food) ? { food: plan.food } : {}),
-        ...(Array.isArray(plan.food_by_anchor) ? { food_by_anchor: plan.food_by_anchor } : {}) });
-      setSelectedBlocks(new Set());
-      setConfirmedStyle(null);
-      setConfirmModalOpen(false);
-      setPlanRating(null);
-      setPlanFeedback('');
-      setSaveState('idle');
-      setPendingConfirm(null);
-      updateLastAssistantMessage('重新规划完成：\n' + result.changes.join('\n'));
-      const userId = localStorage.getItem('currentUser');
-      if (userId) targets.forEach((block) => {
-        void api.reportBehavior(userId, 'remove', block.name, instruction).catch(() => {});
-        const next = (plan.blocks as RouteBlock[]).find((item) => item.id === block.id);
-        if (next) void api.reportBehavior(userId, 'add', next.name, instruction).catch(() => {});
-      });
-    } catch (error) {
-      if (controller.signal.aborted || requestControllerRef.current !== controller) return;
-      updateLastAssistantMessage('重新规划失败：' + (error instanceof Error ? error.message : String(error)) + '。原方案已保留，原因可在聊天记录中查看。');
-    } finally {
-      if (replanControllerRef.current === controller) replanControllerRef.current = null;
-      if (requestControllerRef.current === controller) {
-        requestControllerRef.current = null;
-        setReplanning(false);
-        setPlanning(false);
-      }
-    }
-  }
-
   async function startTripPlan(data: Record<string, unknown>) {
     const basic = { ...data };
     delete basic.destination;
@@ -984,7 +889,6 @@ export function AgentPage() {
 
 
   function loadMockData() {
-    if (planning) return;
     const styles = ['轻享周末', '深度漫游'];
     const summaries: Record<string, string> = {
       轻享周末: '杭州 2 日轻松游，西湖、灵隐寺与河坊街，节奏舒缓、适合周末放松。',
@@ -1260,15 +1164,6 @@ export function AgentPage() {
   function handleSend() {
     const content = draft.trim();
     if (!content || planning) return;
-    if (routePlan && !collectingTrip && !tripConfirm && selectedBlocks.size > 0) {
-      void replanSelected(content);
-      return;
-    }
-
-    if (selectedBlocks.size > 0) {
-      void replanSelected(content);
-      return;
-    }
 
     if (pendingAdd) {
       setMessages((prev) => [
@@ -1303,9 +1198,6 @@ export function AgentPage() {
 
   function stopPlanning() {
     intentVersionRef.current += 1;
-    replanControllerRef.current?.abort();
-    replanControllerRef.current = null;
-    setReplanning(false);
     requestControllerRef.current?.abort();
     stopPlanStream();
     setPlanning(false);
@@ -1402,10 +1294,6 @@ export function AgentPage() {
 
   function toggleBlock(blockId: string) {
     if (planning) return;
-    const block = routePlan?.blocks.find((item) => item.id === blockId);
-    if (!block || block.type === '天气' || collectingTrip || tripConfirm) return;
-    setPendingAdd(null);
-    setPendingConfirm(null);
     setSelectedBlocks((prev) => {
       const next = new Set(prev);
       if (next.has(blockId)) {
@@ -1450,7 +1338,7 @@ export function AgentPage() {
   }
 
   function confirmPlan() {
-    if (!expandedStyle || !routePlan || planning || selectedBlocks.size > 0) return;
+    if (!expandedStyle || !routePlan || planning) return;
     setPlanRating(null);
     setPlanFeedback('');
     setSaveState('idle');
@@ -1716,8 +1604,7 @@ export function AgentPage() {
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder={selectedBlocks.size > 0 ? '重新规划的原因...' : '描述你的旅行想法，或继续补充信息…'}
-              disabled={replanning}
+              placeholder="描述你的旅行想法，或继续补充信息…"
               rows={1}
             />
             {planning ? (
@@ -1735,7 +1622,7 @@ export function AgentPage() {
                 onClick={handleSend}
                 disabled={!draft.trim()}
               >
-                {selectedBlocks.size > 0 ? '重新规划' : '发送'}
+                发送
               </button>
             )}
           </div>
@@ -1745,7 +1632,7 @@ export function AgentPage() {
         <section className="ta-plan-card ta-plan-column">
           {expandedStyle && routePlan ? (
             <div className="ta-plan-detail">
-              <button type="button" className="ta-plan-detail-back" disabled={planning} onClick={() => { setExpandedStyle(null); setSelectedBlocks(new Set()); }}>
+              <button type="button" className="ta-plan-detail-back" onClick={() => setExpandedStyle(null)}>
                 ← 返回方案列表
               </button>
               <div className="ta-plan-detail-title">
@@ -1765,10 +1652,7 @@ export function AgentPage() {
               {!!routePlan.unpriced_items?.[expandedStyle]?.length && (
                 <p className="ta-question-hint">另有{routePlan.unpriced_items[expandedStyle].length}项暂无报价，未计入估算。</p>
               )}
-              {routePlan.budget_status === 'unknown' && (
-                <div className="ta-plan-budget-warning">部分项目价格未知，总消费仅包含已知金额。</div>
-              )}
-              {confirmedStyle === expandedStyle && selectedBlocks.size === 0 && (
+              {confirmedStyle === expandedStyle && (
                 <div className="ta-plan-confirmed">已确认该计划</div>
               )}
               <div className="ta-plan-detail-scroll">
@@ -1819,9 +1703,8 @@ export function AgentPage() {
                               }
                             }}
                             role="button"
-                            aria-pressed={selectedBlocks.has(block.id)}
-                            aria-disabled={planning}
                             tabIndex={0}
+                            aria-pressed={selectedBlocks.has(block.id)}
                             aria-label={`选择计划项 ${block.name}`}
                           >
                             <div className="ta-plan-block-left">
@@ -1852,9 +1735,6 @@ export function AgentPage() {
                                 <span className="ta-plan-block-price">
                                   {block.price_known === false ? '暂无报价' : `¥ ${block.price.toLocaleString()}`}
                                 </span>
-                              )}
-                              {block.price === null && (
-                                <span className="ta-plan-block-price">价格待确认</span>
                               )}
                               {block.options && block.options.length > 0 && (
                                 <div className="ta-plan-block-options">
@@ -1912,7 +1792,7 @@ export function AgentPage() {
                 <button
                   type="button"
                   className="ta-plan-confirm-button"
-                  disabled={planning || selectedBlocks.size > 0}
+                  disabled={planning}
                   onClick={confirmPlan}
                 >
                   确认计划

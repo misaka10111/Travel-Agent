@@ -108,6 +108,25 @@ def main() -> None:
         print(json.dumps(result, ensure_ascii=False))
         return
 
+    if "--hotels" in sys.argv:
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+            items = tools._fetch_hotels(
+                payload.get("destination") or "",
+                payload.get("check_in_date"),
+                payload.get("check_out_date"),
+                payload.get("max_price"),
+                payload.get("hotel_stars"),
+                payload.get("hotel_types"),
+                payload.get("key_words"),
+                payload.get("sort"),
+                int(payload.get("limit") or 30),
+            )
+            print(json.dumps({"hotels": items}, ensure_ascii=False))
+        except Exception as exc:  # noqa: BLE001
+            print(json.dumps({"error": str(exc), "hotels": []}, ensure_ascii=False))
+        return
+
     if "--web" in sys.argv:
         idx = sys.argv.index("--web")
         query = " ".join(sys.argv[idx + 1:]).strip()
