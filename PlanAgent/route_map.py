@@ -174,6 +174,28 @@ def walking_route(origin: str, dest: str, cached_only: bool = False) -> dict | N
     return leg
 
 
+def driving_travel(origin: str, dest: str) -> dict | None:
+    """返回 origin→dest 的打车（驾车）耗时路线（带内存缓存）。"""
+    if not os.getenv("AMAP_KEY"):
+        return None
+    origin = ",".join(f"{float(value):.6f}" for value in origin.split(","))
+    dest = ",".join(f"{float(value):.6f}" for value in dest.split(","))
+    key = f"drive:{origin}>{dest}"
+    cache = _load_cache()
+    hit = cache["leg"].get(key)
+    if hit:
+        return hit
+    try:
+        leg = _walk_or_drive("/v5/direction/driving", origin, dest, "drive")
+    except Exception:  # noqa: BLE001
+        return None
+    if not leg or (leg.get("duration_s") or 0) <= 0:
+        return None
+    with _lock:
+        cache["leg"][key] = leg
+    return leg
+
+
 def route_leg(a: dict, b: dict) -> dict | None:
     cache = _load_cache()["leg"]
     origin = ",".join(f"{float(value):.6f}" for value in a["location"].split(","))
