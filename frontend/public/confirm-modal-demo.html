@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>确认计划弹窗预览</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: #f3f6fb;
+      }
+      .ta-modal-backdrop {
+        position: fixed;
+        inset: 0;
+        z-index: 999;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        background: rgba(20, 28, 45, 0.34);
+      }
+      .ta-detail-modal {
+        background: #ffffff;
+        border: 1px solid #e9edf5;
+        border-radius: 20px;
+        box-shadow: 0 4px 14px rgba(31, 41, 55, 0.055);
+        width: min(480px, 100%);
+        padding: 20px;
+      }
+      .ta-detail-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 15px;
+      }
+      .ta-section-kicker {
+        display: inline-block;
+        color: #7a8395;
+        font-size: 10px;
+        font-weight: 750;
+        letter-spacing: 0.09em;
+        text-transform: uppercase;
+      }
+      .ta-detail-header h3 {
+        margin: 4px 0 0;
+        color: #172033;
+        font-size: 22px;
+      }
+      .ta-detail-header p {
+        margin: 6px 0 0;
+        color: #737d90;
+        font-size: 12px;
+      }
+      .ta-close-button {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border: 0;
+        border-radius: 10px;
+        background: #f1f4f8;
+        color: #5b667b;
+        font-size: 21px;
+        cursor: pointer;
+      }
+      .ta-confirm-plan-body {
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .ta-confirm-plan-section {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .ta-confirm-plan-label {
+        color: #25314b;
+        font-size: 13px;
+        font-weight: 700;
+      }
+      .ta-plan-rating-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+      .ta-plan-rating-button {
+        padding: 7px 11px;
+        border: 1px solid #e5e9f2;
+        border-radius: 999px;
+        background: #fff;
+        color: #59657a;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .ta-plan-rating-button.active {
+        border-color: #5267ff;
+        background: #eef0ff;
+        color: #4356e8;
+      }
+      .ta-plan-rating-feedback {
+        width: 100%;
+        min-height: 46px;
+        padding: 8px 10px;
+        border: 1px solid #e5e9f2;
+        border-radius: 10px;
+        background: #fff;
+        color: #25314b;
+        font: inherit;
+        font-size: 12px;
+        resize: vertical;
+      }
+      .ta-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+        margin-top: 16px;
+      }
+      .ta-primary-button,
+      .ta-ghost-button {
+        border: 0;
+        border-radius: 11px;
+        padding: 9px 12px;
+        font-size: 12px;
+        font-weight: 750;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      .ta-primary-button {
+        background: #4f6df5;
+        color: #fff;
+      }
+      .ta-ghost-button {
+        background: #f1f4f9;
+        color: #455064;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="ta-modal-backdrop">
+      <div class="ta-detail-modal ta-confirm-plan-modal">
+        <div class="ta-detail-header">
+          <div>
+            <span class="ta-section-kicker">CONFIRM PLAN</span>
+            <h3>确认接受该计划？</h3>
+            <p>请对本次计划打分并提出建议，确认后即保存为历史行程。</p>
+          </div>
+          <button type="button" class="ta-close-button">×</button>
+        </div>
+
+        <div class="ta-confirm-plan-body">
+          <div class="ta-confirm-plan-section">
+            <span class="ta-confirm-plan-label">打分</span>
+            <div class="ta-plan-rating-buttons">
+              <button type="button" class="ta-plan-rating-button">很满意</button>
+              <button type="button" class="ta-plan-rating-button active">满意</button>
+              <button type="button" class="ta-plan-rating-button">一般</button>
+              <button type="button" class="ta-plan-rating-button">不满意</button>
+            </div>
+          </div>
+
+          <div class="ta-confirm-plan-section">
+            <span class="ta-confirm-plan-label">建议</span>
+            <textarea
+              class="ta-plan-rating-feedback"
+              placeholder="对本次计划有什么建议？（可选）"
+              rows="3"
+            ></textarea>
+          </div>
+        </div>
+
+        <div class="ta-modal-actions">
+          <button type="button" class="ta-ghost-button">取消</button>
+          <button type="button" class="ta-primary-button">确认接受</button>
+        </div>
+      </div>
+    </div>
+    <script>
+      const ratingButtons = document.querySelectorAll('.ta-plan-rating-button');
+      ratingButtons.forEach((button) => {
+        button.addEventListener('click', () => {
+          ratingButtons.forEach((b) => b.classList.remove('active'));
+          button.classList.add('active');
+        });
+      });
+    </script>
+  </body>
+</html>

@@ -5,6 +5,7 @@
 """
 
 from copy import deepcopy
+import hashlib
 import json
 import os
 import subprocess
@@ -13,11 +14,12 @@ from pathlib import Path
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import BehaviorSignal, UserPreference
+from app.models import BehaviorSignal, MemoryCache, UserPreference
 
 ROOT = Path(__file__).resolve().parents[3]
 CONVERSATION_SUMMARY_PY = ROOT / "PlanAgent" / "conversation_summary.py"
 PLAN_SUMMARY_PY = ROOT / "PlanAgent" / "plan_summary.py"
+TRIP_SUMMARY_PY = ROOT / "PlanAgent" / "trip_summary.py"
 PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
 
 POSITIVE_ACTIONS = {
@@ -286,3 +288,55 @@ def merge_trip_preferences(
     db.commit()
     db.refresh(current)
     return current
+
+
+def _trip_hash(recent_trips: list[dict]) -> str:
+    """与 Orchestrator 的 _trip_hash 保持一致，用于缓存命中判断。"""
+    payload = json.dumps(recent_trips, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _summarize_recent_trips(recent_trips: list[dict]) -> str:
+    """调用 PlanAgent venv 里的轻量模型，把最近行程摘要成稳定偏好。"""
+    if not recent_trips:
+        return ""
+    env = dict(os.environ)
+    env.pop("__PYVENV_LAUNCHER__", None)
+    # 轻量模型偶发返回空摘要，重试一次提升落库稳定性。
+    for _ in range(2):
+        try:
+            proc = subprocess.run(
+                [str(PLAN_PYTHON), str(TRIP_SUMMARY_PY)],
+                input=json.dumps(
+                    {"recent_trips": recent_trips}, ensure_ascii=False
+                ),
+                capture_output=True,
+                text=True,
+                timeout=90,
+                env=env,
+            )
+            data = json.loads(proc.stdout)
+        except Exception:
+            continue
+        summary = data.get("summary") if isinstance(data, dict) else None
+        if isinstance(summary, str) and summary.strip():
+            return summary.strip()
+    return ""
+
+
+def save_trip_summary(
+    user_id: str, recent_trips: list[dict], db: Session
+) -> MemoryCache | None:
+    """确认计划/评价后生成摘要并 upsert 到 MemoryCache，供下次规划复用。"""
+    summary = _summarize_recent_trips(recent_trips)
+    if not summary:
+        return None
+    cache = db.scalar(select(MemoryCache).where(MemoryCache.user_id == user_id))
+    if cache is None:
+        cache = MemoryCache(user_id=user_id)
+        db.add(cache)
+    cache.trip_summary = summary
+    cache.trip_summary_hash = _trip_hash(recent_trips)
+    db.commit()
+    db.refresh(cache)
+    return cache

@@ -114,28 +114,8 @@ def _fetch_trip_summary_cache(user_id: str) -> dict | None:
         return None
 
 
-def _save_trip_summary_cache(user_id: str, summary: str, digest: str) -> None:
-    url = f"{BACKEND_URL}/memory-cache"
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(
-                {
-                    "user_id": user_id,
-                    "trip_summary": summary,
-                    "trip_summary_hash": digest,
-                },
-                ensure_ascii=False,
-            ).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=5).read()
-    except Exception:
-        pass
-
-
 class State(TypedDict, total=False):
+    user_id: str
     destination: str
     start_date: str
     end_date: str
@@ -340,16 +320,16 @@ def _memory_updates(state: dict) -> dict:
     if not state.get("recent_trips"):
         updates["recent_trips"] = _fetch_recent_trips(user_id)
     recent_trips = state.get("recent_trips") or updates.get("recent_trips") or []
+    # 摘要只在用户确认计划并评价后生成（见 trip-memory 路由），规划阶段仅读取缓存。
+    updates["skip_trip_summary"] = True
     if recent_trips:
-        digest = _trip_hash(recent_trips)
         cache = _fetch_trip_summary_cache(user_id)
-        if cache and cache.get("trip_summary_hash") == digest and cache.get("trip_summary"):
+        if (
+            cache
+            and cache.get("trip_summary_hash") == _trip_hash(recent_trips)
+            and cache.get("trip_summary")
+        ):
             updates["recent_trip_summary"] = cache["trip_summary"]
-            updates["skip_trip_summary"] = True
-        else:
-            updates["skip_trip_summary"] = False
-    else:
-        updates["skip_trip_summary"] = True
     return updates
 
 
@@ -359,15 +339,6 @@ def prepare_memory_node(state: State) -> dict:
 
 def _result_output(result: dict, data: dict) -> dict:
     saved_memory = None
-    user_id = result.get("user_id") or data.get("user_id")
-    if user_id:
-        plan = result.get("plan") or {}
-        summary = plan.get("recent_trip_summary")
-        recent_trips = result.get("recent_trips") or []
-        if summary and recent_trips:
-            _save_trip_summary_cache(
-                user_id, summary, _trip_hash(recent_trips)
-            )
     return {
         "search": result.get("search"),
         "plan": result.get("plan"),

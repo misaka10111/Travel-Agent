@@ -4919,6 +4919,28 @@ button:disabled {
   font-size: 11px;
 }
 
+.ta-confirm-plan-modal {
+  width: min(480px, 100%);
+}
+
+.ta-confirm-plan-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.ta-confirm-plan-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ta-confirm-plan-label {
+  color: #25314b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .ta-plan-detail .ta-plan-confirmed {
   flex: 0 0 auto;
   margin: 0 0 8px;

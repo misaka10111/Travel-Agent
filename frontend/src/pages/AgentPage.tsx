@@ -386,6 +386,7 @@ export function AgentPage() {
   const [confirmedStyle, setConfirmedStyle] = useState<string | null>(null);
   const [planRating, setPlanRating] = useState<number | null>(null);
   const [planFeedback, setPlanFeedback] = useState('');
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [question, setQuestion] = useState<{
     question: string;
@@ -1336,45 +1337,29 @@ export function AgentPage() {
     setSocialBatch((prev) => prev + 1);
   }
 
-  async function confirmPlan() {
+  function confirmPlan() {
     if (!expandedStyle || !routePlan || planning) return;
-    setConfirmedStyle(expandedStyle);
-    const userId = localStorage.getItem('currentUser') || '';
-    if (userId) {
-      void api.reportBehavior(userId, 'confirm', expandedStyle, 'plan');
-    }
-    if (!userId) {
-      setSaveState('error');
-      return;
-    }
-    setSaveState('saving');
-    try {
-      await api.saveTripMemory({
-        user_id: userId,
-        destination: routePlan.destination,
-        start_date: routePlan.start_date,
-        end_date: routePlan.end_date,
-        chosen_plan_style: expandedStyle,
-        final_plan: routePlan,
-        conversation: messages,
-      });
-      setSaveState('idle');
-    } catch {
-      setSaveState('error');
-    }
+    setPlanRating(null);
+    setPlanFeedback('');
+    setSaveState('idle');
+    setConfirmModalOpen(true);
   }
 
-  async function submitPlanRating() {
-    if (!routePlan || !expandedStyle || planRating == null) return;
-    const rating = planRating;
-    setSaveState('saving');
+  function closeConfirmModal() {
+    setConfirmModalOpen(false);
+  }
+
+  async function acceptPlan() {
+    if (!expandedStyle || !routePlan) return;
     const userId = localStorage.getItem('currentUser') || '';
     if (!userId) {
       setSaveState('error');
+      setConfirmModalOpen(false);
       return;
     }
+    setSaveState('saving');
     try {
-      await api.saveTripMemory({
+      const payload: Parameters<typeof api.saveTripMemory>[0] = {
         user_id: userId,
         destination: routePlan.destination,
         start_date: routePlan.start_date,
@@ -1382,11 +1367,17 @@ export function AgentPage() {
         chosen_plan_style: expandedStyle,
         final_plan: routePlan,
         conversation: messages,
-        rating,
-        feedback: planFeedback,
-      });
+      };
+      if (planRating != null) payload.rating = planRating;
+      if (planFeedback.trim()) payload.feedback = planFeedback.trim();
+      await api.saveTripMemory(payload);
+      setConfirmedStyle(expandedStyle);
       setSaveState('saved');
-      void api.reportBehavior(userId, 'rate', expandedStyle, String(rating));
+      setConfirmModalOpen(false);
+      void api.reportBehavior(userId, 'confirm', expandedStyle, 'plan');
+      if (planRating != null) {
+        void api.reportBehavior(userId, 'rate', expandedStyle, String(planRating));
+      }
     } catch {
       setSaveState('error');
     }
@@ -1793,48 +1784,9 @@ export function AgentPage() {
                   })}
               </div>
               {confirmedStyle === expandedStyle ? (
-                <div className="ta-plan-rating">
-                  <div className="ta-plan-rating-label">本次计划满意吗？</div>
-                  <div className="ta-plan-rating-buttons">
-                    {[
-                      { label: '很满意', value: 5 },
-                      { label: '满意', value: 4 },
-                      { label: '一般', value: 3 },
-                      { label: '不满意', value: 1 },
-                    ].map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`ta-plan-rating-button${
-                          planRating === option.value ? ' active' : ''
-                        }`}
-                        disabled={saveState === 'saving' || saveState === 'saved'}
-                        onClick={() => setPlanRating(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="ta-plan-rating-submit"
-                    disabled={planRating == null || saveState === 'saving' || saveState === 'saved'}
-                    onClick={() => void submitPlanRating()}
-                  >
-                    提交评价
-                  </button>
-                  <textarea
-                    className="ta-plan-rating-feedback"
-                    value={planFeedback}
-                    onChange={(event) => setPlanFeedback(event.target.value)}
-                    placeholder="补充一点评价（可选）"
-                    rows={2}
-                  />
-                  <div className="ta-plan-rating-status">
-                    {saveState === 'saving' && <span>保存中…</span>}
-                    {saveState === 'saved' && <span>已保存</span>}
-                    {saveState === 'error' && <span>保存失败，请确认已登录</span>}
-                  </div>
+                <div className="ta-plan-rating-status">
+                  {saveState === 'saved' && <span>已保存</span>}
+                  {saveState === 'error' && <span>保存失败，请确认已登录</span>}
                 </div>
               ) : (
                 <button
@@ -2427,6 +2379,88 @@ export function AgentPage() {
                   {isInPlan(detailItem) ? '从计划移除' : '添加到计划'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmModalOpen && (
+        <div className="ta-modal-backdrop" onClick={closeConfirmModal}>
+          <div
+            className="ta-detail-modal ta-confirm-plan-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="ta-detail-header">
+              <div>
+                <span className="ta-section-kicker">CONFIRM PLAN</span>
+                <h3>确认接受该计划？</h3>
+                <p>请对本次计划打分并提出建议，确认后即保存为历史行程。</p>
+              </div>
+              <button
+                type="button"
+                className="ta-close-button"
+                onClick={closeConfirmModal}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="ta-confirm-plan-body">
+              <div className="ta-confirm-plan-section">
+                <span className="ta-confirm-plan-label">打分</span>
+                <div className="ta-plan-rating-buttons">
+                  {[
+                    { label: '很满意', value: 5 },
+                    { label: '满意', value: 4 },
+                    { label: '一般', value: 3 },
+                    { label: '不满意', value: 1 },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`ta-plan-rating-button${
+                        planRating === option.value ? ' active' : ''
+                      }`}
+                      disabled={saveState === 'saving'}
+                      onClick={() => setPlanRating(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="ta-confirm-plan-section">
+                <span className="ta-confirm-plan-label">建议</span>
+                <textarea
+                  className="ta-plan-rating-feedback"
+                  value={planFeedback}
+                  onChange={(event) => setPlanFeedback(event.target.value)}
+                  placeholder="对本次计划有什么建议？（可选）"
+                  rows={3}
+                />
+              </div>
+
+              {saveState === 'error' && (
+                <div className="ta-plan-rating-status">保存失败，请确认已登录</div>
+              )}
+            </div>
+
+            <div className="ta-modal-actions">
+              <button
+                type="button"
+                className="ta-ghost-button"
+                onClick={closeConfirmModal}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="ta-primary-button"
+                disabled={saveState === 'saving'}
+                onClick={() => void acceptPlan()}
+              >
+                {saveState === 'saving' ? '保存中…' : '确认接受'}
+              </button>
             </div>
           </div>
         </div>

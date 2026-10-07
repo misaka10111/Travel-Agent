@@ -134,15 +134,6 @@ BLOCK_MODIFY_PROMPT = (
     "schedule 项含 time/type/name/note/link。只输出 JSON，不要任何多余文字或代码块。"
 )
 
-TRIP_SUMMARY_PROMPT = (
-    "你是用户旅行记忆摘要助手。根据给定的历史行程记录（recent_trips），"
-    "提炼出对后续旅行规划有用的稳定偏好和教训。"
-    "重点关注：用户选择的方案风格、评分与反馈（rating/feedback）、用户主动修改（user_edits）所透露的喜好与避雷点。"
-    "输出一段不超过 150 字的摘要，用「偏好：...；避雷：...；节奏：...」的简洁形式。"
-    "只输出摘要文字，不要 JSON、不要解释。"
-)
-
-
 def _build_meta(search_result: dict) -> dict:
     """从搜索结果本地提取行程元数据，省掉 LLM 生成外层字段。"""
     destination = search_result.get("destination") or ""
@@ -1967,30 +1958,6 @@ def _ensure_hotels(plan: dict, search_result: dict) -> dict:
     return plan
 
 
-def _summarize_trips(client: OpenAI, recent_trips: list) -> str:
-    """把最近的历史行程做一次语义摘要，提炼稳定偏好和避雷点。"""
-    if not recent_trips:
-        return ""
-    try:
-        resp = _chat_completion(client,
-            model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
-            messages=[
-                {"role": "system", "content": TRIP_SUMMARY_PROMPT},
-                {
-                    "role": "user",
-                    "content": json.dumps(
-                        {"recent_trips": recent_trips}, ensure_ascii=False
-                    ),
-                },
-            ],
-            max_tokens=300,
-            timeout=60,
-        )
-        return (resp.choices[0].message.content or "").strip()
-    except Exception:
-        return ""
-
-
 def build_plan(
     search_result: dict,
     profile: dict | None = None,
@@ -2046,13 +2013,8 @@ def build_plan(
         context["preferences"] = preferences
     if recent_trips:
         context["recent_trips"] = recent_trips
-    computed_summary = ""
     if recent_trip_summary:
         context["recent_trip_summary"] = recent_trip_summary
-    elif recent_trips and not skip_trip_summary:
-        computed_summary = _summarize_trips(client, recent_trips)
-        if computed_summary:
-            context["recent_trip_summary"] = computed_summary
     if basic:
         context["basic"] = basic
     if feedback:
@@ -2126,8 +2088,6 @@ def build_plan(
             if item.get("type") == "景点" and _valid_food_coord(coord):
                 item.update({"lng": coord[0], "lat": coord[1]})
     result = refresh_food_for_plan(result, search_result, basic)
-    if computed_summary:
-        result["recent_trip_summary"] = computed_summary
     return _backfill_links(result, search_result)
 
 

@@ -482,7 +482,8 @@ def _fetch_round_trip(
 
 def _feature_model_options() -> dict:
     """特征摘要不需要长思考；失败立即用来源文本，交给规划模型继续。"""
-    if "qwen" in os.getenv("OPENAI_MODEL", "").lower():
+    model = os.getenv("OPENAI_MODEL", "").lower()
+    if "qwen" in model or "deepseek" in model:
         return {"extra_body": {"enable_thinking": False}}
     return {}
 
@@ -861,7 +862,17 @@ def _extract_events(items: list[dict]) -> list[dict]:
                     "url": e.get("url") or "",
                 }
             )
-        return result
+        if result:
+            return result
+        # LLM 没提取出活动时，回退到原始网页结果，避免前端活动一栏为空
+        return [
+            {
+                "title": x.get("title") or "",
+                "content": (x.get("content") or "")[:120],
+                "url": x.get("url") or "",
+            }
+            for x in items
+        ]
     except Exception:
         return [
             {
@@ -889,8 +900,15 @@ def _fetch_events(
     else:
         date_range = "近期"
     query = f"{destination} {date_range} 演唱会 音乐节 比赛 展览 节日 活动 热点"
-    items = _fetch_web_search(query, max_results=max_results)
-    return _extract_events(items)
+    for _ in range(2):
+        try:
+            items = _fetch_web_search(query, max_results=max_results)
+            events = _extract_events(items)
+            if events:
+                return events
+        except Exception:
+            continue
+    return []
 
 
 def _fetch_food(
