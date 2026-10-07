@@ -676,6 +676,7 @@ export function AgentPage() {
       );
       setRoutePlan((prev) => (prev ? { ...prev, blocks: newBlocks, legs: [] } : prev));
       setSelectedBlocks(new Set());
+      setSelectedFoodPoints([]);
       updateLastAssistantMessage('已根据你的意见修改计划。');
     } catch (error) {
       updateLastAssistantMessage(

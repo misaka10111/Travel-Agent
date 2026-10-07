@@ -1393,7 +1393,11 @@ def build_plan(
     geo_hints = _geo_hints(search_result, destination)
     if geo_hints:
         context["geo_hints"] = geo_hints
-    blocks = _build_blocks(search_result, destination)
+    blocks = _build_blocks(
+        search_result,
+        destination,
+        max_km=35 if days <= 3 else 60,
+    )
     day_assignments = _assign_blocks_to_days(
         blocks,
         days,
