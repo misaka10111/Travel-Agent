@@ -40,7 +40,6 @@ class PlanRequest(BaseModel):
     end_date: str | None = None
     profile: dict | None = None
     basic: dict | None = None
-    answers: list | None = None
     plan: dict | None = None
     search: dict | None = None
     modify: dict | None = None
@@ -102,7 +101,7 @@ def _request_context(payload: PlanRequest) -> tuple[str, str, str, dict]:
 
 def _plan_data(payload: PlanRequest, destination: str, start_date: str, end_date: str, basic: dict) -> dict:
     data: dict = {"destination": destination, "start_date": start_date, "end_date": end_date}
-    for name in ("user_id", "profile", "answers"):
+    for name in ("user_id", "profile"):
         value = getattr(payload, name)
         if value:
             data[name] = value

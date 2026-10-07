@@ -97,6 +97,7 @@ export interface SavedRouteBlock {
   time: string;
   name: string;
   note?: string;
+  match_score?: number;
   lng?: number;
   lat?: number;
 }

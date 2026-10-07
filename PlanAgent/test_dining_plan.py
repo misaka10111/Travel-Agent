@@ -135,8 +135,6 @@ class DiningPlanTests(unittest.TestCase):
                        for anchor in payload["anchors"]]
             return SimpleNamespace(stdout=json.dumps({"food_by_anchor": entries}), returncode=0)
         with patch("plan.OpenAI"), patch("plan.geocode", return_value={"location": "120.15,30.27"}), \
-             patch("plan._geo_hints", return_value={}), patch("plan._build_blocks", return_value=[]), \
-             patch("plan._assign_blocks_to_days", return_value=[{"day": 1, "names": ["初始景点"]}]), \
              patch("plan._build_day_plan", return_value=day), \
              patch("plan._reorder_by_proximity", side_effect=finalize), \
              patch("plan.subprocess.run", side_effect=nearby):

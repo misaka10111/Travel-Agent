@@ -17,6 +17,7 @@ from app.models import BehaviorSignal, UserPreference
 
 ROOT = Path(__file__).resolve().parents[3]
 CONVERSATION_SUMMARY_PY = ROOT / "PlanAgent" / "conversation_summary.py"
+PLAN_SUMMARY_PY = ROOT / "PlanAgent" / "plan_summary.py"
 PLAN_PYTHON = ROOT / "PlanAgent" / ".venv" / "bin" / "python"
 
 POSITIVE_ACTIONS = {
@@ -48,7 +49,13 @@ TRANSPORT_WORDS = {
 }
 HOTEL_MUST = ["含早", "早餐", "近地铁", "高楼层", "安静", "有窗", "湖景", "海景"]
 HOTEL_AVOID = ["无窗", "临街", "隔音差", "太吵"]
-FOOD_AVOID = ["不吃辣", "太辣", "忌口", "清真", "素食"]
+FOOD_AVOID = ["不吃辣", "太辣", "忌口", "不吃香菜", "不吃葱", "不吃蒜"]
+FOOD_CUISINES = [
+    "川菜", "湘菜", "粤菜", "徽菜", "浙菜", "杭帮菜", "本帮菜", "淮扬菜", "鲁菜",
+    "火锅", "烧烤", "烤鱼", "小龙虾", "日料", "日式", "韩料", "西餐", "法餐", "意餐",
+    "面食", "面条", "拉面", "海鲜", "素食", "清真", "甜品", "咖啡", "早茶", "自助",
+    "饺子", "包子", "生煎", "小吃", "麻辣", "清淡",
+]
 
 
 def _action_polarity(action: str) -> int:
@@ -88,25 +95,42 @@ def _preferred(signals: list[BehaviorSignal], groups: dict[str, list[str]]) -> l
     return [scores[0][2]]
 
 
+def _preferred_all(signals: list[BehaviorSignal], groups: dict[str, list[str]]) -> list[str]:
+    """返回所有出现过的偏好标签，按出现次数降序，用于可多选的维度（如交通）。"""
+    scores: list[tuple[int, int, str]] = []
+    for idx, (label, words) in enumerate(groups.items()):
+        score = 0
+        for s in signals:
+            text = f"{s.target} {s.detail}".lower()
+            if any(w.lower() in text for w in words):
+                score += 1
+        scores.append((score, -idx, label))
+    scores.sort(reverse=True)
+    return [label for score, _, label in scores if score > 0]
+
+
 def _learn(signals: list[BehaviorSignal], min_count: int) -> dict:
     prefs: dict = {}
 
     # 节奏与交通：直接取出现最多的偏好
     pace = _preferred(signals, PACE_WORDS)
-    transport = _preferred(signals, TRANSPORT_WORDS)
+    transport = _preferred_all(signals, TRANSPORT_WORDS)
     if pace:
         prefs["pace"] = pace[0]
     if transport:
         prefs["transport"] = transport
 
-    # 酒店硬性要求 / 避雷
+    # 酒店硬性要求 / 避雷，餐饮口味 / 忌口 / 喜欢的菜系
     hotel_must = [k for k, c in _count_hits(signals, HOTEL_MUST, 1).items() if c >= min_count]
     hotel_avoid = [k for k, c in _count_hits(signals, HOTEL_AVOID, -1).items() if c >= min_count]
     food_avoid = [k for k, c in _count_hits(signals, FOOD_AVOID, -1).items() if c >= min_count]
+    food_cuisines = [k for k, c in _count_hits(signals, FOOD_CUISINES, 1).items() if c >= min_count]
     if hotel_must:
         prefs.setdefault("hotel", {})["must"] = hotel_must
     if hotel_avoid:
         prefs.setdefault("hotel", {})["avoid"] = hotel_avoid
+    if food_cuisines:
+        prefs.setdefault("food", {})["cuisines"] = food_cuisines
     if food_avoid:
         prefs.setdefault("food", {})["avoid"] = food_avoid
 
@@ -207,6 +231,49 @@ def merge_conversation_preferences(
 ) -> UserPreference | None:
     """从对话中提取偏好并合并到 UserPreference，失败时返回 None。"""
     learned = _summarize_conversation(conversation)
+    if not learned:
+        return None
+    current = db.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
+    merged = _merge(current.preferences if current else {}, learned)
+    if current is None:
+        current = UserPreference(user_id=user_id, preferences=merged)
+        db.add(current)
+    else:
+        current.preferences = merged
+    db.commit()
+    db.refresh(current)
+    return current
+
+
+def _summarize_plan(plan: dict) -> dict:
+    """调用 PlanAgent venv 里的轻量模型，把已确认计划提炼成偏好 JSON。"""
+    if not plan:
+        return {}
+    try:
+        env = dict(os.environ)
+        env.pop("__PYVENV_LAUNCHER__", None)
+        proc = subprocess.run(
+            [str(PLAN_PYTHON), str(PLAN_SUMMARY_PY)],
+            input=json.dumps({"plan": plan}, ensure_ascii=False),
+            capture_output=True,
+            text=True,
+            timeout=90,
+            env=env,
+        )
+        data = json.loads(proc.stdout)
+    except Exception:
+        return {}
+    prefs = data.get("preferences") if isinstance(data, dict) else None
+    return prefs if isinstance(prefs, dict) else {}
+
+
+def merge_trip_preferences(
+    user_id: str, final_plan: dict, conversation: list, db: Session
+) -> UserPreference | None:
+    """从「确认的计划 + 对话」中提炼偏好并合并进 UserPreference。"""
+    learned: dict = {}
+    learned = _merge(learned, _summarize_plan(final_plan))
+    learned = _merge(learned, _summarize_conversation(conversation))
     if not learned:
         return None
     current = db.scalar(select(UserPreference).where(UserPreference.user_id == user_id))

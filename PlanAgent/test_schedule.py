@@ -1,4 +1,4 @@
-"""离线调度回归：真实班次、必去景点和每天可用时间必须一致。"""
+"""离线调度回归：真实班次和每天可用时间必须一致。"""
 
 import copy
 import os
@@ -74,7 +74,7 @@ def interval(item):
 class ScheduleTests(unittest.TestCase):
     def setUp(self):
         # 如果调度逻辑意外调用模型、地图或子进程，测试立即失败。
-        for target in ("plan.OpenAI", "plan.geocode", "plan._map_get", "plan.subprocess.run"):
+        for target in ("plan.OpenAI", "plan.geocode", "plan.subprocess.run"):
             mocked = patch(target, side_effect=AssertionError("调度测试禁止网络和子进程"))
             mocked.start()
             self.addCleanup(mocked.stop)
@@ -128,37 +128,9 @@ class ScheduleTests(unittest.TestCase):
             "inbound": None,
         }))
 
-    def test_requested_attractions_are_exact_verified_names_and_not_duplicates(self):
-        search = trip_search()
-        assignments = [
-            {"day": 1, "names": ["西湖天地"], "center": [120.159, 30.243]},
-            {"day": 2, "names": ["西湖天地"], "center": [120.159, 30.243]},
-        ]
-        result = plan._prioritize_requested_assignments(
-            assignments, search, ["西湖风景名胜区", "浙江省博物馆", "未核实地点"],
-            plan._select_transport(search),
-        )
-        required = [name for day in result for name in day.get("required_names") or []]
-        self.assertCountEqual(required, ["西湖风景名胜区", "浙江省博物馆"])
-        self.assertNotIn("西湖天地", required)
-        self.assertNotIn("未核实地点", [name for day in result for name in day.get("names") or []])
-        for assignment in result:
-            self.assertTrue(set(assignment.get("required_names") or []) <= set(assignment["names"]))
-
-    def test_west_lake_short_name_resolves_to_scenic_area_not_shopping_district(self):
-        search = trip_search()
-        # 故意把商业区放前面，避免首个包含匹配冒充用户要求的景区。
-        search["poi"] = [search["poi"][2], *search["poi"][:2]]
-        result = plan._prioritize_requested_assignments(
-            [{"day": 1, "names": ["西湖天地"]}], search, ["西湖"],
-            plan._select_transport(search),
-        )
-        required = [name for day in result for name in day.get("required_names") or []]
-        self.assertEqual(required, ["西湖风景名胜区"])
-
     def test_enforcement_uses_assignment_day_date_and_verified_train(self):
         search = trip_search()
-        assignment = {"day": 1, "names": ["西湖风景名胜区"], "required_names": ["西湖风景名胜区"]}
+        assignment = {"day": 1, "names": ["西湖风景名胜区"]}
         day_plan = {"day": 99, "date": "2026-10-17", "schedule": [
             {"type": "交通", "name": "模型编造早班飞机", "time": "05:00-06:00"},
             {"type": "景点", "name": "西湖风景名胜区", "time": "06:00-10:00"},
@@ -180,34 +152,21 @@ class ScheduleTests(unittest.TestCase):
         transport = {"inbound": selected(early, "train")}
         result = plan._enforce_day_schedule(
             {"schedule": [{"type": "景点", "name": "浙江省博物馆", "time": "09:00-11:00"}]},
-            {"day": 2, "names": ["浙江省博物馆"], "required_names": []},
+            {"day": 2, "names": ["浙江省博物馆"]},
             "2026-10-17", transport, search,
         )
         self.assertEqual([item for item in result["schedule"] if item.get("type") == "景点"], [])
         transports = [item for item in result["schedule"] if item.get("type") == "交通"]
         self.assertTrue(any("早回" in item["name"] and interval(item) == (6 * 60, 7 * 60) for item in transports))
 
-    def test_omitted_required_place_is_restored_with_verified_coordinates_and_link(self):
-        search = trip_search()
-        result = plan._enforce_day_schedule(
-            {"schedule": [{"type": "景点", "name": "西湖天地", "time": "09:00-10:00",
-                           "lng": 121.5, "lat": 31.2, "link": "https://example.test/wrong"}]},
-            {"day": 1, "names": ["西湖风景名胜区"], "required_names": ["西湖风景名胜区"]},
-            "2026-10-16", plan._select_transport(search), search,
-        )
-        spots = [item for item in result["schedule"] if item.get("type") == "景点"]
-        self.assertEqual([item["name"] for item in spots], ["西湖风景名胜区"])
-        self.assertEqual((spots[0]["lng"], spots[0]["lat"]), (120.145, 30.251))
-        self.assertEqual(spots[0]["link"], "https://example.test/poi/west-lake")
-
-    def test_overlapping_spots_are_rescheduled_without_losing_required_place(self):
+    def test_overlapping_spots_are_rescheduled_without_overlap(self):
         search = trip_search()
         result = plan._enforce_day_schedule(
             {"schedule": [
                 {"type": "景点", "name": "西湖天地", "time": "09:00-14:00"},
                 {"type": "景点", "name": "浙江省博物馆", "time": "10:00-12:00"},
             ]},
-            {"day": 2, "names": ["西湖天地", "浙江省博物馆"], "required_names": ["浙江省博物馆"]},
+            {"day": 2, "names": ["西湖天地", "浙江省博物馆"]},
             "2026-10-17", plan._select_transport(search), search,
         )
         spots = [item for item in result["schedule"] if item.get("type") == "景点"]
@@ -226,7 +185,7 @@ class ScheduleTests(unittest.TestCase):
                 {"type": "交通", "name": "高铁G9999", "time": "07:00-08:00"},
                 {"type": "景点", "name": "浙江省博物馆", "time": "10:00-12:00"},
             ]},
-            {"day": 1, "names": ["浙江省博物馆"], "required_names": []},
+            {"day": 1, "names": ["浙江省博物馆"]},
             "2026-10-16", {}, {"poi": trip_search()["poi"]},
         )
         self.assertFalse(any(item.get("type") == "交通" and interval(item) for item in result["schedule"]))
@@ -253,7 +212,7 @@ class ScheduleTests(unittest.TestCase):
         search["poi"][0]["duration"] = "全天"
         result = plan._enforce_day_schedule(
             {"schedule": [{"type": "景点", "name": "西湖风景名胜区", "time": "09:00-15:00"}]},
-            {"day": 1, "names": ["西湖风景名胜区"], "required_names": ["西湖风景名胜区"]},
+            {"day": 1, "names": ["西湖风景名胜区"]},
             "2026-10-16", {}, search,
         )
         self.assertTrue(any(item["name"] == "西湖风景名胜区" for item in result["schedule"]))
@@ -267,8 +226,7 @@ class ScheduleTests(unittest.TestCase):
                 {"type": "景点", "name": "西湖风景名胜区", "time": "09:00-12:00"},
                 {"type": "景点", "name": "浙江省博物馆", "time": "12:30-14:30"},
             ]},
-            {"day": 1, "names": ["西湖风景名胜区", "浙江省博物馆"],
-             "required_names": ["西湖风景名胜区", "浙江省博物馆"]},
+            {"day": 1, "names": ["西湖风景名胜区", "浙江省博物馆"]},
             "2026-10-16", {}, search,
         )
         spots = [item for item in result["schedule"] if item.get("type") == "景点"]
@@ -282,7 +240,7 @@ class ScheduleTests(unittest.TestCase):
         search["poi"][1]["duration"] = "3小时"
         result = plan._enforce_day_schedule(
             {"schedule": [{"type": "景点", "name": "浙江省博物馆", "time": "17:00-20:00"}]},
-            {"day": 1, "names": ["浙江省博物馆"], "required_names": ["浙江省博物馆"]},
+            {"day": 1, "names": ["浙江省博物馆"]},
             "2026-10-16", {}, search,
         )
         spots = [item for item in result["schedule"] if item.get("type") == "景点"]
@@ -297,7 +255,7 @@ class ScheduleTests(unittest.TestCase):
         ), "train"), "inbound": None}
         result = plan._enforce_day_schedule(
             {"schedule": [{"type": "景点", "name": "浙江省博物馆", "time": "12:30-14:30"}]},
-            {"day": 1, "names": ["浙江省博物馆"], "required_names": ["浙江省博物馆"]},
+            {"day": 1, "names": ["浙江省博物馆"]},
             "2026-10-16", transport, search,
         )
         self.assertEqual(result["activity_window"]["start_min"], 12 * 60 + 30)
@@ -352,7 +310,7 @@ class ScheduleTests(unittest.TestCase):
                 {"type": "景点", "name": "浙江省博物馆", "time": "09:00-11:00"},
                 {"type": "景点", "name": "吴山夜市", "time": "15:00-17:00"},
             ]},
-            {"day": 1, "names": ["浙江省博物馆", "吴山夜市"], "required_names": ["浙江省博物馆"]},
+            {"day": 1, "names": ["浙江省博物馆", "吴山夜市"]},
             "2026-10-16", {}, search,
         )
         market = next(item for item in result["schedule"] if item["name"] == "吴山夜市")
@@ -390,6 +348,33 @@ class ScheduleTests(unittest.TestCase):
         }]}]})
         self.assertFalse(any(item["type"] == "酒店" for item in result))
         self.assertEqual([item["name"] for item in result], ["高铁G1350"])
+
+    def test_pace_maps_to_daily_spot_range(self):
+        self.assertEqual(plan._pace_spots("慢", []), (2, 3))
+        self.assertEqual(plan._pace_spots("轻松", []), (3, 4))
+        self.assertEqual(plan._pace_spots("休闲", []), (3, 4))
+        self.assertEqual(plan._pace_spots("适中", []), (3, 4))
+        self.assertEqual(plan._pace_spots("", []), (3, 4))
+        self.assertEqual(plan._pace_spots("快", []), (4, 6))
+        self.assertEqual(plan._pace_spots("紧凑", []), (4, 6))
+        self.assertEqual(plan._pace_spots("", ["休闲度假"]), (3, 4))
+
+    def test_first_day_checks_into_hotel_before_sightseeing(self):
+        day = {
+            "day": 1,
+            "hotel": "测试酒店",
+            "activity_window": {"start_min": 8 * 60 + 30},
+            "schedule": [
+                {"type": "交通", "name": "去程：高铁G219", "time": "07:04-07:49"},
+                {"type": "景点", "name": "西湖", "time": "09:00-11:00"},
+            ],
+        }
+        plan._add_first_day_checkin(day)
+        self.assertEqual([s["type"] for s in day["schedule"]], ["交通", "酒店", "景点"])
+        self.assertEqual(day["schedule"][1]["time"], "07:49-08:19")
+        self.assertEqual(day["schedule"][1]["name"], "测试酒店")
+        plan._add_first_day_checkin(day)
+        self.assertEqual([s["type"] for s in day["schedule"]], ["交通", "酒店", "景点"])
 
 
 if __name__ == "__main__":

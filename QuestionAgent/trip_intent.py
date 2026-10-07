@@ -15,8 +15,11 @@ REQUIRED_FIELDS = (
     ("total_budget", "本次旅行总预算（也可以填不限）"),
 )
 TEXT_FIELDS = ("destination", "origin", "food_keyword", "notes")
-LIST_FIELDS = ("purposes", "requested_pois", "budget_tiers")
+LIST_FIELDS = ("purposes", "budget_tiers", "travel_style")
 _UNSET_TEXT = {"", "不确定", "未确定", "还没定", "待定", "暂未确定", "不知道", "清除"}
+TRAVEL_STYLES = (
+    "自然景观", "历史人文", "主题娱乐", "城市地标与购物", "户外运动与体验",
+)
 
 
 def local_today() -> date:
@@ -154,6 +157,8 @@ def _fallback_question(field: str, data: dict, today: date) -> dict:
         return {"field": field, "question": "从哪个城市出发？", "options": []}
     if field == "travelers":
         return {"field": field, "question": "这次共有几个人出行？成人和孩子都要算上。", "options": ["1人", "2人", "3人", "4人"]}
+    if field == "travel_style":
+        return {"field": field, "question": "这次旅行想走什么风格？", "options": list(TRAVEL_STYLES)}
     people = _number(str(data.get("travelers", "")).removesuffix("人")) or 1
     days = data.get("duration_days") or 3
     base = int(math.ceil(people * days * 500 / 500) * 500)
@@ -189,12 +194,15 @@ def complete_trip_request(extracted: dict, previous: dict | None = None, today: 
     ]
     if not missing:
         return {"action": "confirm_trip", "data": data}
+    qs = _questions(missing, data, questions, today)
+    if not data.get("travel_style"):
+        qs.append(_fallback_question("travel_style", data, today))
     return {
         "action": "ask",
         "field": "trip_details",
         "missing": missing,
         "data": data,
         "question": "补充下面必要的信息就可以开始规划。选一个建议，或直接填写；也可以在聊天框一次说完整。",
-        "questions": _questions(missing, data, questions, today),
+        "questions": qs,
         "options": [],
     }

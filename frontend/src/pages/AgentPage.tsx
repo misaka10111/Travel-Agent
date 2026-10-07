@@ -213,7 +213,7 @@ function mapSpots(items: unknown): SpotOption[] {
     subtitle: p?.category ?? '',
     area: p?.district_label ?? p?.category ?? '',
     openHours: '',
-    recommendedDuration: '',
+    recommendedDuration: p?.duration ?? '',
     ticketPrice: parsePrice(p?.price ?? p?.ticket_price),
     priceKnown: p?.free === true || knownPrice(p?.price ?? p?.ticket_price) != null,
     scheduleAt: '',
@@ -303,7 +303,6 @@ function formatTripConfirm(data: Record<string, unknown>): string {
   if (Array.isArray(data.purposes) && data.purposes.length) {
     lines.push(`兴趣：${(data.purposes as unknown[]).join('、')}`);
   }
-  if (Array.isArray(data.requested_pois) && data.requested_pois.length) lines.push(`想去的景点：${data.requested_pois.join('、')}`);
   if (data.food_keyword) lines.push(`餐饮偏好：${data.food_keyword}`);
   if (data.notes) lines.push(`其他要求：${data.notes}`);
   return `${lines.join('\n')}\n确认无误后开始规划，也可以继续补充或修改。`;
@@ -442,7 +441,11 @@ export function AgentPage() {
       const start = ((batchIndex[activeTab] ?? 0) * 5) % Math.max(1, list.length);
       return list.slice(start, start + 5);
     }
-    if (activeTab === 'event') return options.filter((o) => o.type === 'event');
+    if (activeTab === 'event') {
+      const list = options.filter((o) => o.type === 'event');
+      const start = ((batchIndex[activeTab] ?? 0) * 5) % Math.max(1, list.length);
+      return list.slice(start, start + 5);
+    }
     {
       const list = options.filter((o) => o.type === 'food');
       const start = ((batchIndex[activeTab] ?? 0) * 5) % Math.max(1, list.length);
@@ -712,7 +715,7 @@ export function AgentPage() {
     }, '已按你的需求更新计划，餐饮和地图路线也已同步。');
   }
 
-  async function startTripPlan(data: Record<string, unknown>, history: ChatMessage[]) {
+  async function startTripPlan(data: Record<string, unknown>) {
     const basic = { ...data };
     delete basic.destination;
     delete basic.start_date;
@@ -733,10 +736,6 @@ export function AgentPage() {
       ...(userId ? { user_id: userId } : {}),
       ...(profile ? { profile } : {}),
       basic,
-      answers: history.filter((message) => message.role === 'user').map((message) => ({
-        question: '用户自由输入的旅行需求',
-        answer: message.content,
-      })),
     });
   }
 
@@ -746,7 +745,7 @@ export function AgentPage() {
     setTripConfirm(null);
     setCollectingTrip(false);
     setQuestion(null);
-    await startTripPlan(data, messages);
+    await startTripPlan(data);
   }
 
   async function resolveIntent(history: ChatMessage[], content: string) {
@@ -809,7 +808,7 @@ export function AgentPage() {
         setCollectingTrip(false);
         setQuestion(null);
         setTripConfirm(null);
-        await startTripPlan(data, history);
+        await startTripPlan(data);
         return;
       }
       if (action === 'confirm') {
@@ -1738,6 +1737,9 @@ export function AgentPage() {
                                 <strong>{block.name}</strong>
                               )}
                               {block.note && <p>{block.note}</p>}
+                              {block.type === '景点' && block.match_score != null && (
+                                <span className="ta-plan-block-match">匹配度 {block.match_score}</span>
+                              )}
                               {block.price != null && (
                                 <span className="ta-plan-block-price">
                                   {block.price_known === false ? '暂无报价' : `¥ ${block.price.toLocaleString()}`}
@@ -1995,7 +1997,7 @@ export function AgentPage() {
               </button>
             </div>
 
-            {(activeTab === 'hotel' || activeTab === 'spot' || activeTab === 'food') && (
+            {(activeTab === 'hotel' || activeTab === 'spot' || activeTab === 'event' || activeTab === 'food') && (
               <button
                 type="button"
                 className="ta-batch-button"

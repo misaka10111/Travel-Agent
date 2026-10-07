@@ -64,7 +64,6 @@ export const api = {
     end_date?: string;
     profile?: unknown;
     basic?: unknown;
-    answers?: unknown[];
     modify?: unknown;
     plan?: unknown;
     search?: unknown;

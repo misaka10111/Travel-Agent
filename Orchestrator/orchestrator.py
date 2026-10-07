@@ -6,7 +6,7 @@
             validate --存在可修复严重问题--> plan（携带 feedback，至多修正一次）
 
 用法：
-  echo '{"destination":"宁波","start_date":"2026-10-01","end_date":"2026-10-03","profile":{...},"basic":{...},"answers":[...]}' \
+  echo '{"destination":"宁波","start_date":"2026-10-01","end_date":"2026-10-03","profile":{...},"basic":{...}}' \
     | python orchestrator.py
 
 查看图：
@@ -135,29 +135,6 @@ def _save_trip_summary_cache(user_id: str, summary: str, digest: str) -> None:
         pass
 
 
-def _save_trip_memory(user_id: str, plan: dict, data: dict) -> dict | None:
-    """把本次行程保存到后端情节记忆；失败返回 None。"""
-    payload = {
-        "user_id": user_id,
-        "destination": plan.get("destination") or data.get("destination") or "",
-        "start_date": plan.get("start_date") or data.get("start_date") or "",
-        "end_date": plan.get("end_date") or data.get("end_date") or "",
-        "final_plan": plan,
-    }
-    url = f"{BACKEND_URL}/trip-memory"
-    try:
-        req = urllib.request.Request(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode("utf-8"))
-    except Exception:
-        return None
-
-
 class State(TypedDict, total=False):
     destination: str
     start_date: str
@@ -168,7 +145,6 @@ class State(TypedDict, total=False):
     recent_trip_summary: str
     skip_trip_summary: bool
     basic: dict
-    answers: list
     modify: dict
     search: dict
     plan: dict
@@ -235,7 +211,6 @@ def plan_node(state: State) -> dict:
         "skip_trip_summary": state.get("skip_trip_summary"),
         "search": state.get("search"),
         "basic": state.get("basic"),
-        "answers": state.get("answers"),
     }
     if state.get("feedback"):
         payload["feedback"] = state["feedback"]
@@ -302,7 +277,6 @@ def validate_node(state: State) -> dict:
             "recent_trips": state.get("recent_trips"),
             "search": _search_for_validate(state.get("search"), state.get("plan")),
             "basic": state.get("basic"),
-            "answers": state.get("answers"),
         },
     )
     if not isinstance(result, dict) or not isinstance(result.get("passed"), bool):
@@ -325,7 +299,7 @@ def validate_node(state: State) -> dict:
     if result.get("passed") is False and not result.get("error") and high_issues:
         feedback = (
             "审核发现以下有证据、影响执行且可修复的严重问题。请针对这些问题重新规划，"
-            "保持用户的目的地、日期、硬预算、必去地点及偏好，使用已有真实候选；"
+            "保持用户的目的地、日期、硬预算及偏好，使用已有真实候选；"
             "不要把轻微优化建议当成新增硬约束，也不要捏造未知报价。严重问题："
             + json.dumps(high_issues, ensure_ascii=False)
         )
@@ -387,9 +361,6 @@ def _result_output(result: dict, data: dict) -> dict:
     saved_memory = None
     user_id = result.get("user_id") or data.get("user_id")
     if user_id:
-        saved_memory = _save_trip_memory(
-            user_id, result.get("plan") or {}, result
-        )
         plan = result.get("plan") or {}
         summary = plan.get("recent_trip_summary")
         recent_trips = result.get("recent_trips") or []

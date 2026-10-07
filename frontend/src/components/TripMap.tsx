@@ -11,6 +11,7 @@ export type RouteBlock = {
   time: string;
   name: string;
   note?: string;
+  match_score?: number;
   link?: string;
   price?: number;
   price_known?: boolean;

@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import TripMemory
 from app.schemas import TripMemoryCreate, TripMemoryRead
-from app.services.memory_service import merge_conversation_preferences
+from app.services.memory_service import merge_trip_preferences
 
 router = APIRouter(prefix="/trip-memory", tags=["trip-memory"])
 
@@ -30,8 +30,7 @@ def create_trip_memory(
             setattr(memory, field, value)
     db.commit()
     db.refresh(memory)
-    if payload.conversation:
-        merge_conversation_preferences(payload.user_id, payload.conversation, db)
+    merge_trip_preferences(payload.user_id, payload.final_plan, payload.conversation, db)
     return memory
 
 
@@ -55,6 +54,7 @@ def list_trip_memory(user_id: str, db: Session = Depends(get_db)) -> list[TripMe
     stmt = (
         select(TripMemory)
         .where(TripMemory.user_id == user_id)
+        .where(TripMemory.chosen_plan_style.is_not(None))
         .order_by(TripMemory.created_at.desc())
     )
     return list(db.scalars(stmt))

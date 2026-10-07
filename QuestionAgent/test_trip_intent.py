@@ -79,11 +79,10 @@ class TripIntentTests(unittest.TestCase):
         updated = normalize_trip_data({"travelers": "3人"}, second["data"], TODAY)
         self.assertEqual(updated["total_budget"], 7500)
 
-    def test_duration_correction_preserves_sights_and_preferences(self):
-        old = normalize_trip_data({**TRIP, "requested_pois": ["西湖"], "notes": "不吃辣"}, today=TODAY)
+    def test_duration_correction_preserves_preferences(self):
+        old = normalize_trip_data({**TRIP, "notes": "不吃辣"}, today=TODAY)
         result = normalize_trip_data({"duration_days": 4}, old, TODAY)
         self.assertEqual(result["end_date"], "2026-10-12")
-        self.assertEqual(result["requested_pois"], ["西湖"])
         self.assertEqual(result["notes"], "不吃辣")
 
     def test_invalid_budget_and_fractional_travelers_are_not_accepted(self):
@@ -146,8 +145,8 @@ class TripIntentTests(unittest.TestCase):
             {"field": "start_date", "question": "何时去杭州？", "options": ["2026-10-09", "2026-10-09", 3, ""]},
         ]
         result = complete_trip_request({"destination": "杭州"}, today=TODAY, questions=suggestions)
-        self.assertLessEqual(len(result["questions"]), 3)
-        self.assertEqual([item["field"] for item in result["questions"]], ["start_date", "end_date", "origin"])
+        self.assertLessEqual(len(result["questions"]), 4)
+        self.assertEqual([item["field"] for item in result["questions"]], ["start_date", "end_date", "origin", "travel_style"])
         self.assertEqual(result["questions"][0]["options"], ["2026-10-09"])
         self.assertNotIn("start_date", result["data"])
 
@@ -210,7 +209,9 @@ class ModelContractTests(unittest.TestCase):
         })
         result = resolve_intent({"messages": [{"role": "user", "content": "出发时间还没定"}], "trip_data": previous}, client)
         self.assertEqual(result["missing"], ["start_date"])
-        self.assertEqual(result["questions"], [{"field": "start_date", "question": "新的出发日是哪天？", "options": ["2027-01-01"]}])
+        self.assertEqual(result["questions"][0], {"field": "start_date", "question": "新的出发日是哪天？", "options": ["2027-01-01"]})
+        self.assertEqual(result["questions"][1]["field"], "travel_style")
+        self.assertIn("自然景观", result["questions"][1]["options"])
 
 
 if __name__ == "__main__":

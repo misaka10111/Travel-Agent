@@ -580,35 +580,6 @@ def _extract_item_features(items: list[dict], prompt: str) -> list[dict]:
         return items
 
 
-POI_THEMES = {
-    "自然户外": ["自然风光", "山湖田园", "户外活动"],
-    "历史文化": ["人文古迹", "宗教场所", "园林花园", "古镇古村"],
-    "教育博物": ["博物馆", "纪念馆"],
-    "城市生活": ["文创街区", "市集"],
-}
-
-STYLE_KEYWORDS = {
-    "亲子乐园": ["亲子", "乐园", "动物园", "海洋馆"],
-    "深度文化": ["博物馆", "历史古迹", "纪念馆"],
-    "自然风光": ["自然风光", "公园", "山湖田园"],
-    "美食探店": ["美食街区", "市集", "老字号"],
-    "摄影旅拍": ["网红打卡", "地标", "拍照出片"],
-    "冒险户外": ["户外活动", "徒步", "露营"],
-    "购物血拼": ["商圈", "购物中心"],
-    "休闲度假": ["湖景", "园林", "温泉"],
-}
-
-
-def _profile_keywords(profile: dict | None) -> list[str]:
-    if not profile:
-        return []
-    styles = profile.get("travel_style") or []
-    if isinstance(styles, str):
-        styles = [styles]
-    keywords: list[str] = []
-    for style in styles:
-        keywords.extend(STYLE_KEYWORDS.get(style, []))
-    return keywords
 def _pick_district(item: dict) -> str:
     for key in ("districtName", "district", "areaName", "region", "address"):
         value = item.get(key)
@@ -655,6 +626,37 @@ def _poi_hot_key(item: dict):
     return (0, int(match.group(1)))
 
 
+POI_CATEGORY_GROUPS = {
+    "自然景观": ["自然风光", "山湖田园", "森林丛林", "峡谷瀑布", "沙滩海岛", "沙漠草原"],
+    "历史人文": ["人文古迹", "古镇古村", "历史古迹", "园林花园", "宗教场所", "博物馆", "纪念馆", "展览馆"],
+    "主题娱乐": ["公园乐园", "主题乐园", "水上乐园", "影视基地", "动物园", "植物园", "海洋馆", "体育场馆", "演出赛事", "剧院剧场", "温泉"],
+    "城市地标与购物": ["地标建筑", "市集", "文创街区", "城市观光"],
+    "户外运动与体验": ["户外活动", "滑雪", "漂流", "冲浪", "潜水", "露营"],
+}
+
+
+_CHINESE_CATEGORY_LABEL = {
+    "自然风光": "自然景观", "山湖田园": "自然景观", "森林丛林": "自然景观",
+    "峡谷瀑布": "自然景观", "沙滩海岛": "自然景观", "沙漠草原": "自然景观",
+    "人文古迹": "历史人文", "古镇古村": "历史人文", "历史古迹": "历史人文",
+    "园林花园": "历史人文", "宗教场所": "历史人文", "博物馆": "历史人文",
+    "纪念馆": "历史人文", "展览馆": "历史人文",
+    "公园乐园": "主题娱乐", "主题乐园": "主题娱乐", "水上乐园": "主题娱乐",
+    "影视基地": "主题娱乐", "动物园": "主题娱乐", "植物园": "主题娱乐",
+    "海洋馆": "主题娱乐", "体育场馆": "主题娱乐", "演出赛事": "主题娱乐",
+    "剧院剧场": "主题娱乐", "温泉": "主题娱乐",
+    "地标建筑": "城市地标与购物", "市集": "城市地标与购物",
+    "文创街区": "城市地标与购物", "城市观光": "城市地标与购物",
+    "户外活动": "户外运动与体验", "滑雪": "户外运动与体验", "漂流": "户外运动与体验",
+    "冲浪": "户外运动与体验", "潜水": "户外运动与体验", "露营": "户外运动与体验",
+}
+
+
+def _category_label(item: dict) -> str:
+    cat = str(item.get("category") or "").strip()
+    return _CHINESE_CATEGORY_LABEL.get(cat, "")
+
+
 def _search_poi_items(
     city_name: str,
     keyword: str | None = None,
@@ -667,7 +669,7 @@ def _search_poi_items(
     if category:
         args += ["--category", category]
     if poi_level:
-        args += ["--poi-level", poi_level]
+        args += ["--poi-level", str(poi_level)]
 
     data = _run_flyai(args)
     if data.get("status") not in (0, None):
@@ -717,80 +719,54 @@ def _fetch_poi(
 def _fetch_poi_distributed(
     city_name: str,
     target: int = 50,
-    extra_keywords: list[str] | None = None,
+    travel_styles: list[str] | None = None,
 ) -> list[dict]:
-    """按主题并行搜索景点，按稳定顺序去重后均匀取 target 条。"""
-    by_category: dict[str, list[dict]] = {}
-    seen: set[str] = set()
-    queries: list[tuple[str, dict, int | None]] = []
-    for theme, categories in POI_THEMES.items():
-        for category in categories:
-            queries.append((theme, {"category": category}, None))
-    # 默认热门榜和明确偏好都保留；不让某个慢分类串行拖住其他分类。
-    queries.append(("经典必去", {}, None))
-    for keyword in ("必去", "地标"):
-        queries.append(("经典必去", {"keyword": keyword}, None))
-    for keyword in dict.fromkeys(extra_keywords or []):
-        queries.append(("用户偏好", {"keyword": keyword}, 10))
+    """榜单前十 + 五个大类各取若干条，去重后按热门度返回。"""
+    travel_styles = set(travel_styles or [])
 
-    def fetch_query(query: tuple[str, dict, int | None]) -> list[dict]:
-        _, params, limit = query
-        try:
-            items = _search_poi_items(city_name, **params)
-            return items[:limit] if limit is not None else items
-        except Exception:
-            return []
+    # 1. 榜单前十（经典必去）
+    try:
+        top = _search_poi_items(city_name)
+    except Exception:
+        top = []
+    for item in top:
+        item["category_label"] = _category_label(item)
 
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        batches = list(executor.map(fetch_query, queries))
-    for (theme, _, _), items in zip(queries, batches):
-        for item in items:
-            name = (item.get("name") or "").strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            item["query_category"] = theme
-            by_category.setdefault(theme, []).append(item)
-
-    themes = [
-        t for t in list(POI_THEMES) + ["经典必去", "用户偏好"]
-        if by_category.get(t)
-    ]
-    idx = {t: 0 for t in themes}
-    district_counts: dict[str, int] = {}
-    selected: list[dict] = []
-
-    def district_key(item: dict) -> str:
-        return item.get("district_label") or item.get("district") or ""
-
-    while len(selected) < target and themes:
-        progressed = False
-        for theme in themes:
-            if len(selected) >= target:
+    # 2. 五个大类各查英文 category，匹配的 travel_style 多取 3 条
+    by_label: dict[str, list[dict]] = {}
+    for label, cats in POI_CATEGORY_GROUPS.items():
+        limit = 13 if label in travel_styles else 10
+        collected: list[dict] = []
+        for cat in cats:
+            if len(collected) >= limit:
                 break
-            items = by_category[theme]
-            if idx[theme] >= len(items):
-                continue
-            # 在剩余候选中优先选一个当前出现次数更少的行政区，促进城市内分布均匀
-            candidates = items[idx[theme]:]
-            best = min(
-                candidates,
-                key=lambda p: district_counts.get(district_key(p), 0),
-            )
-            best_pos = items.index(best, idx[theme])
-            items[idx[theme]], items[best_pos] = items[best_pos], items[idx[theme]]
-            picked = items[idx[theme]]
-            idx[theme] += 1
-            selected.append(picked)
-            district = district_key(picked)
-            if district:
-                district_counts[district] = district_counts.get(district, 0) + 1
-            progressed = True
-        if not progressed:
-            break
+            try:
+                for item in _search_poi_items(city_name, category=cat):
+                    if len(collected) >= limit:
+                        break
+                    item["category_label"] = label
+                    collected.append(item)
+            except Exception:
+                pass
+        by_label[label] = collected
 
-    selected.sort(key=_poi_hot_key)
-    return _extract_poi_features(selected)
+    # 3. 去重：榜单前十优先，再按大类顺序补齐
+    seen: set[str] = set()
+    ordered: list[dict] = []
+    for item in top:
+        name = (item.get("name") or "").strip()
+        if name and name not in seen:
+            seen.add(name)
+            ordered.append(item)
+    for label in POI_CATEGORY_GROUPS:
+        for item in by_label[label]:
+            name = (item.get("name") or "").strip()
+            if name and name not in seen:
+                seen.add(name)
+                ordered.append(item)
+
+    ordered.sort(key=_poi_hot_key)
+    return _extract_poi_features(ordered[:target])
 
 
 def _fetch_promotions(keyword: str | None = None) -> list[dict]:
@@ -1392,21 +1368,18 @@ def run_search(input_data: dict) -> dict:
     basic = {**(input_data.get("basic") or {}), "start_date": start, "end_date": end}
     food_keyword = str(input_data.get("food_keyword") or basic.get("food_keyword") or "").strip() or None
     max_price = _estimate_food_budget(basic)
-    profile_keywords = _profile_keywords(input_data.get("profile"))
-    purposes = basic.get("purposes") or []
-    if isinstance(purposes, str):
-        purposes = [purposes]
-    profile_keywords.extend(_profile_keywords({"travel_style": purposes}))
-    requested_pois = basic.get("requested_pois") or []
-    if isinstance(requested_pois, str):
-        requested_pois = [requested_pois]
-    profile_keywords.extend(str(name).strip() for name in requested_pois if str(name).strip())
-    profile_keywords = list(dict.fromkeys(profile_keywords))
+    profile_styles = (input_data.get("profile") or {}).get("travel_style") or []
+    if isinstance(profile_styles, str):
+        profile_styles = [profile_styles]
+    trip_styles = basic.get("travel_style") or []
+    if isinstance(trip_styles, str):
+        trip_styles = [trip_styles]
+    travel_styles = list(dict.fromkeys(list(profile_styles) + list(trip_styles)))
 
-    # 缓存同时隔离画像和必去景点，不将前一位用户的候选复用给另一位。
+    # 缓存需区分 travel_style（不同风格会多取/少取不同类别的景点）。
     cache_key = _cache_key(
         destination, start, end, origin,
-        extra=json.dumps({"food": food_keyword, "budget": max_price, "poi_keywords": sorted(profile_keywords)}, ensure_ascii=False, sort_keys=True),
+        extra=json.dumps({"food": food_keyword, "budget": max_price, "travel_styles": sorted(travel_styles)}, ensure_ascii=False, sort_keys=True),
     )
     cached = _read_cache(cache_key)
     if cached is not None:
@@ -1425,11 +1398,7 @@ def run_search(input_data: dict) -> dict:
     tasks = {
         "weather": lambda: _fetch_weather(destination, start, end),
         "hotels": lambda: _fetch_hotels(destination, start, end) if start != end else [],
-        "poi": lambda: _fetch_poi_distributed(
-            destination,
-            target=50,
-            extra_keywords=profile_keywords,
-        ),
+        "poi": lambda: _fetch_poi_distributed(destination, target=50, travel_styles=travel_styles),
         "events": lambda: _fetch_events(destination, start, end),
         "social_food": lambda: _fetch_social_food(destination),
     }
@@ -1446,7 +1415,11 @@ def run_search(input_data: dict) -> dict:
     result["food"] = []
     result["food_search_pending"] = True
 
-    _write_cache(cache_key, result)
+    # 飞猪数据源偶发抖动会整批返回空，重试一次并避免把空结果缓存 1 小时。
+    if not isinstance(result.get("poi"), list) or not result["poi"]:
+        result["poi"] = _fetch_poi_distributed(destination, target=50, travel_styles=travel_styles)
+    if isinstance(result.get("poi"), list) and result["poi"]:
+        _write_cache(cache_key, result)
     return result
 
 

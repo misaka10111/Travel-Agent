@@ -6,10 +6,9 @@
     | python ../SearchAgent/search.py \
     | python plan.py
 
-输入（三选一）：
-  1) SearchAgent 返回的 JSON（weather/hotels/poi/promotions），不带画像/作答
+输入（二选一）：
+  1) SearchAgent 返回的 JSON（weather/hotels/poi/promotions），不带画像/偏好
   2) {"profile": {...用户画像...}, "search": {...搜索结果...}}
-  3) {"profile": {...}, "search": {...}, "answers": [{"question":"...","answer":"..."}]}
 输出：旅行计划 JSON（含逐日 itinerary）
 """
 
@@ -27,7 +26,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from openai import OpenAI
 
-from route_map import attach_routes, geocode, geocode_blocks, strip_geo, walking_route, _km, _get as _map_get
+from route_map import attach_routes, geocode, geocode_blocks, strip_geo, walking_route, _km
 from plan_state import merge_block_edits, rebuild_itineraries
 from trip_changes import resolve_trip_changes
 
@@ -40,7 +39,10 @@ SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
 
 def _model_options() -> dict:
     # 规划、补全、编辑无需长思考，避免 Qwen 默认思考模式拖慢交互。
-    return {"extra_body": {"enable_thinking": False}} if os.getenv("OPENAI_MODEL", "qwen3.8-27b").lower().startswith("qwen") else {}
+    model = os.getenv("OPENAI_MODEL", "qwen3.8-27b").lower()
+    if "qwen" in model or "deepseek" in model:
+        return {"extra_body": {"enable_thinking": False}}
+    return {}
 
 
 def _chat_completion(client: OpenAI, **kwargs):
@@ -49,29 +51,32 @@ def _chat_completion(client: OpenAI, **kwargs):
 DAY_PLAN_PROMPT = (
     "你是旅行规划师，负责规划某一天的行程。"
     "输入包含 day（第几天）、date、block（当天分配的景点片区，names 是可选的景点名）、"
-    "search（酒店/机票/高铁等）、user_profile、preferences、basic、answers 等。"
-    "规则：根据 user_profile.travel_style 或 preferences.pace 调整节奏："
-    "休闲度假/轻松→每天 1~2 个景点，慢节奏、安排休息；摄影旅拍/打卡/紧凑→每天 3 个景点，优先网红出片点，行程充实。"
+    "search（酒店/机票/高铁等）、user_profile、preferences、basic 等。"
+    "规则：根据 preferences.pace 调整每天景点数量（以 block.min_spots~max_spots 为准）："
+    "慢节奏→2~3 个景点、安排休息；适中/休闲或无节奏→3~4 个；快节奏/紧凑→4~6 个，优先网红出片点、行程充实。"
     "根据预算档位安排：经济档→免费景点+公共交通+经济酒店/餐厅；舒适档→中等门票+地铁/打车+舒适酒店；"
     "豪华档→可付费体验+打车+高星酒店/高品质餐厅；总花费不超 basic.total_budget。"
     "根据画像与人数：带老人/孩子减少步行、安排休息；学生控预算；退休轻松节奏；美食偏好优先安排当地特色餐厅。"
     "如果是第一天且去程航班/高铁到达时间较晚（15:00 以后），可只安排 1 个景点或仅安排晚餐/入住；"
     "如果到达时间晚于 20:00，第一天不要再安排景点，只安排交通和入住；禁止在 00:00 之后安排景点。"
-    "其他情况当天至少安排 2 个景点；若 block.names 少于 2 个，可从 search.poi 里选地理相邻的景点补充。"
-    "根据景点 scale/duration 安排数量与时间：大景点(全天)每天 1 个，中景点每天 2 个，小景点每天最多 3 个；"
+    "其他情况当天至少安排 block.min_spots 个景点；若 block.names 不够，可从 search.poi 里选地理相邻的景点补充。"
+    "根据景点 scale/duration 安排数量与时间：大景点(全天)每天 1 个，中景点每天 2~3 个，小景点每天最多 6 个；"
     "不要在同一天塞入两个全天型大景点。"
-    "优先选择榜单名次靠前（rank 小）的景点；如果当天 block 内有全天型高热度景点，优先把它安排进去，"
+    "优先选择榜单名次靠前（rank 小）且 match_score（匹配度，0-100）较高的景点；如果当天 block 内有全天型高热度景点，优先把它安排进去，"
     "其他可顺延的小景点放到别的天。"
+    "根据当天天气安排室内外：search.weather 里当天若是下雨/下雪/阴雨等天气，优先安排 description 含「室内」的景点（博物馆、展馆、商场、剧场等），"
+    "把户外景点放到晴天或缩短游览、改到天气转好的时段；晴天则优先户外景点。"
     "按时间与距离合理安排：当天所有景点的 duration 累加（含交通）控制在 8 小时以内；"
-    "优先把同区县、同 geo_hints 片区的景点排在一起，相邻景点交通耗时尽量不超过 30 分钟；"
+    "优先把同区县的景点排在一起，相邻景点交通耗时尽量不超过 30 分钟；"
     "跨区且交通超过 1 小时的景点不要硬塞在同一天。"
     "当天景点必须按地理顺序排成一条不折返的路线：如果 C 离 A 很近，就应安排 A→C→B，而不是 A→B→C。"
     "最后一天若回程时间在傍晚或晚上，不要安排距离车站/机场超过 1 小时的远郊景点。"
     "schedule 必须按时间从早到晚排列。"
+    "若当天出现 2 小时以上未安排的空档（不含用餐/交通），优先从 block.names 补一个中/小景点；"
+    "若没有合适景点，则安排 1 个 type=活动 的休闲/自由活动块填满空档。"
     "activity_window是当天可游玩的时间范围，所有景点必须完整位于这个范围；时间不足宁可减少景点。"
     "在可游玩的午餐11:00-14:00和晚餐17:00-20:00窗口，各预留45-60分钟完整就餐空档及接驳余量。"
     "半天/全天景点可安排部分区域或缩短游览，不能用连续6小时景点占满整个午餐窗口；不要为了多排景点取消用餐。"
-    "block.required_names是用户明确要求且已核实的必去景点，优先于热度和其他推荐，必须安排。"
     "当天只从 block.names 里选景点；"
     "本阶段不要安排美食/餐饮，餐饮稍后会单独补充。"
     "本阶段不要写交通项，去程和回程会按已核实班次确定性补入；禁止自行选择或编造其他交通时间。"
@@ -190,6 +195,7 @@ def _trim_search(search: dict) -> dict:
                 "name": p.get("name"),
                 "category": p.get("category"),
                 "rank": p.get("rank"),
+                "match_score": p.get("match_score"),
                 "free": p.get("free"),
                 "district": p.get("district_label") or p.get("district") or "",
                 "duration": p.get("duration") or "",
@@ -256,61 +262,6 @@ def _trim_search(search: dict) -> dict:
     return result
 
 
-def _names_from_search(search: dict) -> list[str]:
-    """收集 search 里所有可定位的地点名称，去重后返回。"""
-    seen: list[str] = []
-    for key in ("poi", "hotels", "food", "events", "promotions"):
-        items = search.get(key)
-        if not isinstance(items, list):
-            continue
-        for item in items:
-            name = (item.get("name") or item.get("title") or "").strip()
-            if name and name not in seen:
-                seen.append(name)
-    return seen
-
-
-def _geo_hints(search: dict, destination: str, cluster_km: float = 2.5) -> dict:
-    """A 方案：给 PlanAgent 注入地理片区聚类提示。
-
-    对 search 里的地点做高德地理编码，按直线距离聚成片区。
-    没有 AMAP_KEY 或地理编码失败时返回空字典。
-    """
-    if not os.getenv("AMAP_KEY") or not destination:
-        return {}
-    names = _names_from_search(search)
-    if not names:
-        return {}
-
-    # 查询独立地点时使用有限并发，后续分区和路线复用地理编码缓存。
-    with ThreadPoolExecutor(max_workers=6) as executor:
-        hits = list(executor.map(lambda name: geocode(name, destination), names))
-    located = [(name, hit["location"]) for name, hit in zip(names, hits)
-               if hit and hit.get("location")]
-
-    clusters: list[dict] = []
-    for name, loc in located:
-        placed = False
-        for cluster in clusters:
-            if _km(cluster["anchor"], loc) <= cluster_km:
-                cluster["names"].append(name)
-                placed = True
-                break
-        if not placed:
-            clusters.append({"anchor": loc, "names": [name]})
-
-    clusters = [c for c in clusters if len(c["names"]) > 1]
-    if not clusters:
-        return {}
-    return {
-        "hint": "以下地点地理上相邻，应安排在同一天并尽量连续游览，不要拆到不同天。",
-        "clusters": [
-            {"names": c["names"]}
-            for c in sorted(clusters, key=lambda c: -len(c["names"]))
-        ],
-    }
-
-
 def _chunks(items: list[str], count: int) -> list[list[str]]:
     count = max(1, min(count, len(items)))
     buckets: list[list[str]] = [[] for _ in range(count)]
@@ -349,89 +300,16 @@ def _short_district(value: str | None) -> str:
     return f"{name}{suffix}"
 
 
-def _matches_requested_poi(requested: str, candidate: str) -> bool:
+def _matches_poi_name(name: str, candidate: str) -> bool:
     """景区/馆区可以有名称后缀，但“西湖天地”不能冒充“西湖”。"""
     def normalize(value: str) -> str:
         value = re.sub(r"[（(].*?[）)]", "", str(value)).strip()
         return re.sub(r"(?:风景名胜区|风景区|景区)$", "", value)
-    expected, actual = normalize(requested), normalize(candidate)
+    expected, actual = normalize(name), normalize(candidate)
     return bool(expected and (expected == actual or (
         len(expected) >= 4 and actual.startswith(expected)
         and re.search(r"(?:馆区|分馆)$", actual)
     )))
-
-
-def _ensure_requested_pois(
-    search_result: dict,
-    destination: str,
-    requested_pois: list[str],
-) -> dict:
-    """补搜用户明确要求但 SearchAgent 结果里没有的地点。"""
-    existing = {
-        (p.get("name") or "").strip()
-        for p in (search_result.get("poi") or [])
-        if (p.get("name") or "").strip()
-    }
-    poi_list = list(search_result.get("poi") or [])
-    for name in requested_pois:
-        name = (name or "").strip()
-        if not name or any(_matches_requested_poi(name, candidate) for candidate in existing):
-            continue
-        # 主榜单不一定包括免费博物馆；用地图真实POI核实名称、坐标和链接。
-        verified = []
-        if os.getenv("AMAP_KEY"):
-            try:
-                data = _map_get("/v5/place/text", keywords=name, region=destination,
-                                city_limit="true", page_size=5)
-                for hit in data.get("pois") or []:
-                    if not _matches_requested_poi(name, hit.get("name") or ""):
-                        continue
-                    location = (hit.get("location") or "").split(",")
-                    if len(location) != 2:
-                        continue
-                    lng, lat = map(float, location)
-                    if not _valid_food_coord([lng, lat]):
-                        continue
-                    verified.append({
-                        "name": hit["name"], "longitude": lng, "latitude": lat,
-                        "district": hit.get("adname") or "", "district_label": hit.get("adname") or "",
-                        "category": hit.get("type") or "", "source": "amap_requested",
-                        "poi_id": hit.get("id") or "",
-                        "url": f"https://www.amap.com/place/{hit['id']}" if hit.get("id") else "",
-                    })
-                if verified:
-                    for item in verified:
-                        if item["name"] not in existing:
-                            existing.add(item["name"])
-                            poi_list.append(item)
-                    continue
-            except Exception:
-                pass
-        try:
-            proc = subprocess.run(
-                [
-                    str(SEARCH_PYTHON),
-                    str(SEARCH_PY),
-                    "--poi-keyword",
-                    name,
-                    "--city",
-                    destination,
-                ],
-                capture_output=True,
-                text=True,
-                timeout=45,
-            )
-            extra = json.loads(proc.stdout).get("poi") or []
-        except Exception:
-            extra = []
-        for item in extra:
-            item_name = (item.get("name") or "").strip()
-            if item_name and item_name not in existing:
-                existing.add(item_name)
-                item["source"] = "on_demand"
-                poi_list.append(item)
-    search_result["poi"] = poi_list
-    return search_result
 
 
 def _rank_score(rank: str | None) -> int:
@@ -443,43 +321,212 @@ def _rank_score(rank: str | None) -> int:
     return int(match.group(1)) if match else 0
 
 
-def _assign_clusters(search: dict, destination: str, days: int) -> list[dict]:
-    """把地理片区分配到每一天：每天不同片区，大片区可拆成多天。"""
-    hints = _geo_hints(search, destination)
-    clusters = hints.get("clusters") or []
-    if not clusters or days <= 0:
-        return []
+_POI_MATCH_KEYWORDS = {
+    "自然景观": ["自然", "山水", "森林", "田园", "生态", "风光", "湖", "公园", "园林"],
+    "历史人文": ["博物馆", "历史", "古迹", "纪念馆", "故居", "寺", "祠", "艺术", "人文", "古镇"],
+    "主题娱乐": ["乐园", "动物园", "海洋", "主题", "娱乐", "温泉", "科普", "儿童"],
+    "城市地标与购物": ["地标", "商圈", "购物", "商业", "市集", "文创"],
+    "户外运动与体验": ["户外", "徒步", "露营", "探险", "漂流", "攀岩", "滑雪", "冲浪", "潜水"],
+    "休闲度假": ["园林", "湖", "公园", "温泉", "古镇", "度假", "水乡"],
+    "深度文化": ["博物馆", "历史", "古迹", "纪念馆", "故居", "寺", "祠", "艺术", "人文"],
+    "自然风光": ["自然", "山水", "森林", "田园", "生态", "风光", "湖", "公园"],
+    "美食探店": ["美食", "小吃", "市集", "夜市", "老字号", "餐饮"],
+    "亲子乐园": ["亲子", "乐园", "动物园", "海洋", "科普", "儿童", "博物馆"],
+    "购物血拼": ["购物", "商圈", "商业", "市集"],
+    "冒险户外": ["户外", "徒步", "露营", "探险", "漂流", "攀岩"],
+    "摄影旅拍": ["打卡", "网红", "拍照", "出片", "地标", "夜景", "风光"],
+    "美食": ["美食", "小吃", "夜市", "老字号", "餐饮"],
+    "亲子": ["亲子", "乐园", "动物园", "海洋", "科普", "儿童"],
+    "文化": ["博物馆", "历史", "古迹", "纪念馆", "故居", "寺", "人文", "艺术"],
+    "自然": ["自然", "山水", "森林", "田园", "湖", "公园", "风光"],
+    "自然风景": ["自然", "山水", "森林", "田园", "湖", "公园", "风光"],
+    "购物": ["购物", "商圈", "商业", "市集"],
+    "摄影": ["打卡", "网红", "拍照", "出片", "地标", "夜景"],
+    "冒险": ["户外", "徒步", "露营", "探险", "漂流"],
+    "休闲": ["园林", "湖", "公园", "温泉", "古镇", "度假"],
+}
 
-    clusters = sorted(clusters, key=lambda c: -len(c["names"]))
-    total = sum(len(c["names"]) for c in clusters)
-    if total <= 0:
-        return []
 
-    raw_days = [max(1, round(len(c["names"]) / total * days)) for c in clusters]
-    diff = days - sum(raw_days)
-    order = sorted(range(len(clusters)), key=lambda i: -len(clusters[i]["names"]))
+def _dedupe_keywords(values: list[str]) -> list[str]:
+    seen: list[str] = []
+    for value in values:
+        value = str(value or "").strip()
+        if value and value not in seen:
+            seen.append(value)
+    return seen
 
-    while diff > 0:
-        raw_days[order[0]] += 1
-        diff -= 1
-    while diff < 0:
-        adjusted = False
-        for i in order:
-            if raw_days[i] > 1:
-                raw_days[i] -= 1
-                diff += 1
-                adjusted = True
-                break
-        if not adjusted:
+
+def _user_match_signals(profile, preferences, basic) -> tuple[list[str], list[str]]:
+    """从画像/偏好/本次旅行信息中提取正、负向关键词，用于景点匹配度打分。"""
+    positive: list[str] = []
+    for source in (
+        (profile or {}).get("travel_style"),
+        (basic or {}).get("travel_style"),
+        (basic or {}).get("purposes"),
+    ):
+        items = source or []
+        if isinstance(items, str):
+            items = [items]
+        for item in items:
+            item = str(item).strip()
+            if not item:
+                continue
+            positive.append(item)
+            positive.extend(_POI_MATCH_KEYWORDS.get(item, []))
+
+    liked = (preferences or {}).get("liked") or []
+    if isinstance(liked, str):
+        liked = [liked]
+    positive.extend(str(x).strip() for x in liked)
+
+    avoided = (preferences or {}).get("avoided") or []
+    if isinstance(avoided, str):
+        avoided = [avoided]
+    negative = [str(x).strip() for x in avoided]
+
+    return _dedupe_keywords(positive), _dedupe_keywords(negative)
+
+
+def _score_poi_match(poi: dict, profile, preferences, basic) -> int:
+    """给单个景点打分（0-100），反映其与画像/偏好/本次旅行信息的匹配度。"""
+    positive, negative = _user_match_signals(profile, preferences, basic)
+    if not positive and not negative:
+        return 50
+    text = " ".join(
+        str(poi.get(key) or "")
+        for key in ("name", "category", "description", "scale", "duration", "district")
+    )
+    pos_hits = sum(1 for kw in positive if kw in text)
+    neg_hits = sum(1 for kw in negative if kw in text)
+    score = 50 + 12 * pos_hits - 18 * neg_hits
+    return max(0, min(100, score))
+
+
+def _filter_far_pois(search: dict, destination: str, max_km: float = 60.0) -> dict:
+    """过滤掉离城市核心过远的景点（如千岛湖之于杭州主城）。"""
+    pois = list(search.get("poi") or [])
+    coords = []
+    for p in pois:
+        lng, lat = p.get("longitude"), p.get("latitude")
+        if lng is not None and lat is not None:
+            coords.append(f"{lng},{lat}")
+    if not coords:
+        return search
+    lngs = sorted(float(c.split(",")[0]) for c in coords)
+    lats = sorted(float(c.split(",")[1]) for c in coords)
+    med = f"{lngs[len(lngs) // 2]},{lats[len(lats) // 2]}"
+    core = [c for c in coords if _km(med, c) <= max_km / 2]
+    if core:
+        c_lngs = [float(c.split(",")[0]) for c in core]
+        c_lats = [float(c.split(",")[1]) for c in core]
+        center = f"{sum(c_lngs) / len(c_lngs)},{sum(c_lats) / len(c_lats)}"
+    else:
+        center = med
+    kept = [
+        p for p in pois
+        if p.get("longitude") is None or p.get("latitude") is None
+        or _km(center, f"{p['longitude']},{p['latitude']}") <= max_km
+    ]
+    if kept and len(kept) < len(pois):
+        search = dict(search)
+        search["poi"] = kept
+    return search
+
+
+def _assign_days_by_score(
+    search: dict,
+    days: int,
+    min_spots: int,
+    max_spots: int,
+    travel_categories: list[str] | None = None,
+) -> list[dict]:
+    """热门度前二 + 至少 days 个匹配风格的景点 + 其余，按综合分排序后分配到每天。"""
+    pois = [p for p in (search.get("poi") or []) if p.get("name")]
+    if not pois:
+        return [{"day": day, "names": [], "min_spots": min_spots, "max_spots": max_spots} for day in range(1, days + 1)]
+    travel_categories = set(travel_categories or [])
+
+    def hot_key(p: dict) -> tuple[bool, int]:
+        n = _rank_score(p.get("rank"))
+        return (n == 0, n or 10**9)
+
+    def combined(p: dict) -> float:
+        match = (p.get("match_score") or 0) / 100.0
+        n = _rank_score(p.get("rank"))
+        hot = 1.0 / n if n > 0 else 0.0
+        return 0.5 * match + 0.5 * hot
+
+    def rest_key(p: dict) -> tuple[int, int]:
+        # 匹配度为主；匹配度相近时优先榜单景点
+        match = int(p.get("match_score") or 0)
+        ranked = int(_rank_score(p.get("rank")) > 0)
+        return (-match, -ranked)
+
+    def is_match(p: dict) -> bool:
+        return bool(travel_categories and p.get("category_label") in travel_categories)
+
+    top2 = sorted(pois, key=hot_key)[:2]
+    matching = sorted([p for p in pois if is_match(p)], key=lambda p: -combined(p))
+    rest = sorted([p for p in pois if not is_match(p)], key=rest_key)
+
+    ordered: list[dict] = []
+    seen: set[str] = set()
+
+    def add(p: dict) -> None:
+        name = p.get("name")
+        if name and name not in seen:
+            seen.add(name)
+            ordered.append(p)
+
+    # 1. 热门度前二
+    for p in top2:
+        add(p)
+    # 2. 至少 days 个匹配风格的景点（不足则尽可能多）
+    matched = sum(1 for p in ordered if is_match(p))
+    for p in matching:
+        if matched >= days:
             break
+        if p.get("name") not in seen:
+            add(p)
+            matched += 1
+    # 3. 其余
+    for p in rest:
+        add(p)
+    # 4. 剩余匹配风格
+    for p in matching:
+        add(p)
 
-    assignments: list[dict] = []
-    day = 1
-    for cluster, count in zip(clusters, raw_days):
-        for chunk in _chunks(cluster["names"], count):
-            assignments.append({"day": day, "names": chunk})
-            day += 1
-    return assignments[:days]
+    assignments = []
+    for day in range(1, days + 1):
+        chunk = ordered[(day - 1) * max_spots : day * max_spots]
+        assignments.append({
+            "day": day,
+            "names": [p["name"] for p in chunk],
+            "min_spots": min_spots,
+            "max_spots": max_spots,
+        })
+    return assignments
+
+
+def _pace_tier(pace: str, styles: list[str]) -> str:
+    """返回节奏档位：slow / moderate / fast。"""
+    slow_words = ("慢",)
+    fast_words = ("快", "紧凑", "赶", "暴走", "特种兵")
+    if any(word in pace for word in slow_words):
+        return "slow"
+    if any(word in pace for word in fast_words):
+        return "fast"
+    return "moderate"
+
+
+def _pace_spots(pace: str, styles: list[str]) -> tuple[int, int]:
+    """按节奏返回每天景点数量区间（最小, 最大）。"""
+    return {"slow": (2, 3), "moderate": (3, 4), "fast": (4, 6)}[_pace_tier(pace, styles)]
+
+
+def _pace_block_limit(pace: str, styles: list[str]) -> int:
+    """按节奏返回单个 block 的景点数上限，超过则拆成两天。"""
+    return {"slow": 5, "moderate": 7, "fast": 10}[_pace_tier(pace, styles)]
 
 
 def _build_blocks(
@@ -495,8 +542,13 @@ def _build_blocks(
         name = (p.get("name") or "").strip()
         if not name:
             continue
-        hit = geocode(name, destination)
-        loc = (hit or {}).get("location") or ""
+        lng = p.get("longitude")
+        lat = p.get("latitude")
+        if lng is not None and lat is not None:
+            loc = f"{lng},{lat}"
+        else:
+            hit = geocode(name, destination)
+            loc = (hit or {}).get("location") or ""
         district = (
             p.get("district_label")
             or _short_district(p.get("district") or "")
@@ -511,13 +563,28 @@ def _build_blocks(
             }
         )
 
-    # 以城市中心为基准，先过滤掉过远的景点（如千岛湖之于杭州主城）
-    city_hit = (
-        geocode(destination, destination)
-        or geocode(f"{destination}市", destination)
-        or geocode(destination, "")
-    )
-    city_loc = (city_hit or {}).get("location") or ""
+    # 以城市中心为基准，先过滤掉过远的景点（如千岛湖之于杭州主城）。
+    # 城市中心取「离中位数 max_km/2 以内的城市核心」质心，对远郊离群点稳健；
+    # 拿不到坐标时回退地理编码。
+    coords = [item["loc"] for item in items if item["loc"]]
+    if coords:
+        lngs = sorted(float(c.split(",")[0]) for c in coords)
+        lats = sorted(float(c.split(",")[1]) for c in coords)
+        med = f"{lngs[len(lngs) // 2]},{lats[len(lats) // 2]}"
+        core = [c for c in coords if _km(med, c) <= max_km / 2]
+        if core:
+            c_lngs = [float(c.split(",")[0]) for c in core]
+            c_lats = [float(c.split(",")[1]) for c in core]
+            city_loc = f"{sum(c_lngs) / len(c_lngs)},{sum(c_lats) / len(c_lats)}"
+        else:
+            city_loc = med
+    else:
+        city_hit = (
+            geocode(destination, destination)
+            or geocode(f"{destination}市", destination)
+            or geocode(destination, "")
+        )
+        city_loc = (city_hit or {}).get("location") or ""
     if city_loc:
         kept: list[dict] = []
         for item in items:
@@ -750,39 +817,92 @@ def _first_day_arrives_late(search_result: dict) -> bool:
 
 def _score_blocks(
     blocks: list[dict],
-    city_center: list[float] | None,
-    profile: dict | None = None,
+    city_center: list[float] | None = None,
+    match_map: dict[str, int] | None = None,
 ) -> list[dict]:
-    """给每个区打分：热度 + 距离 + 密度 + 匹配 + 交通。"""
+    """给每个 block 打分：0.4 匹配度 + 0.2 数量 + 0.4 排名，降序返回。"""
+    match_map = match_map or {}
     scored: list[tuple[float, dict]] = []
     for block in blocks:
+        names = block.get("names") or []
+        count = len(names)
+
+        # 匹配度：block 内各景点 match_score 的平均（0-100 → 0-1）
+        matches = [match_map.get(name, 0) for name in names]
+        match = (sum(matches) / len(matches)) / 100.0 if matches else 0.0
+
+        # 数量：景点越多越好，8 个封顶
+        count_score = min(1.0, count / 8.0)
+
+        # 排名：rank 越小越靠前，用 1/rank 的平均值
         scores = [s for s in (block.get("scores") or []) if s and s > 0]
-        hot = sum(1.0 / s for s in scores) / len(scores) if scores else 0.0
+        rank = sum(1.0 / s for s in scores) / len(scores) if scores else 0.0
 
-        if city_center and block.get("center"):
-            dist = _km(
-                f"{city_center[0]},{city_center[1]}",
-                f"{block['center'][0]},{block['center'][1]}",
-            )
-            distance_score = 1.0 / (1.0 + dist / 10.0)
-        else:
-            distance_score = 0.5
-
-        density = min(1.0, len(block.get("names") or []) / 8.0)
-        match = 0.5
-        transport = 0.5
-
-        total = (
-            0.30 * hot
-            + 0.25 * distance_score
-            + 0.20 * density
-            + 0.15 * match
-            + 0.10 * transport
-        )
+        total = 0.4 * match + 0.2 * count_score + 0.4 * rank
         scored.append((total, block))
 
     scored.sort(key=lambda pair: -pair[0])
     return [block for _, block in scored]
+
+
+def _drop_lowest_match(block: dict, match_map: dict[str, int]) -> dict:
+    """丢弃 block 内匹配度最低的景点，保持 names/scores 对齐。"""
+    names = list(block.get("names") or [])
+    scores = list(block.get("scores") or [])
+    if not names:
+        return block
+    index = min(range(len(names)), key=lambda i: match_map.get(names[i], 0))
+    names.pop(index)
+    if index < len(scores):
+        scores.pop(index)
+    block = dict(block)
+    block["names"] = names
+    block["scores"] = scores
+    return block
+
+
+def _order_units_geographically(units: list[dict], city_center: list[float] | None) -> list[dict]:
+    """把选出的 block 按地理就近串成一天接一天，最后一天尽量靠近市中心。"""
+    if len(units) <= 1 or not all(u.get("center") for u in units):
+        return units
+
+    located = [u for u in units if u.get("center")]
+    if city_center:
+        global_center = city_center
+    else:
+        total_w = sum(len(u.get("names") or []) for u in located) or 1
+        global_center = [
+            sum((u["center"][0] * len(u.get("names") or [])) for u in located) / total_w,
+            sum((u["center"][1] * len(u.get("names") or [])) for u in located) / total_w,
+        ]
+
+    ordered = [units[0]]
+    remaining = units[1:]
+    while remaining:
+        last = ordered[-1]
+        nxt = min(
+            remaining,
+            key=lambda u: _km(
+                f"{last['center'][0]},{last['center'][1]}",
+                f"{u['center'][0]},{u['center'][1]}",
+            ),
+        )
+        ordered.append(nxt)
+        remaining.remove(nxt)
+
+    if len(ordered) >= 3 and global_center:
+        def distance_to_center(u: dict) -> float:
+            return _km(
+                f"{u['center'][0]},{u['center'][1]}",
+                f"{global_center[0]},{global_center[1]}",
+            )
+
+        first = ordered[0]
+        rest = ordered[1:]
+        last_day = min(rest, key=distance_to_center)
+        middle = [u for u in rest if u is not last_day]
+        ordered = [first, *middle, last_day]
+    return ordered
 
 
 def _assign_blocks_to_days(
@@ -790,84 +910,54 @@ def _assign_blocks_to_days(
     days: int,
     first_day_late: bool = False,
     city_center: list[float] | None = None,
+    match_map: dict[str, int] | None = None,
+    block_limit: int | None = None,
 ) -> list[dict]:
-    """固定 1 block/天：把 block 数量调整到 days，每个 block 对应一天。"""
+    """按 block 分数挑选，超大 block 拆成两天并丢弃最低分景点。"""
     if not blocks or days <= 0:
         return []
-    working = [dict(b) for b in blocks]
+    match_map = match_map or {}
 
-    # block 数量少于天数时，拆最大的 block
-    while len(working) < days:
-        working.sort(key=lambda b: -len(b.get("names") or []))
-        largest = working[0]
+    # 丢弃景点数 ≤ 2 的 block；若因此清空则退回全部，避免无 block 可选。
+    candidates = [dict(b) for b in blocks if len(b.get("names") or []) > 2]
+    if not candidates:
+        candidates = [dict(b) for b in blocks]
+
+    scored = _score_blocks(candidates, city_center, match_map)
+
+    units: list[dict] = []
+    for block in scored:
+        if len(units) >= days:
+            break
+        if block_limit and len(block.get("names") or []) > block_limit and len(units) + 2 <= days:
+            block = _drop_lowest_match(block, match_map)
+            units.extend(_split_block(block, 2))
+        else:
+            units.append(block)
+
+    # block 不够填满天数时，拆最大的 block
+    while len(units) < days:
+        units.sort(key=lambda b: -len(b.get("names") or []))
+        largest = units[0]
         if len(largest.get("names") or []) < 2:
             break
-        working = working[1:] + _split_block(largest, 2)
+        units = units[1:] + _split_block(largest, 2)
 
-    # 仍少于天数时，补空 block（按区县/景点兜底）
-    while len(working) < days:
-        working.append({"block_id": f"empty-{len(working) + 1}", "district": "", "names": [], "center": None})
+    # 仍不够时补空 block
+    while len(units) < days:
+        units.append({"block_id": f"empty-{len(units) + 1}", "district": "", "names": [], "scores": [], "center": None})
 
-    # block 数量多于天数时，合并最近的 block
-    while len(working) > days:
-        located = [b for b in working if b.get("center")]
-        if city_center:
-            global_center = city_center
-        elif located:
-            total_w = sum(len(b.get("names") or []) for b in located) or 1
-            global_center = [
-                sum((b["center"][0] * len(b.get("names") or [])) for b in located) / total_w,
-                sum((b["center"][1] * len(b.get("names") or [])) for b in located) / total_w,
-            ]
-        else:
-            global_center = None
-
-        working = _score_blocks(working, global_center)
-        working = working[:days]
-
-        # 按地理就近串成一天接一天的顺序，避免第一天和最后一天跨区跳远
-        if len(working) > 1 and all(b.get("center") for b in working):
-            ordered = [working[0]]
-            remaining = working[1:]
-            while remaining:
-                last = ordered[-1]
-                nxt = min(
-                    remaining,
-                    key=lambda b: _km(
-                        f"{last['center'][0]},{last['center'][1]}",
-                        f"{b['center'][0]},{b['center'][1]}",
-                    ),
-                )
-                ordered.append(nxt)
-                remaining.remove(nxt)
-            working = ordered
-
-        # 最后一天尽量回到城市中心附近，方便返程
-        if len(working) >= 3 and global_center:
-            def distance_to_center(block: dict) -> float:
-                if not block.get("center"):
-                    return float("inf")
-                return _km(
-                    f"{block['center'][0]},{block['center'][1]}",
-                    f"{global_center[0]},{global_center[1]}",
-                )
-
-            first = working[0]
-            rest = working[1:]
-            last_day = min(rest, key=distance_to_center)
-            middle = [b for b in rest if b is not last_day]
-            working = [first, *middle, last_day]
-        break
+    units = _order_units_geographically(units, city_center)
 
     assignments = []
-    for i, block in enumerate(working):
+    for i, unit in enumerate(units):
         assignments.append(
             {
                 "day": i + 1,
-                "block_id": block.get("block_id"),
-                "district": block.get("district"),
-                "names": block.get("names") or [],
-                "center": block.get("center"),
+                "block_id": unit.get("block_id"),
+                "district": unit.get("district"),
+                "names": unit.get("names") or [],
+                "center": unit.get("center"),
             }
         )
     if first_day_late and len(assignments) > 1:
@@ -875,57 +965,6 @@ def _assign_blocks_to_days(
     for index, assignment in enumerate(assignments):
         assignment["day"] = index + 1
     return assignments
-
-
-def _prioritize_requested_assignments(assignments: list[dict], search: dict,
-                                     requested: list[str], transport: dict) -> list[dict]:
-    """必去项先占可游玩的日期，分区热度只能决定其余候选。"""
-    result = deepcopy(assignments)
-    pois = search.get("poi") if isinstance(search.get("poi"), list) else []
-    for assignment in result:
-        assignment["required_names"] = []
-    for requested_name in requested:
-        matches = [poi for poi in pois if _matches_requested_poi(requested_name, poi.get("name") or "")]
-        if not matches:
-            continue
-        exact = next((poi for poi in matches if poi.get("name") == requested_name), None)
-        reference_coords = [
-            [poi.get("longitude"), poi.get("latitude")]
-            for assignment in result for required_name in assignment["required_names"]
-            for poi in pois if poi.get("name") == required_name
-            and _valid_food_coord([poi.get("longitude"), poi.get("latitude")])
-        ]
-        def branch_distance(poi: dict) -> float:
-            coord = [poi.get("longitude"), poi.get("latitude")]
-            if not reference_coords or not _valid_food_coord(coord):
-                return float("inf")
-            return min(_km(f"{coord[0]},{coord[1]}", f"{other[0]},{other[1]}") for other in reference_coords)
-        poi = exact or min(matches, key=branch_distance)
-        name = poi["name"]
-        available = []
-        for assignment in result:
-            try:
-                date_ = (date.fromisoformat(search["start_date"]) + timedelta(days=int(assignment["day"]) - 1)).isoformat()
-            except (ValueError, TypeError, KeyError):
-                date_ = search.get("start_date") or ""
-            start, end = _activity_window(date_, transport)
-            if end - start >= 60:
-                available.append(assignment)
-        if not available:
-            continue
-        def priority(assignment: dict) -> tuple:
-            count = len(assignment["required_names"])
-            coord = [poi.get("longitude"), poi.get("latitude")]
-            center = assignment.get("center")
-            distance = _km(f"{coord[0]},{coord[1]}", f"{center[0]},{center[1]}") if _valid_food_coord(coord) and center else 0
-            return count, name not in assignment.get("names", []), distance
-        chosen = min(available, key=priority)
-        chosen["required_names"].append(name)
-        for assignment in result:
-            assignment["names"] = [candidate for candidate in assignment.get("names") or []
-                                   if not _matches_requested_poi(requested_name, candidate)]
-        chosen["names"] = [name, *chosen["names"]]
-    return result
 
 
 def _clock(minutes: int) -> str:
@@ -970,7 +1009,7 @@ def _transport_schedule_item(record: dict, direction: str) -> dict:
 
 def _enforce_day_schedule(day_plan: dict, assignment: dict, date_: str,
                           transport: dict, search: dict) -> dict:
-    """模型负责推荐内容，代码负责交通边界、必去项、时间顺序与重叠。"""
+    """模型负责推荐内容，代码负责交通边界、时间顺序与重叠。"""
     day_plan = dict(day_plan)
     day_plan.update({"day": assignment.get("day"), "date": date_})
     start, end = _activity_window(date_, transport)
@@ -979,24 +1018,27 @@ def _enforce_day_schedule(day_plan: dict, assignment: dict, date_: str,
     pois = search.get("poi") if isinstance(search.get("poi"), list) else []
     poi_by_name = {poi.get("name"): poi for poi in pois}
     allowed = assignment.get("names") or []
-    required = list(dict.fromkeys(assignment.get("required_names") or []))
     proposed = []
     seen = set()
     for item in day_plan.get("schedule") or []:
         if not isinstance(item, dict) or item.get("type") not in (None, "景点", "活动"):
             continue
-        canonical = next((name for name in allowed if _matches_requested_poi(name, item.get("name") or "")), None)
+        canonical = next((name for name in allowed if _matches_poi_name(name, item.get("name") or "")), None)
         if not canonical or canonical in seen:
             continue
         seen.add(canonical)
         proposed.append({**item, "type": "景点", "name": canonical})
-    required_items = [next((item for item in proposed if item["name"] == name), {
-        "name": name, "type": "景点", "note": "用户指定景点，建议提前核实开放时间和预约要求",
-    }) for name in required if name in poi_by_name]
-    optional_items = [item for item in proposed if item["name"] not in required]
-    # 轻松日程最多两个景点；必去项多于两个时优先尝试必去项。
-    capacity = max(int(assignment.get("max_spots") or 2), len(required_items))
-    candidates = required_items + optional_items[:max(0, capacity - len(required_items))]
+    min_spots = int(assignment.get("min_spots") or 0)
+    max_spots = int(assignment.get("max_spots") or 4)
+    candidates = proposed[:max_spots]
+    if min_spots and len(candidates) < min_spots:
+        existing = {c["name"] for c in candidates}
+        for name in allowed:
+            if len(candidates) >= min_spots:
+                break
+            if name not in existing:
+                candidates.append({"type": "景点", "name": name, "note": ""})
+                existing.add(name)
     schedule = []
     # 抵达恰逢午餐时先留一小时，再从午餐附近的第一个景点开始游览。
     cursor = start + 60 if 11 * 60 <= start <= 13 * 60 else start
@@ -1030,7 +1072,7 @@ def _enforce_day_schedule(day_plan: dict, assignment: dict, date_: str,
             if previous_coord and _valid_food_coord(coord):
                 km = _km(f"{previous_coord[0]},{previous_coord[1]}", f"{coord[0]},{coord[1]}")
                 transfer = max(30, math.ceil(km / 25 * 60) + 15)
-                if transfer > 60 and item["name"] not in required:
+                if transfer > 60:
                     continue
             if 11 * 60 <= cursor <= 13 * 60:
                 cursor += 60
@@ -1057,7 +1099,7 @@ def _enforce_day_schedule(day_plan: dict, assignment: dict, date_: str,
         if proposed_start + duration > finish_limit and earliest + duration <= finish_limit:
             proposed_start = earliest
         if proposed_start + duration > finish_limit:
-            if (item["name"] not in required and not is_night_market) or finish_limit - proposed_start < 60:
+            if not is_night_market or finish_limit - proposed_start < 60:
                 continue
             duration = finish_limit - proposed_start
             item["note"] = (item.get("note") or "") + "；受交通时间限制，缩短游览"
@@ -1067,6 +1109,8 @@ def _enforce_day_schedule(day_plan: dict, assignment: dict, date_: str,
         if _valid_food_coord(coord):
             item.update({"lng": float(coord[0]), "lat": float(coord[1])})
             previous_coord = coord
+        if poi.get("match_score") is not None:
+            item["match_score"] = int(poi["match_score"])
         item["link"] = poi.get("url") or item.get("link") or ""
         schedule.append(item)
         cursor = proposed_start + duration
@@ -1105,7 +1149,7 @@ def _locate_schedule(plans: list[dict], destination: str) -> dict[str, str | Non
 
 
 def _reorder_by_proximity(plan: dict, destination: str, move_km: float = 2.0) -> dict:
-    """片区和必去项已在生成前分配；保持日期，避免搬运后保留旧时间。
+    """片区已在生成前分配；保持日期，避免搬运后保留旧时间。
 
     跨日移动会突破到达/返程边界、制造重叠，并让两天景点堆到第一天。
     当天顺序由规划模型及确定性时间校正共同完成，餐厅再依最终顺序搜索。
@@ -1213,7 +1257,8 @@ def _build_day_plan(
         "block_id": day_assignment.get("block_id"),
         "district": day_assignment.get("district"),
         "names": names,
-        "required_names": day_assignment.get("required_names") or [],
+        "min_spots": day_assignment.get("min_spots"),
+        "max_spots": day_assignment.get("max_spots"),
     }
     ctx["is_first_day"] = day == 1
     ctx["is_last_day"] = day == total_days
@@ -1261,11 +1306,13 @@ def _build_day_plan(
     last.setdefault("hotel", "")
     last.setdefault("schedule", [])
     if not last["schedule"] and names:
-        times = ["09:00-11:00", "14:00-16:00"]
-        for index, name in enumerate(names[:2]):
+        target = max(2, int(day_assignment.get("min_spots") or 2))
+        for index, name in enumerate(names[:target]):
+            start = 9 * 60 + index * 150
+            end = start + 120
             last["schedule"].append(
                 {
-                    "time": times[index],
+                    "time": f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d}",
                     "type": "景点",
                     "name": name,
                     "note": "",
@@ -1864,6 +1911,44 @@ def _add_hotel_to_day(
     return day
 
 
+def _add_first_day_checkin(day_plan: dict) -> dict:
+    """第一天先办理入住：在去程交通之后、景点之前插入酒店入住项。"""
+    if (day_plan.get("day") or 0) != 1:
+        return day_plan
+    hotel = str(day_plan.get("hotel") or "").strip()
+    if not hotel or any(x in hotel for x in ("无住宿", "返程", "不住宿", "无需住宿")):
+        return day_plan
+
+    schedule = list(day_plan.get("schedule") or [])
+    if any((s.get("type") or "") == "酒店" for s in schedule):
+        return day_plan
+
+    start = None
+    for item in schedule:
+        if (item.get("type") or "") == "交通" and "去程" in str(item.get("name") or ""):
+            rng = _schedule_range(item)
+            if rng:
+                start = rng[1]
+            break
+    if start is None:
+        window = day_plan.get("activity_window") or {}
+        start = int(window.get("start_min") or (8 * 60 + 30))
+    if start < 0 or start >= 1440:
+        return day_plan
+    start = max(0, min(start, 1440))
+    end = min(start + 30, 1440)
+
+    schedule.append({
+        "type": "酒店",
+        "name": hotel,
+        "time": f"{_clock(start)}-{_clock(end)}",
+        "note": "办理入住，放下行李",
+    })
+    schedule.sort(key=lambda s: _to_minutes(s.get("time") or "") if _to_minutes(s.get("time") or "") is not None else 1440)
+    day_plan["schedule"] = schedule
+    return day_plan
+
+
 def _ensure_hotels(plan: dict, search_result: dict) -> dict:
     """全局修改后给每天补酒店。"""
     poi_map = _poi_coord_map(search_result)
@@ -1912,7 +1997,6 @@ def build_plan(
     preferences: dict | None = None,
     recent_trips: list | None = None,
     basic: dict | None = None,
-    answers: list | None = None,
     feedback: str | None = None,
     modify: dict | None = None,
     recent_trip_summary: str | None = None,
@@ -1927,12 +2011,17 @@ def build_plan(
     destination = search_result.get("destination") or ""
     days = meta.get("days") or 0
 
-    requested_pois = (basic or {}).get("requested_pois") or []
-    if isinstance(requested_pois, str):
-        requested_pois = [requested_pois]
-    if requested_pois:
-        search_result = _ensure_requested_pois(search_result, destination, requested_pois)
     transport = _select_transport(search_result, basic)
+
+    # 为每个景点按画像/偏好/本次旅行信息计算匹配度，供模型和最终输出使用。
+    for poi in (search_result.get("poi") or []):
+        if isinstance(poi, dict):
+            poi["match_score"] = _score_poi_match(poi, profile, preferences, basic)
+
+    search_result = _filter_far_pois(search_result, destination)
+
+    styles = list((profile or {}).get("travel_style") or []) + list((basic or {}).get("travel_style") or [])
+    pace = str((preferences or {}).get("pace") or (basic or {}).get("pace") or "")
 
     city_hit = (
         geocode(destination, destination)
@@ -1948,26 +2037,9 @@ def build_plan(
     for key, kind in (("trains", "train"), ("flights", "flight")):
         selected_search[key] = [record for record in transport.values() if isinstance(record, dict) and record.get("kind") == kind]
     context: dict = {"search": _trim_search(selected_search), "selected_transport": transport}
-    geo_hints = _geo_hints(search_result, destination)
-    if geo_hints:
-        context["geo_hints"] = geo_hints
-    blocks = _build_blocks(search_result, destination)
-    day_assignments = _assign_blocks_to_days(
-        blocks,
-        days,
-        first_day_late=_first_day_arrives_late(transport),
-        city_center=city_center,
-    )
-    if not day_assignments:
-        day_assignments = [{"day": day, "names": [], "center": city_center} for day in range(1, days + 1)]
-    day_assignments = _prioritize_requested_assignments(day_assignments, search_result, requested_pois, transport)
-    styles = (profile or {}).get("travel_style") or []
-    pace = str((preferences or {}).get("pace") or (basic or {}).get("pace") or "")
-    max_spots = 2 if "轻松" in pace or "慢" in pace or "休闲度假" in styles else 3
-    for assignment in day_assignments:
-        assignment["max_spots"] = max_spots
-    if day_assignments:
-        context["day_assignments"] = day_assignments
+    min_spots, max_spots = _pace_spots(pace, styles)
+    context["min_spots"] = min_spots
+    context["max_spots"] = max_spots
     if profile:
         context["user_profile"] = profile
     if preferences:
@@ -1983,13 +2055,12 @@ def build_plan(
             context["recent_trip_summary"] = computed_summary
     if basic:
         context["basic"] = basic
-    if answers:
-        context["answers"] = answers
     if feedback:
         context["feedback"] = feedback
     if modify:
         context["modify"] = modify
 
+    day_assignments = _assign_days_by_score(search_result, days, min_spots, max_spots, travel_categories=styles)
     with ThreadPoolExecutor(max_workers=min(max(days, 1), 8)) as executor:
         day_plans = list(
             executor.map(
@@ -2000,15 +2071,11 @@ def build_plan(
             )
         )
     day_plans = sorted(day_plans, key=lambda d: d.get("day") or 0)
-    assignment_by_day = {assignment["day"]: assignment for assignment in day_assignments}
     for index, day_plan in enumerate(day_plans):
-        assignment = assignment_by_day.get(day_plan.get("day")) or day_assignments[index]
-        date_ = (date.fromisoformat(meta["start_date"]) + timedelta(days=assignment["day"] - 1)).isoformat()
+        assignment = day_assignments[index] if index < len(day_assignments) else {"day": index + 1, "names": [], "min_spots": min_spots, "max_spots": max_spots}
+        date_ = (date.fromisoformat(meta["start_date"]) + timedelta(days=(assignment["day"] or index + 1) - 1)).isoformat()
         day_plans[index] = _enforce_day_schedule(day_plan, assignment, date_, transport, search_result)
-    center_by_day = {
-        a.get("day"): a.get("center")
-        for a in day_assignments
-    }
+    center_by_day = {day: city_center for day in range(1, days + 1)}
     budget_tiers = (basic or {}).get("budget_tiers") or []
     budget_tier = budget_tiers[0] if isinstance(budget_tiers, list) and budget_tiers else None
     poi_map = _poi_coord_map(search_result)
@@ -2027,6 +2094,9 @@ def build_plan(
                 used_hotels,
                 budget_tier,
             )
+    for day_plan in day_plans:
+        if (day_plan.get("day") or 0) == 1:
+            _add_first_day_checkin(day_plan)
 
     result = meta
     result["selected_transport"] = transport
@@ -2039,11 +2109,6 @@ def build_plan(
                 if day_plans:
                     day_plan = next((day for day in day_plans if day.get("day") == target_day), day_plans[-1])
                     day_plan["schedule"].append({"type": "交通", "name": f"{label}交通待确认", "time": "", "note": warnings[-1], "direction": "去" if key == "outbound" else "回"})
-    scheduled_names = [item.get("name") for day in day_plans for item in day.get("schedule") or [] if item.get("type") == "景点"]
-    missing_requested = [name for name in requested_pois if not any(_matches_requested_poi(name, candidate) for candidate in scheduled_names)]
-    if missing_requested:
-        warnings.append("以下必去景点暂未安排，请核实地点或调整交通/天数：" + "、".join(missing_requested))
-    result["unplanned_requested_pois"] = missing_requested
     result["warnings"] = warnings
     result["plans"] = [
         {
@@ -3003,7 +3068,6 @@ def main() -> None:
                     "recent_trip_summary",
                     "skip_trip_summary",
                     "basic",
-                    "answers",
                     "feedback",
                     "modify",
                 )
@@ -3015,7 +3079,6 @@ def main() -> None:
                 recent_trip_summary = data.get("recent_trip_summary")
                 skip_trip_summary = bool(data.get("skip_trip_summary"))
                 basic = data.get("basic")
-                answers = data.get("answers")
                 feedback = data.get("feedback")
                 modify = data.get("modify")
             else:
@@ -3026,7 +3089,6 @@ def main() -> None:
                 recent_trip_summary = None
                 skip_trip_summary = False
                 basic = None
-                answers = None
                 feedback = None
                 modify = None
             result = build_plan(
@@ -3035,7 +3097,6 @@ def main() -> None:
                 preferences,
                 recent_trips,
                 basic,
-                answers,
                 feedback,
                 modify,
                 recent_trip_summary,

@@ -16,8 +16,7 @@ const AGE_GROUPS = ['18 岁以下', '18-25', '26-35', '36-45', '46-60', '60 岁�
 const GENDERS = ['男', '女', '不便透露'];
 const IDENTITIES = ['学生', '上班族', '自由职业', '创业者', '退休', '其他'];
 const TRAVEL_STYLES = [
-  '休闲度假', '深度文化', '自然风光', '美食探店',
-  '亲子乐园', '购物血拼', '冒险户外', '摄影旅拍',
+  '自然景观', '历史人文', '主题娱乐', '城市地标与购物', '户外运动与体验',
 ];
 
 function ProfileField({ label, children }: { label: string; children: ReactNode }) {

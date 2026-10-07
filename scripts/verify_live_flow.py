@@ -134,8 +134,6 @@ class LiveFlow:
         ids = {block.get("id") for block in blocks}
         self.check(label + "_route_ids", bool(legs) and all(leg.get("from") in ids and leg.get("to") in ids for leg in legs), {"blocks": len(blocks), "legs": len(legs)})
         self.check(label + "_stable_unique_ids", len(ids) == len(blocks) and None not in ids)
-        scenes = [block.get("name", "") for block in blocks if block.get("type") == "景点"]
-        self.check(label + "_requested_pois", any(name == "西湖" or "西湖风景" in name for name in scenes) and any("浙江省博物馆" in name for name in scenes), scenes)
         days = {}
         for block in blocks:
             if block.get("type") != "酒店" and span(block):
@@ -224,11 +222,11 @@ class LiveFlow:
             messages += [{"role": "assistant", "content": ask.get("question") or "计划什么时间去？"}, {"role": "user", "content": reply}]
             complete = self.post("/question", {"messages": messages, "has_plan": False, "trip_data": ask.get("data") or {}}, "question_completed")
             basic = complete.get("data") or {}
-            self.check("completed_trip_parameters", complete.get("action") in ("confirm_trip", "plan") and basic.get("destination") == "杭州" and basic.get("origin") == "上海" and basic.get("start_date") == start.isoformat() and basic.get("end_date") == end.isoformat() and number(basic.get("total_budget")) == 4000 and re.search(r"2", str(basic.get("travelers"))) is not None, {key: basic.get(key) for key in ("destination", "origin", "start_date", "end_date", "travelers", "total_budget", "requested_pois", "food_keyword")})
+            self.check("completed_trip_parameters", complete.get("action") in ("confirm_trip", "plan") and basic.get("destination") == "杭州" and basic.get("origin") == "上海" and basic.get("start_date") == start.isoformat() and basic.get("end_date") == end.isoformat() and number(basic.get("total_budget")) == 4000 and re.search(r"2", str(basic.get("travelers"))) is not None, {key: basic.get(key) for key in ("destination", "origin", "start_date", "end_date", "travelers", "total_budget", "food_keyword")})
             if not self.report["checks"]["completed_trip_parameters"]["passed"]:
                 raise RuntimeError("自由输入参数识别失败，停止依赖此参数的规划")
             self.report["basic"] = basic
-            payload = {"destination": basic["destination"], "start_date": basic["start_date"], "end_date": basic["end_date"], "basic": basic, "profile": {"travel_style": ["休闲度假"]}, "answers": [{"question": "旅行需求", "answer": text}, {"question": "出发时间", "answer": reply}]}
+            payload = {"destination": basic["destination"], "start_date": basic["start_date"], "end_date": basic["end_date"], "basic": basic, "profile": {"travel_style": ["休闲度假"]}}
             final = self.post("/plan/stream", payload, "final", streaming=True)
         plan, search = final.get("plan") or {}, final.get("search") or {}
         if not plan.get("blocks"):

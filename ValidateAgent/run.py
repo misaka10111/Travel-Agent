@@ -44,7 +44,6 @@ def run_loop(context: dict, max_iterations: int = 2) -> dict:
             context.get("profile"),
             context.get("search"),
             context.get("basic"),
-            context.get("answers"),
         )
         history.append(
             {

@@ -313,18 +313,16 @@ class TestFetchFoodFallback(unittest.TestCase):
 
 
 class TestSearchOrchestrationLocal(unittest.TestCase):
-    def test_search_cache_is_scoped_to_profile_and_requested_pois(self):
+    def test_search_cache_is_scoped_by_travel_style(self):
         import tools
         with patch("tools._read_cache", return_value=None) as cache, patch("tools._write_cache"), \
              patch("tools._fetch_weather", return_value={}), patch("tools._fetch_hotels", return_value=[]), \
              patch("tools._fetch_events", return_value=[]), patch("tools._fetch_social_food", return_value=[]), \
-             patch("tools._fetch_poi_distributed", return_value=[]) as poi:
+             patch("tools._fetch_poi_distributed", return_value=[]):
             base = {"destination": "杭州", "start_date": "2026-10-16", "end_date": "2026-10-17"}
-            tools.run_search({**base, "profile": {"travel_style": ["自然风光"]}})
-            tools.run_search({**base, "profile": {"travel_style": ["深度文化"]}})
-            tools.run_search({**base, "profile": {"travel_style": ["深度文化"]}, "basic": {"requested_pois": ["浙江省博物馆"]}})
-        self.assertEqual(len({call.args[0] for call in cache.call_args_list}), 3)
-        self.assertIn("浙江省博物馆", poi.call_args.kwargs["extra_keywords"])
+            tools.run_search({**base, "profile": {"travel_style": ["自然景观"]}})
+            tools.run_search({**base, "profile": {"travel_style": ["历史人文"]}})
+        self.assertEqual(len({call.args[0] for call in cache.call_args_list}), 2)
 
     def test_actual_dates_and_basic_food_keyword_are_used(self):
         import tools
@@ -339,27 +337,6 @@ class TestSearchOrchestrationLocal(unittest.TestCase):
             })
         self.assertEqual(result["food_keyword"], "杭帮菜")
         self.assertEqual(tools._estimate_food_budget(budget.call_args.args[0]), 83)
-
-    def test_poi_queries_are_concurrent_and_one_failure_keeps_other_results(self):
-        import tools
-        barrier = threading.Barrier(6)
-        lock = threading.Lock()
-        calls = 0
-        def search(_city, **kwargs):
-            nonlocal calls
-            with lock:
-                calls += 1
-                position = calls
-            if position <= 6:
-                barrier.wait(timeout=2)
-            if kwargs.get("category") == "宗教场所":
-                raise RuntimeError("一个来源不可用")
-            return [{"name": f"景点{position}", "district": "西湖区"}]
-        with patch("tools._search_poi_items", side_effect=search), \
-             patch("tools._extract_poi_features", side_effect=lambda items: items):
-            result = tools._fetch_poi_distributed("杭州")
-        self.assertEqual(calls, 14)
-        self.assertEqual(len(result), 13)
 
     def test_return_transport_remains_when_outbound_fails(self):
         import tools
