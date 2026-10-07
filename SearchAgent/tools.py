@@ -32,8 +32,6 @@ from tavily import TavilyClient
 from amap_service import search_restaurants
 
 BASE_DIR = Path(__file__).resolve().parent
-sys.path.insert(0, str(BASE_DIR.parent))
-from shared.pricing import parse_price
 load_dotenv(BASE_DIR / ".env")
 
 CACHE_DIR = BASE_DIR / "cache"
@@ -1401,7 +1399,7 @@ def run_search(input_data: dict) -> dict:
         destination, start, end, origin,
         extra=json.dumps({"food": food_keyword, "budget": max_price, "travel_styles": sorted(travel_styles)}, ensure_ascii=False, sort_keys=True),
     )
-    cached = None if input_data.get("force_refresh") else _read_cache(cache_key)
+    cached = _read_cache(cache_key)
     if cached is not None:
         return cached
 
@@ -1448,8 +1446,11 @@ def _estimate_food_budget(basic: dict) -> float | None:
     total_budget = basic.get("total_budget")
     if not total_budget:
         return None
-    total = parse_price(total_budget)
-    if total is None or total <= 0:
+    try:
+        total = float(total_budget)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(total) or total <= 0:
         return None
 
     travelers = 1

@@ -4831,7 +4831,7 @@ button:disabled {
   cursor: pointer;
 }
 
-.ta-plan-detail .ta-plan-confirm-button:hover:not(:disabled) {
+.ta-plan-detail .ta-plan-confirm-button:hover {
   background: #4356e8;
 }
 

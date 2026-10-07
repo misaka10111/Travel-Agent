@@ -13,11 +13,7 @@ export type RouteBlock = {
   note?: string;
   match_score?: number;
   link?: string;
-  price?: number | null;
-  unit_price?: number | null;
-  price_basis?: 'group' | 'per_person';
-  activity_window?: { start_min: number; end_min: number };
-  locked?: boolean;
+  price?: number;
   price_known?: boolean;
   meal?: string;
   anchor_name?: string;
@@ -29,7 +25,7 @@ export type RouteBlock = {
   walking_origin?: string | null;
   options?: Array<{
     name: string;
-    price?: number | null;
+    price?: number;
     link?: string;
     lng?: number;
     lat?: number;
