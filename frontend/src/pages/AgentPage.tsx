@@ -3,6 +3,8 @@ import type { KeyboardEvent, PointerEvent as ReactPointerEvent } from 'react';
 import { api } from '../api/client';
 import { TripMap } from '../components/TripMap';
 import type { RouteBlock, RouteLeg } from '../components/TripMap';
+import { TripQuestions } from '../components/TripQuestions';
+import type { TripQuestion } from '../components/TripQuestions';
 import { usePlanStream } from '../hooks/usePlanStream';
 
 type ChatMessage = {
@@ -26,6 +28,8 @@ type BaseOption = {
   image?: string;
   lng?: number;
   lat?: number;
+  suggestedDay?: number;
+  priceKnown?: boolean;
 };
 
 type FlightOption = BaseOption & {
@@ -74,27 +78,25 @@ type FoodOption = BaseOption & {
   address: string;
   detailUrl: string;
   mapUrl: string;
+  distanceM?: number;
+  walkingDistanceM?: number;
+  walkingDurationS?: number;
+  walkingOrigin?: string;
 };
 
 type OptionItem = FlightOption | HotelOption | SpotOption | EventOption | FoodOption;
 
-const FIXED_QUESTIONS = [
-  { key: 'destination', field: 'destination', question: '您想去哪里？', options: [], kind: 'text' },
-  { key: 'start_date', field: 'start_date', question: '出发日期是哪天？', options: [], kind: 'date' },
-  { key: 'end_date', field: 'end_date', question: '返程日期是哪天？', options: [], kind: 'date' },
-  { key: 'origin', field: 'origin', question: '您从哪里出发？', options: [], kind: 'text' },
-  { key: 'travelers', field: 'travelers', question: '出行人数是？', options: ['1人', '2人', '3人', '4人', '5人以上'], kind: 'options' },
-  { key: 'budget_tiers', field: 'budget_tiers', question: '预算档位是？', options: ['经济', '舒适', '豪华', '不设限'], kind: 'options' },
-  { key: 'total_budget', field: 'total_budget', question: '本次旅行总预算大概多少元？', options: [], kind: 'text' },
-  { key: 'purposes', field: 'purposes', question: '这次旅行的主要目的是？', options: ['自然风光', '深度文化', '美食之旅', '亲子', '购物', '摄影', '冒险户外'], kind: 'options' },
-] as const;
-
 function parsePrice(value: unknown): number {
-  const text = String(value ?? '').normalize('NFKC').trim();
+  return knownPrice(value) ?? 0;
+}
+
+function knownPrice(value: unknown): number | null {
+  if (typeof value === 'boolean' || value == null) return null;
+  const text = String(value).normalize('NFKC').trim();
   if (text === '免费' || text === '免票') return 0;
   const match = text.match(/^(?:¥|RMB|CNY|人民币)?\s*((?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)\s*(?:元)?\s*(?:起)?\s*(?:\/(?:晚|人|份|次)|每(?:晚|人|份|次))?$/i);
-  const n = match ? Number(match[1].replace(/,/g, '')) : NaN;
-  return Number.isFinite(n) ? n : 0;
+  const amount = match ? Number(match[1].replace(/,/g, '')) : NaN;
+  return Number.isFinite(amount) ? amount : null;
 }
 
 type RoutePlan = {
@@ -104,19 +106,29 @@ type RoutePlan = {
   end_date: string;
   total_cost?: number;
   budget_status?: string;
+  cost_by_style?: Record<string, number>;
+  budget_by_style?: Record<string, string>;
+  unpriced_items?: Record<string, string[]>;
   styles: string[];
   summaries: Record<string, string>;
   blocks: RouteBlock[];
   legs: RouteLeg[];
 };
 
+function getPlanDayCount(plan: RoutePlan): number {
+  const dateDays = Math.round((Date.parse(plan.end_date) - Date.parse(plan.start_date)) / 86400000) + 1;
+  const blockDays = plan.blocks.map((block) => Number(block.day)).filter(Number.isFinite);
+  return Math.max(1, Number.isFinite(dateDays) ? dateDays : 1, ...blockDays);
+}
+
+function transportRows(items: unknown): unknown[] {
+  if (Array.isArray(items)) return items;
+  const groups = items as { outbound?: unknown; inbound?: unknown } | null;
+  return [groups?.outbound, groups?.inbound].flatMap((group) => Array.isArray(group) ? group : []);
+}
+
 function mapFlights(items: unknown): FlightOption[] {
-  const list = Array.isArray(items)
-    ? items
-    : [
-        ...(((items as { outbound?: unknown[] })?.outbound) ?? []),
-        ...(((items as { inbound?: unknown[] })?.inbound) ?? []),
-      ];
+  const list = transportRows(items);
   return list.slice(0, 10).map((f: any, i: number) => ({
     id: `flight-${i}`,
     type: 'flight',
@@ -131,6 +143,7 @@ function mapFlights(items: unknown): FlightOption[] {
     code: f?.flight_no ?? '',
     duration: f?.duration ?? '',
     price: parsePrice(f?.price),
+    priceKnown: knownPrice(f?.price) != null,
     scheduleAt: f?.dep_time ?? '',
     scheduleLabel: f?.dep_time ?? '',
     location: f?.arr_station ?? '',
@@ -141,12 +154,7 @@ function mapFlights(items: unknown): FlightOption[] {
 }
 
 function mapTrains(items: unknown): FlightOption[] {
-  const list = Array.isArray(items)
-    ? items
-    : [
-        ...(((items as { outbound?: unknown[] })?.outbound) ?? []),
-        ...(((items as { inbound?: unknown[] })?.inbound) ?? []),
-      ];
+  const list = transportRows(items);
   return list.slice(0, 10).map((t: any, i: number) => ({
     id: `train-${i}`,
     type: 'flight',
@@ -161,6 +169,7 @@ function mapTrains(items: unknown): FlightOption[] {
     code: t?.train_no ?? '',
     duration: t?.duration ?? '',
     price: parsePrice(t?.price),
+    priceKnown: knownPrice(t?.price) != null,
     scheduleAt: t?.dep_time ?? '',
     scheduleLabel: t?.dep_time ?? '',
     location: t?.arr_station ?? '',
@@ -171,7 +180,7 @@ function mapTrains(items: unknown): FlightOption[] {
 }
 
 function mapHotels(items: unknown): HotelOption[] {
-  return ((items as unknown[]) || []).slice(0, 30).map((h: any, i: number) => {
+  return (Array.isArray(items) ? items : []).slice(0, 30).map((h: any, i: number) => {
     const price = parsePrice(h?.price);
     return {
       id: `hotel-${i}`,
@@ -185,6 +194,7 @@ function mapHotels(items: unknown): HotelOption[] {
       rating: parseFloat(String(h?.score ?? 0)) || 0,
       nightlyPrice: price,
       totalPrice: price,
+      priceKnown: knownPrice(h?.price) != null,
       scheduleAt: '',
       scheduleLabel: '',
     location: h?.location ?? '',
@@ -199,15 +209,16 @@ function mapHotels(items: unknown): HotelOption[] {
 }
 
 function mapSpots(items: unknown): SpotOption[] {
-  return ((items as unknown[]) || []).slice(0, 50).map((p: any, i: number) => ({
+  return (Array.isArray(items) ? items : []).slice(0, 50).map((p: any, i: number) => ({
     id: `spot-${i}`,
     type: 'spot',
     title: p?.name ?? '',
     subtitle: p?.category ?? '',
     area: p?.district_label ?? p?.category ?? '',
     openHours: '',
-    recommendedDuration: '',
-    ticketPrice: 0,
+    recommendedDuration: p?.duration ?? '',
+    ticketPrice: parsePrice(p?.price ?? p?.ticket_price),
+    priceKnown: p?.free === true || knownPrice(p?.price ?? p?.ticket_price) != null,
     scheduleAt: '',
     scheduleLabel: '',
     location: '',
@@ -221,7 +232,7 @@ function mapSpots(items: unknown): SpotOption[] {
 }
 
 function mapEvents(items: unknown): EventOption[] {
-  return ((items as unknown[]) || []).slice(0, 20).map((e: any, i: number) => ({
+  return (Array.isArray(items) ? items : []).slice(0, 20).map((e: any, i: number) => ({
     id: `event-${i}`,
     type: 'event',
     title: e?.title ?? '',
@@ -232,12 +243,26 @@ function mapEvents(items: unknown): EventOption[] {
     tags: String(e?.content ?? '').split(',').map((t) => t.trim()).filter(Boolean),
     description: e?.content ?? '',
     price: 0,
+    priceKnown: false,
     url: e?.url ?? '',
   }));
 }
 
+function distanceNumber(value: unknown): number | undefined {
+  if (value == null || value === '') return undefined;
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function formatWalkingInfo(distance: number | null | undefined, duration: number | null | undefined): string {
+  const meters = distanceNumber(distance);
+  if (meters == null) return '';
+  const seconds = distanceNumber(duration);
+  return `步行约${Math.round(meters)}米${seconds != null ? ` / ${Math.ceil(seconds / 60)}分钟` : ''}`;
+}
+
 function mapFood(items: unknown): FoodOption[] {
-  return ((items as unknown[]) || []).slice(0, 50).map((f: any, i: number) => ({
+  return (Array.isArray(items) ? items : []).slice(0, 200).map((f: any, i: number) => ({
     id: `food-${i}`,
     type: 'food',
     title: f?.name ?? f?.title ?? '',
@@ -245,6 +270,7 @@ function mapFood(items: unknown): FoodOption[] {
     cuisine: f?.cuisine ?? '',
     rating: parseFloat(String(f?.rating ?? 0)) || 0,
     pricePerPerson: parsePrice(f?.price_per_person ?? f?.price),
+    priceKnown: knownPrice(f?.price_per_person ?? f?.price) != null,
     businessArea: f?.business_area ?? '',
     address: f?.address ?? '',
     detailUrl: f?.poi_detail_url ?? f?.url ?? '',
@@ -252,8 +278,13 @@ function mapFood(items: unknown): FoodOption[] {
     url: f?.poi_detail_url ?? f?.map_url ?? f?.url ?? '',
     lng: f?.longitude != null ? Number(f.longitude) : undefined,
     lat: f?.latitude != null ? Number(f.latitude) : undefined,
+    suggestedDay: f?.day != null ? Number(f.day) : undefined,
+    distanceM: distanceNumber(f?.distance_m),
+    walkingDistanceM: distanceNumber(f?.walking_distance_m),
+    walkingDurationS: distanceNumber(f?.walking_duration_s),
+    walkingOrigin: typeof f?.walking_origin === 'string' ? f.walking_origin : undefined,
     scheduleAt: '',
-    scheduleLabel: '',
+    scheduleLabel: f?.day ? `第${f.day}天${f?.meal ?? ''}附近` : '',
     location: f?.business_area ?? f?.address ?? '',
     tags: [f?.cuisine, f?.business_area, f?.rating ? `${f.rating}分` : ''].filter(Boolean),
     description: f?.address ?? f?.content ?? '',
@@ -263,38 +294,21 @@ function mapFood(items: unknown): FoodOption[] {
 const formatPrice = (price: number) => `¥ ${price.toLocaleString()}`;
 const buildId = () => `${Date.now()}-${Math.random()}`;
 
-function timeToMinutes(value: string) {
-  const match = value.match(/(\d{1,2}):(\d{2})/);
-  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
-}
-
-function rangeToMinutes(value: string): [number, number] | null {
-  const match = value.match(/(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})/);
-  if (!match) {
-    const start = timeToMinutes(value);
-    return start == null ? null : [start, start + 60];
+function formatTripConfirm(data: Record<string, unknown>): string {
+  const lines = ['请确认本次旅行信息：'];
+  if (data.destination) lines.push(`目的地：${data.destination}`);
+  if (data.origin) lines.push(`出发地：${data.origin}`);
+  if (data.start_date) lines.push(`出发日期：${data.start_date}`);
+  if (data.end_date) lines.push(`返程日期：${data.end_date}`);
+  if (data.travelers) lines.push(`出行人数：${data.travelers}`);
+  if (data.budget_unlimited) lines.push('预算：不设限');
+  else if (data.total_budget) lines.push(`总预算：¥ ${Number(data.total_budget).toLocaleString()}`);
+  if (Array.isArray(data.purposes) && data.purposes.length) {
+    lines.push(`兴趣：${(data.purposes as unknown[]).join('、')}`);
   }
-  return [
-    Number(match[1]) * 60 + Number(match[2]),
-    Number(match[3]) * 60 + Number(match[4]),
-  ];
-}
-
-function minutesToRange(start: number) {
-  const h = Math.floor(start / 60);
-  const m = start % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}-${String(
-    Math.floor((start + 60) / 60),
-  ).padStart(2, '0')}:${String((start + 60) % 60).padStart(2, '0')}`;
-}
-
-function coordDistance(
-  a: { lng: number; lat: number },
-  b: { lng: number; lat: number },
-) {
-  const dx = (b.lng - a.lng) * Math.cos(((a.lat + b.lat) / 2) * (Math.PI / 180));
-  const dy = b.lat - a.lat;
-  return Math.hypot(dx, dy);
+  if (data.food_keyword) lines.push(`餐饮偏好：${data.food_keyword}`);
+  if (data.notes) lines.push(`其他要求：${data.notes}`);
+  return `${lines.join('\n')}\n确认无误后开始规划，也可以继续补充或修改。`;
 }
 
 function getOptionPrice(item: OptionItem) {
@@ -345,7 +359,7 @@ export function AgentPage() {
       id: buildId(),
       role: 'assistant',
       content:
-        '你好，告诉我你想去哪里、什么时候出发，我会为你搜索机票、酒店和景点。',
+        '你好，直接告诉我你的旅行想法就好，例如“下周五从上海去杭州玩3天，2个人，总预算5000元，想逛西湖、吃杭帮菜”。缺少的必要信息我会再请你补充。',
     },
   ]);
 
@@ -360,8 +374,8 @@ export function AgentPage() {
     Array<{ platform: string; title: string; url: string }>
   >([]);
   const [pendingAdd, setPendingAdd] = useState<OptionItem | null>(null);
-  const [collectStep, setCollectStep] = useState<number | null>(null);
-  const [collectData, setCollectData] = useState<Record<string, unknown>>({});
+  const [tripData, setTripData] = useState<Record<string, unknown>>({});
+  const [collectingTrip, setCollectingTrip] = useState(false);
   const [pendingConfirm, setPendingConfirm] = useState<{
     summary: string;
     mode: string;
@@ -375,23 +389,20 @@ export function AgentPage() {
   const [confirmedStyle, setConfirmedStyle] = useState<string | null>(null);
   const [planRating, setPlanRating] = useState<number | null>(null);
   const [planFeedback, setPlanFeedback] = useState('');
+  const [confirmModalOpen, setConfirmModalOpen] = useState(false);
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [clarify, setClarify] = useState<{
-    destination: string;
-    start_date: string;
-    end_date: string;
-  } | null>(null);
-  const [originInput, setOriginInput] = useState('');
   const [question, setQuestion] = useState<{
-    field: string;
     question: string;
-    options: string[];
+    questions: TripQuestion[];
   } | null>(null);
-  const [answer, setAnswer] = useState('');
-  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  const [tripConfirm, setTripConfirm] = useState<Record<string, unknown> | null>(null);
   const [weatherData, setWeatherData] = useState<{ days?: Array<Record<string, unknown>> } | null>(null);
   const [selectedBlocks, setSelectedBlocks] = useState<Set<string>>(new Set());
-  const [selectedFoodPoints, setSelectedFoodPoints] = useState<RouteBlock[]>([]);
+  const [addDay, setAddDay] = useState(1);
+  const [addTime, setAddTime] = useState('');
+  const lastSearchRef = useRef<Record<string, unknown>>({});
+  const intentVersionRef = useRef(0);
+  const requestControllerRef = useRef<(AbortController & { mutation?: boolean }) | null>(null);
   const [planning, setPlanning] = useState(false);
   const [replanning, setReplanning] = useState(false);
   const replanControllerRef = useRef<AbortController | null>(null);
@@ -438,7 +449,11 @@ export function AgentPage() {
       const start = ((batchIndex[activeTab] ?? 0) * 5) % Math.max(1, list.length);
       return list.slice(start, start + 5);
     }
-    if (activeTab === 'event') return options.filter((o) => o.type === 'event');
+    if (activeTab === 'event') {
+      const list = options.filter((o) => o.type === 'event');
+      const start = ((batchIndex[activeTab] ?? 0) * 5) % Math.max(1, list.length);
+      return list.slice(start, start + 5);
+    }
     {
       const list = options.filter((o) => o.type === 'food');
       const start = ((batchIndex[activeTab] ?? 0) * 5) % Math.max(1, list.length);
@@ -485,6 +500,7 @@ export function AgentPage() {
   }
 
   function applySearchData(searchData: Record<string, unknown>) {
+    lastSearchRef.current = { ...lastSearchRef.current, ...searchData };
     setBatchIndex({});
     setSocialBatch(0);
     setWeatherData(
@@ -496,9 +512,7 @@ export function AgentPage() {
     const spots = mapSpots(searchData.poi);
     const events = mapEvents(searchData.events);
     const food = mapFood(searchData.food);
-    setSocialFood(
-      (searchData.social_food as Array<{ platform: string; title: string; url: string }>) ?? [],
-    );
+    setSocialFood(Array.isArray(searchData.social_food) ? searchData.social_food : []);
     setOptions([...flights, ...trains, ...hotels, ...spots, ...events, ...food]);
     if (flights.length + trains.length === 0) {
       if (hotels.length > 0) setActiveTab('hotel');
@@ -525,21 +539,11 @@ export function AgentPage() {
               : node === 'prepare_memory'
                 ? '正在读取你的偏好和历史行程…'
               : node === 'plan'
-                ? '正在生成两个旅行方案…'
+                ? '正在安排景点，并搜索餐点附近的餐厅…'
                 : node === 'validate'
                   ? '正在审核方案…'
                   : '正在处理…';
           updateLastAssistantMessage(status);
-          return;
-        }
-
-        if (event.type === 'clarify') {
-          setClarify({
-            destination: String(event.data.destination ?? ''),
-            start_date: String(event.data.start_date ?? ''),
-            end_date: String(event.data.end_date ?? ''),
-          });
-          updateLastAssistantMessage('还差一点信息，请补充出发地～');
           return;
         }
 
@@ -558,6 +562,11 @@ export function AgentPage() {
           legs?: RouteLeg[];
           total_cost?: number;
           budget_status?: string;
+          cost_by_style?: Record<string, number>;
+          budget_by_style?: Record<string, string>;
+          unpriced_items?: Record<string, string[]>;
+          food_warnings?: string[];
+          warnings?: string[];
           error?: string;
         };
         if (plan.error) {
@@ -582,6 +591,9 @@ export function AgentPage() {
           legs,
           total_cost: plan.total_cost,
           budget_status: plan.budget_status,
+          cost_by_style: plan.cost_by_style,
+          budget_by_style: plan.budget_by_style,
+          unpriced_items: plan.unpriced_items,
         });
         setActiveStyle(styles[0] ?? '');
         setActiveDay('all');
@@ -597,47 +609,27 @@ export function AgentPage() {
         setDetailItem(null);
 
         const located = blocks.filter((b) => b.lng != null).length;
-        updateLastAssistantMessage(
-          legs.length > 0
+        const audit = raw.audit as { passed?: boolean; error?: string; issues?: Array<{ detail?: string }> } | undefined;
+        const review = audit?.error ? '审核暂未完成，可继续查看和调整行程。'
+          : audit?.passed === false ? `审核提示：${(audit.issues ?? []).slice(0, 3).map((issue) => issue.detail).filter(Boolean).join('；') || '建议进一步检查行程安排。'}`
+          : audit?.issues?.length ? `审核建议：${audit.issues.slice(0, 3).map((issue) => issue.detail).filter(Boolean).join('；')}` : '';
+        const message = legs.length > 0
             ? `已为「${plan.destination}」生成 ${styles.length} 个方案，右上地图展示了 ${located} 个地点和 ${legs.length} 段真实路线。`
-            : `已为「${plan.destination}」生成 ${styles.length} 个方案，但没有拿到地图路线（检查 PlanAgent 的 AMAP_KEY）。`,
-        );
+            : `已为「${plan.destination}」生成行程。地图显示已定位地点，暂未获取到详细交通路线。`;
+        updateLastAssistantMessage([message, review, ...(plan.warnings ?? []).slice(0, 3), ...(plan.food_warnings ?? []).slice(0, 2)].filter(Boolean).join('\n'));
       },
     );
 
     setPlanning(false);
   }
 
-  async function requestPlan(query: string) {
-    const userId = localStorage.getItem('currentUser') || '';
-    let profile: unknown = null;
-    let basic: unknown = null;
-    try {
-      profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
-    } catch {
-      profile = null;
-    }
-    try {
-      basic = JSON.parse(localStorage.getItem('tripInfo') || 'null');
-    } catch {
-      basic = null;
-    }
-    await runPlan({
-      query,
-      ...(userId ? { user_id: userId } : {}),
-      ...(profile ? { profile } : {}),
-      ...(basic ? { basic } : {}),
-    });
-  }
-
-  async function modifyPlan(
-    instruction: string,
-    mode?: string,
-    targets?: unknown[],
-  ) {
+  async function mutatePlan(change: Record<string, unknown>, successMessage: string): Promise<boolean> {
+    if (!routePlan || planning || (requestControllerRef.current?.mutation && !requestControllerRef.current.signal.aborted)) return false;
+    const controller: AbortController & { mutation?: boolean } = new AbortController();
+    controller.mutation = true;
+    requestControllerRef.current = controller;
     setPlanning(true);
     try {
-      if (!routePlan) return;
       const userId = localStorage.getItem('currentUser') || '';
       let profile: unknown = null;
       let basic: unknown = null;
@@ -651,7 +643,6 @@ export function AgentPage() {
       } catch {
         basic = null;
       }
-      const blocks = routePlan.blocks;
       const raw = await api.plan({
         destination: routePlan.destination,
         start_date: routePlan.start_date,
@@ -659,86 +650,116 @@ export function AgentPage() {
         ...(userId ? { user_id: userId } : {}),
         ...(profile ? { profile } : {}),
         ...(basic ? { basic } : {}),
+        plan: routePlan,
+        search: lastSearchRef.current,
         modify: {
-          blocks,
-          instruction,
-          ...(mode ? { mode } : {}),
-          ...(targets ? { targets } : {}),
+          blocks: routePlan.blocks,
+          plan_style: expandedStyle || activeStyle || routePlan.styles[0],
+          ...change,
         },
-      });
+      }, controller.signal);
+      if (controller.signal.aborted || requestControllerRef.current !== controller) return false;
       if (typeof raw.error === 'string') {
-        updateLastAssistantMessage(`修改失败：${raw.error}`);
-        return;
+        throw new Error(raw.error);
       }
-      const originalById = new Map(routePlan.blocks.map((block) => [block.id, block]));
-      const newBlocks = ((raw.blocks ?? routePlan.blocks) as RouteBlock[]).map(
-        (block) => {
-          const original = originalById.get(block.id);
-          return {
-            ...block,
-            plan_style: block.plan_style ?? original?.plan_style,
-            lng: block.lng ?? original?.lng,
-            lat: block.lat ?? original?.lat,
-          };
-        },
-      );
-      setRoutePlan((prev) => (prev ? { ...prev, blocks: newBlocks, legs: [] } : prev));
+      if (!Array.isArray(raw.blocks)) throw new Error('没有收到更新后的计划，请重试。');
+      const newBlocks = raw.blocks as RouteBlock[];
+      const plans = Array.isArray(raw.plans) ? raw.plans as Array<{ style: string; summary: string }> : [];
+      const styles = plans.map((item) => item.style).filter(Boolean);
+      setRoutePlan((prev) => prev ? {
+        ...prev,
+        destination: String(raw.destination ?? prev.destination),
+        start_date: String(raw.start_date ?? prev.start_date),
+        end_date: String(raw.end_date ?? prev.end_date),
+        blocks: newBlocks,
+        legs: Array.isArray(raw.legs) ? raw.legs as RouteLeg[] : [],
+        ...(styles.length ? { styles, summaries: Object.fromEntries(plans.map((item) => [item.style, item.summary])) } : {}),
+        total_cost: typeof raw.total_cost === 'number' ? raw.total_cost : prev.total_cost,
+        budget_status: String(raw.budget_status ?? prev.budget_status ?? ''),
+        cost_by_style: raw.cost_by_style as RoutePlan['cost_by_style'] ?? prev.cost_by_style,
+        budget_by_style: raw.budget_by_style as RoutePlan['budget_by_style'] ?? prev.budget_by_style,
+        unpriced_items: raw.unpriced_items as RoutePlan['unpriced_items'] ?? prev.unpriced_items,
+      } : prev);
+      const updatedSearch = raw.search && typeof raw.search === 'object' ? raw.search as Record<string, unknown> : lastSearchRef.current;
+      applySearchData({ ...updatedSearch,
+        ...(Array.isArray(raw.food) ? { food: raw.food } : {}),
+        ...(Array.isArray(raw.food_by_anchor) ? { food_by_anchor: raw.food_by_anchor } : {}),
+      });
+      if (raw.basic && typeof raw.basic === 'object') {
+        localStorage.setItem('tripInfo', JSON.stringify(raw.basic));
+        setTripData({ ...raw.basic as Record<string, unknown>,
+          destination: raw.destination ?? routePlan.destination,
+          start_date: raw.start_date ?? routePlan.start_date,
+          end_date: raw.end_date ?? routePlan.end_date,
+        });
+      }
       setSelectedBlocks(new Set());
-      updateLastAssistantMessage('已根据你的意见修改计划。');
+      setConfirmedStyle(null);
+      setSaveState('idle');
+      const timingWarnings = Array.isArray(raw.travel_time_warnings) ? raw.travel_time_warnings.filter((item): item is string => typeof item === 'string') : [];
+      updateLastAssistantMessage([successMessage, ...timingWarnings.slice(0, 3)].join('\n'));
+      return true;
     } catch (error) {
+      if ((error as Error).name === 'AbortError' || controller.signal.aborted || requestControllerRef.current !== controller) return false;
       updateLastAssistantMessage(
         `修改失败：${error instanceof Error ? error.message : String(error)}`,
       );
+      return false;
     } finally {
-      setPlanning(false);
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
+        setPlanning(false);
+      }
     }
   }
 
+  async function modifyPlan(instruction: string, mode?: string, targets?: unknown[]) {
+    const ids = Array.from(selectedBlocks);
+    await mutatePlan({
+      action: 'modify', instruction,
+      mode: ids.length ? 'block' : mode || 'global',
+      ...(ids.length ? { block_ids: ids } : {}),
+      ...(targets ? { targets } : {}),
+    }, '已按你的需求更新计划，餐饮和地图路线也已同步。');
+  }
+
+
   async function replanSelected(instruction: string) {
     const snapshot = routePlan;
-    if (!snapshot || !expandedStyle || selectedBlocks.size === 0 || replanControllerRef.current) return;
-    const targets = snapshot.blocks.filter((b) => selectedBlocks.has(b.id) && b.plan_style === expandedStyle);
+    const style = expandedStyle || activeStyle;
+    if (!snapshot || !style || selectedBlocks.size === 0 || replanControllerRef.current) return;
+    const targets = snapshot.blocks.filter((block) => selectedBlocks.has(block.id) && block.plan_style === style);
     if (!targets.length) return;
-    const missingMeals: string[] = [];
-    const requestBlocks = snapshot.blocks.map((block) => {
-      if (block.plan_style !== expandedStyle || block.note !== '餐饮推荐' || selectedBlocks.has(block.id)) return block;
-      const choice = selectedFoodPoints.find((point) => point.id.startsWith(`food-${block.id}::`));
-      if (!choice) {
-        missingMeals.push(`第${block.day}天的${block.name}`);
-        return block;
-      }
-      return { ...block, name: choice.name, note: '用户选择的餐厅', options: undefined,
-        price: choice.price ?? null, link: choice.link, lng: choice.lng, lat: choice.lat };
-    });
-    if (missingMeals.length) {
-      setDraft('');
-      setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
-      addAssistantMessage(`请先为${missingMeals.join('、')}各选一家餐厅，再重新规划，以便检查真实交通时间。原因已保留在聊天记录中。`);
+    setDraft('');
+    setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
+    const pendingMeals = snapshot.blocks.filter((block) =>
+      block.plan_style === style && block.note === '餐饮推荐' && !selectedBlocks.has(block.id));
+    if (pendingMeals.length) {
+      addAssistantMessage('请先为' + pendingMeals.map((block) => '第' + block.day + '天的' + block.name).join('、') + '选择具体餐厅，再重新规划。原因已保留在聊天记录中。');
       return;
     }
     const controller = new AbortController();
     replanControllerRef.current = controller;
+    requestControllerRef.current = controller;
     setReplanning(true);
     setPlanning(true);
-    setDraft('');
-    setMessages((prev) => [...prev, { id: buildId(), role: 'user', content: instruction }]);
-    addAssistantMessage(`正在重新规划「${targets.map((b) => b.name).join('、')}」，并检查后续安排…`);
+    addAssistantMessage('正在重新规划「' + targets.map((block) => block.name).join('、') + '」，并检查后续安排…');
     try {
       let profile: unknown = null;
       let basic: unknown = null;
-      try { profile = JSON.parse(localStorage.getItem('userProfile') || 'null'); } catch { /* 使用空画像 */ }
-      try { basic = JSON.parse(localStorage.getItem('tripInfo') || 'null'); } catch { /* 使用空旅行信息 */ }
+      try { profile = JSON.parse(localStorage.getItem('userProfile') || 'null'); } catch { /* 空画像 */ }
+      try { basic = JSON.parse(localStorage.getItem('tripInfo') || 'null'); } catch { /* 空旅行信息 */ }
       const result = await api.replan({
-        plan: { ...snapshot, blocks: requestBlocks },
+        plan: snapshot,
         revision: snapshot.revision ?? 0,
-        plan_style: expandedStyle,
-        target_block_ids: targets.map((b) => b.id),
+        plan_style: style,
+        target_block_ids: targets.map((block) => block.id),
         instruction,
         ...(profile ? { profile } : {}),
         ...(basic ? { basic } : {}),
-        locked_block_ids: snapshot.blocks.filter((b) => (b as RouteBlock & { locked?: boolean }).locked).map((b) => b.id),
+        locked_block_ids: snapshot.blocks.filter((block) => block.locked).map((block) => block.id),
       }, controller.signal);
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || requestControllerRef.current !== controller) return;
       if (currentPlanRef.current !== snapshot) {
         updateLastAssistantMessage('方案已变化，本次重新规划结果未应用，请重新选择活动。');
         return;
@@ -756,41 +777,93 @@ export function AgentPage() {
         revision: result.revision,
         total_cost: typeof plan.total_cost === 'number' ? plan.total_cost : undefined,
         budget_status: String(plan.budget_status ?? 'unknown'),
+        cost_by_style: plan.cost_by_style as RoutePlan['cost_by_style'],
+        budget_by_style: plan.budget_by_style as RoutePlan['budget_by_style'],
+        unpriced_items: plan.unpriced_items as RoutePlan['unpriced_items'],
       });
+      applySearchData({ ...lastSearchRef.current,
+        ...(Array.isArray(plan.food) ? { food: plan.food } : {}),
+        ...(Array.isArray(plan.food_by_anchor) ? { food_by_anchor: plan.food_by_anchor } : {}) });
       setSelectedBlocks(new Set());
-      setSelectedFoodPoints([]);
       setConfirmedStyle(null);
+      setConfirmModalOpen(false);
       setPlanRating(null);
       setPlanFeedback('');
       setSaveState('idle');
       setPendingConfirm(null);
-      updateLastAssistantMessage(`重新规划完成：\n${result.changes.join('\n')}`);
+      updateLastAssistantMessage('重新规划完成：\n' + result.changes.join('\n'));
       const userId = localStorage.getItem('currentUser');
-      if (userId) targets.forEach((b) => {
-        void api.reportBehavior(userId, 'remove', b.name, instruction).catch(() => {});
-        const next = (plan.blocks as RouteBlock[]).find((item) => item.id === b.id);
+      if (userId) targets.forEach((block) => {
+        void api.reportBehavior(userId, 'remove', block.name, instruction).catch(() => {});
+        const next = (plan.blocks as RouteBlock[]).find((item) => item.id === block.id);
         if (next) void api.reportBehavior(userId, 'add', next.name, instruction).catch(() => {});
       });
     } catch (error) {
-      updateLastAssistantMessage((error as Error).name === 'AbortError'
-        ? '已停止重新规划，原方案已保留，原因可在聊天记录中查看。'
-        : `重新规划失败：${error instanceof Error ? error.message : String(error)}。原因可在聊天记录中查看。`);
+      if (controller.signal.aborted || requestControllerRef.current !== controller) return;
+      updateLastAssistantMessage('重新规划失败：' + (error instanceof Error ? error.message : String(error)) + '。原方案已保留，原因可在聊天记录中查看。');
     } finally {
-      if (replanControllerRef.current === controller) {
-        replanControllerRef.current = null;
+      if (replanControllerRef.current === controller) replanControllerRef.current = null;
+      if (requestControllerRef.current === controller) {
+        requestControllerRef.current = null;
         setReplanning(false);
         setPlanning(false);
       }
     }
   }
 
+  async function startTripPlan(data: Record<string, unknown>) {
+    const basic = { ...data };
+    delete basic.destination;
+    delete basic.start_date;
+    delete basic.end_date;
+    localStorage.setItem('tripInfo', JSON.stringify(basic));
+    const userId = localStorage.getItem('currentUser') || '';
+    let profile: unknown = null;
+    try {
+      profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
+    } catch {
+      profile = null;
+    }
+    addAssistantMessage('正在搜索并规划行程…');
+    await runPlan({
+      destination: data.destination,
+      start_date: data.start_date,
+      end_date: data.end_date,
+      ...(userId ? { user_id: userId } : {}),
+      ...(profile ? { profile } : {}),
+      basic,
+    });
+  }
+
+  async function confirmTrip() {
+    if (!tripConfirm || planning || question) return;
+    const data = tripConfirm;
+    setTripConfirm(null);
+    setCollectingTrip(false);
+    setQuestion(null);
+    await startTripPlan(data);
+  }
+
   async function resolveIntent(history: ChatMessage[], content: string) {
+    const requestVersion = ++intentVersionRef.current;
     setPlanning(true);
     try {
+      setTripConfirm(null);
+      setPendingConfirm(null);
+      if (routePlan && !collectingTrip && selectedBlocks.size > 0) {
+        addAssistantMessage('正在按你的需求调整选中的计划项…');
+        await modifyPlan(content, 'block');
+        return;
+      }
+      const controller = new AbortController();
+      requestControllerRef.current = controller;
       const result = await api.question({
         messages: history.map((m) => ({ role: m.role, content: m.content })),
-        has_plan: !!routePlan,
-      });
+        has_plan: !!routePlan && !collectingTrip,
+        trip_data: tripData,
+      }, controller.signal);
+      if (requestVersion !== intentVersionRef.current) return;
+      if (result.error) throw new Error(String(result.error));
       const action = String(result.action ?? '');
       if (action === 'explain') {
         const answer = String(result.answer ?? '');
@@ -806,33 +879,32 @@ export function AgentPage() {
         return;
       }
       if (action === 'ask') {
+        setTripData((result.data ?? {}) as Record<string, unknown>);
+        setCollectingTrip(true);
+        const questions = Array.isArray(result.questions) ? result.questions as TripQuestion[] : [];
         setQuestion({
-          field: String(result.field ?? ''),
           question: String(result.question ?? ''),
-          options: Array.isArray(result.options)
-            ? (result.options as string[])
-            : [],
+          questions: questions.length ? questions : [{ field: 'trip_details', question: String(result.question ?? '请补充旅行信息'), options: [] }],
         });
         addAssistantMessage(String(result.question ?? ''));
         return;
       }
+      if (action === 'confirm_trip') {
+        const data = (result.data ?? {}) as Record<string, unknown>;
+        setTripData(data);
+        setCollectingTrip(true);
+        setQuestion(null);
+        setTripConfirm(data);
+        addAssistantMessage(formatTripConfirm(data));
+        return;
+      }
       if (action === 'plan') {
         const data = (result.data ?? {}) as Record<string, unknown>;
+        setTripData(data);
+        setCollectingTrip(false);
         setQuestion(null);
-        addAssistantMessage('正在搜索并规划行程…');
-        await runPlan({
-          destination: data.destination,
-          start_date: data.start_date,
-          end_date: data.end_date,
-          basic: {
-            origin: data.origin,
-            travelers: data.travelers,
-            budget_tiers: data.budget_tiers,
-            total_budget: data.total_budget,
-            purposes: data.purposes,
-            requested_pois: data.requested_pois,
-          },
-        });
+        setTripConfirm(null);
+        await startTripPlan(data);
         return;
       }
       if (action === 'confirm') {
@@ -874,35 +946,21 @@ export function AgentPage() {
         );
         return;
       }
-      addAssistantMessage('正在搜索并规划行程…');
-      await requestPlan(content);
+      addAssistantMessage('暂时没能理解这条需求，请用文字描述目的地、时间或想调整的内容。');
     } catch (error) {
-      updateLastAssistantMessage(
+      if ((error as Error).name === 'AbortError' || requestVersion !== intentVersionRef.current) return;
+      addAssistantMessage(
         `处理失败：${error instanceof Error ? error.message : String(error)}`,
       );
     } finally {
-      setPlanning(false);
+      if (requestVersion === intentVersionRef.current) setPlanning(false);
     }
   }
 
-  async function submitQuestion() {
-    if (!question) return;
-    const value =
-      question.options.length > 0
-        ? selectedOptions.join('、') || answer.trim()
-        : answer.trim();
+  async function submitQuestion(reply: string) {
+    if (!question || planning) return;
+    const value = reply.trim();
     if (!value) return;
-    if (collectStep != null) {
-      setMessages((prev) => [
-        ...prev,
-        { id: buildId(), role: 'user', content: value },
-      ]);
-      setQuestion(null);
-      setAnswer('');
-      handleCollectAnswer(value, [...selectedOptions]);
-      setSelectedOptions([]);
-      return;
-    }
     const history: ChatMessage[] = [
       ...messages,
       { id: buildId(), role: 'user', content: value },
@@ -912,27 +970,8 @@ export function AgentPage() {
       { id: buildId(), role: 'user', content: value },
     ]);
     setQuestion(null);
-    setAnswer('');
-    setSelectedOptions([]);
+    setTripConfirm(null);
     await resolveIntent(history, value);
-  }
-
-  function askFixed(index: number) {
-    const item = FIXED_QUESTIONS[index];
-    if (!item) return;
-    setQuestion({
-      field: item.field,
-      question: item.question,
-      options: [...item.options],
-    });
-    setAnswer('');
-    setSelectedOptions([]);
-  }
-
-  function startCollect() {
-    setCollectStep(0);
-    setCollectData({});
-    askFixed(0);
   }
 
   async function confirmModification() {
@@ -943,83 +982,6 @@ export function AgentPage() {
     await modifyPlan(confirm.instruction, confirm.mode, confirm.targets);
   }
 
-  function finishCollect(data: Record<string, unknown>) {
-    setQuestion(null);
-    setCollectStep(null);
-    setCollectData({});
-    addAssistantMessage('正在搜索并规划行程…');
-    const userId = localStorage.getItem('currentUser') || '';
-    let profile: unknown = null;
-    try {
-      profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
-    } catch {
-      profile = null;
-    }
-    void runPlan({
-      destination: data.destination,
-      start_date: data.start_date,
-      end_date: data.end_date,
-      ...(userId ? { user_id: userId } : {}),
-      ...(profile ? { profile } : {}),
-      basic: {
-        origin: data.origin,
-        travelers: data.travelers,
-        budget_tiers: data.budget_tiers,
-        total_budget: data.total_budget,
-        purposes: data.purposes,
-      },
-    });
-  }
-
-  function handleCollectAnswer(content: string, optionValues?: string[]) {
-    if (collectStep == null) return;
-    const item = FIXED_QUESTIONS[collectStep];
-    const value = item.kind === 'options'
-      ? (optionValues ?? selectedOptions)
-      : content.trim();
-    const nextData = { ...collectData, [item.key]: value };
-    setCollectData(nextData);
-    if (collectStep + 1 < FIXED_QUESTIONS.length) {
-      setCollectStep(collectStep + 1);
-      askFixed(collectStep + 1);
-    } else {
-      setCollectData(nextData);
-      finishCollect(nextData);
-    }
-  }
-
-  async function submitClarify() {
-    if (!clarify || !originInput.trim()) return;
-    let basic: Record<string, unknown> = {};
-    try {
-      basic = JSON.parse(localStorage.getItem('tripInfo') || '{}') || {};
-    } catch {
-      basic = {};
-    }
-    basic.origin = originInput.trim();
-    localStorage.setItem('tripInfo', JSON.stringify(basic));
-
-    const userId = localStorage.getItem('currentUser') || '';
-    let profile: unknown = null;
-    try {
-      profile = JSON.parse(localStorage.getItem('userProfile') || 'null');
-    } catch {
-      profile = null;
-    }
-    const destination = clarify.destination;
-    const start_date = clarify.start_date;
-    const end_date = clarify.end_date;
-    setClarify(null);
-    setOriginInput('');
-    await runPlan({
-      destination,
-      start_date,
-      end_date,
-      ...(userId ? { user_id: userId } : {}),
-      ...(profile ? { profile } : {}),
-      ...(basic ? { basic } : {}),
-    });
-  }
 
   function loadMockData() {
     if (planning) return;
@@ -1298,6 +1260,10 @@ export function AgentPage() {
   function handleSend() {
     const content = draft.trim();
     if (!content || planning) return;
+    if (routePlan && !collectingTrip && !tripConfirm && selectedBlocks.size > 0) {
+      void replanSelected(content);
+      return;
+    }
 
     if (selectedBlocks.size > 0) {
       void replanSelected(content);
@@ -1325,22 +1291,25 @@ export function AgentPage() {
     ]);
     setDraft('');
 
-    if (routePlan) {
-      const history: ChatMessage[] = [
-        ...messages,
-        { id: buildId(), role: 'user', content },
-      ];
-      void resolveIntent(history, content);
-      return;
-    }
+    const history: ChatMessage[] = [
+      ...messages,
+      { id: buildId(), role: 'user', content },
+    ];
+    setQuestion(null);
+    setTripConfirm(null);
+    setPendingConfirm(null);
+    void resolveIntent(history, content);
+  }
 
-    if (collectStep != null) {
-      handleCollectAnswer(content);
-      return;
-    }
-
-    startCollect();
-    return;
+  function stopPlanning() {
+    intentVersionRef.current += 1;
+    replanControllerRef.current?.abort();
+    replanControllerRef.current = null;
+    setReplanning(false);
+    requestControllerRef.current?.abort();
+    stopPlanStream();
+    setPlanning(false);
+    addAssistantMessage('已停止本次处理。你可以继续补充或调整需求。');
   }
 
   function handleComposerKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -1351,155 +1320,92 @@ export function AgentPage() {
   }
 
   function addToPlan(item: OptionItem) {
-    setPlanItemIds((current) =>
-      current.includes(item.id) ? current : [...current, item.id],
-    );
-    const userId = localStorage.getItem('currentUser') || '';
-    if (userId) {
-      void api.reportBehavior(userId, 'add', item.title, getOptionTypeLabel(item.type));
+    if (planning) return;
+    if (routePlan) {
+      startAdd(item);
+      return;
     }
+    setPlanItemIds((current) => current.includes(item.id) ? current : [...current, item.id]);
   }
 
-  function removeFromPlan(itemId: string) {
-    const item = options.find((o) => o.id === itemId);
-    setPlanItemIds((current) => current.filter((id) => id !== itemId));
-    const userId = localStorage.getItem('currentUser') || '';
-    if (userId && item) {
-      void api.reportBehavior(userId, 'remove', item.title, getOptionTypeLabel(item.type));
+  async function removeFromPlan(itemId: string) {
+    if (planning) return;
+    const item = options.find((option) => option.id === itemId);
+    if (routePlan && item) {
+      const style = expandedStyle || activeStyle;
+      const matches = routePlan.blocks.filter((block) => block.name === item.title && (!style || block.plan_style === style));
+      if (matches.length) {
+        addAssistantMessage(`正在从计划移除「${item.title}」…`);
+        await mutatePlan({ action: 'delete', block_ids: matches.map((block) => block.id) }, `已移除「${item.title}」，行程与路线已更新。`);
+      }
     }
+    setPlanItemIds((current) => current.filter((id) => id !== itemId));
   }
 
   function togglePlan(item: OptionItem) {
-    if (planItemIds.includes(item.id)) {
-      removeFromPlan(item.id);
-    } else {
-      addToPlan(item);
-    }
+    if (planning) return;
+    if (isInPlan(item)) void removeFromPlan(item.id);
+    else addToPlan(item);
   }
 
   function isInPlan(item: OptionItem) {
+    if (routePlan) {
+      const style = expandedStyle || activeStyle;
+      return routePlan.blocks.some((block) => block.name === item.title && (!style || block.plan_style === style));
+    }
     return planItemIds.includes(item.id);
   }
 
   function optionToBlockType(item: OptionItem) {
-    if (item.type === 'flight') return '交通';
-    if (item.type === 'hotel') return '酒店';
-    if (item.type === 'spot') return '景点';
-    if (item.type === 'event') return '活动';
-    return '美食';
+    return { flight: '交通', hotel: '酒店', spot: '景点', event: '活动', food: '美食' }[item.type];
   }
 
   function startAdd(item: OptionItem) {
-    if (planning) return;
+    if (!routePlan || planning) return;
     setPendingAdd(item);
-    addAssistantMessage(
-      `要把「${item.title}」加到第几天？请回复例如“第2天 14:00”`,
-    );
+    const day = item.suggestedDay || (activeDay !== 'all' ? activeDay : 1);
+    setAddDay(Math.min(getPlanDayCount(routePlan), Math.max(1, day)));
+    setAddTime('');
+    addAssistantMessage(`把「${item.title}」安排在哪一天？可在下面选择，也可以回复“第2天 14:00”。`);
   }
 
-  function handleAddReply(content: string) {
-    if (!pendingAdd || !routePlan) return;
-    const dayMatch = content.match(/第?\s*(\d+|[一二三四五六七八九十]+)\s*天/);
-    const existingDays = Array.from(
-      new Set(routePlan.blocks.map((block) => block.day)),
-    ).filter((day) => Number.isFinite(day));
-    const maxDay = existingDays.length > 0 ? Math.max(...existingDays) : 1;
-    const cnDay: Record<string, number> = {
-      一: 1, 二: 2, 三: 3, 四: 4, 五: 5,
-      六: 6, 七: 7, 八: 8, 九: 9, 十: 10,
-    };
-    const requestedDay = dayMatch
-      ? cnDay[dayMatch[1]] ?? Number(dayMatch[1])
-      : activeDay !== 'all' && Number.isFinite(activeDay)
-        ? activeDay
-        : 1;
-    const day = Math.min(Math.max(requestedDay, 1), maxDay);
-    const timeMatch = content.match(/(\d{1,2}:\d{2})/);
-    const sameDayBlocks = routePlan.blocks.filter(
-      (block) => Number(block.day) === day,
-    );
-    const existingRanges = sameDayBlocks
-      .map((block) => rangeToMinutes(block.time || ''))
-      .filter((range): range is [number, number] => range != null);
-    const preferredStart = timeToMinutes(timeMatch ? timeMatch[1] : '09:00') ?? 9 * 60;
-    let start = preferredStart;
-    if (!timeMatch && pendingAdd.lng != null && pendingAdd.lat != null) {
-      const located = sameDayBlocks.filter(
-        (block) => block.lng != null && block.lat != null,
-      );
-      if (located.length > 0) {
-        const nearest = located.reduce((best, block) =>
-          coordDistance(
-            { lng: pendingAdd.lng!, lat: pendingAdd.lat! },
-            { lng: block.lng!, lat: block.lat! },
-          ) <
-          coordDistance(
-            { lng: pendingAdd.lng!, lat: pendingAdd.lat! },
-            { lng: best.lng!, lat: best.lat! },
-          )
-            ? block
-            : best,
-        );
-        const end = rangeToMinutes(nearest.time || '')?.[1];
-        if (end != null) start = end + 15;
-      }
+  async function handleAddReply(content: string) {
+    if (!pendingAdd || !routePlan || planning) return;
+    const match = content.match(/第?\s*(\d+|[一二三四五六七八九十]+)\s*天/);
+    const names: Record<string, number> = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9, 十: 10 };
+    const day = match ? names[match[1]] ?? Number(match[1]) : addDay;
+    const maxDay = getPlanDayCount(routePlan);
+    if (!Number.isFinite(day) || day < 1 || day > maxDay) {
+      addAssistantMessage(`当前行程是${maxDay}天，请选择第1到第${maxDay}天。`);
+      return;
     }
-    const overlaps = (candidate: [number, number]) =>
-      existingRanges.some(
-        (range) => candidate[0] < range[1] && candidate[1] > range[0],
-      );
-    while (overlaps([start, start + 60]) && start < 23 * 60) {
-      start += 30;
-    }
-    const time = minutesToRange(start);
-
-    const sameDayBlock = routePlan.blocks.find((block) => Number(block.day) === day);
-    const date = sameDayBlock?.date ?? routePlan.start_date ?? '';
-    const planStyle =
-      sameDayBlock?.plan_style || activeStyle || routePlan.styles[0] || '';
-
-    const block: RouteBlock = {
-      id: `added-${Date.now()}`,
-      plan_style: planStyle,
-      day,
-      date,
-      type: optionToBlockType(pendingAdd),
-      time,
-      name: pendingAdd.title,
-      note: pendingAdd.description ?? '',
-      lng: pendingAdd.lng,
-      lat: pendingAdd.lat,
+    const time = content.match(/(\d{1,2}:\d{2})/)?.[1] || addTime;
+    const item: Record<string, unknown> = {
+      name: pendingAdd.title, type: optionToBlockType(pendingAdd), note: pendingAdd.description,
+      link: pendingAdd.url || '', lng: pendingAdd.lng, lat: pendingAdd.lat,
+      ...(pendingAdd.priceKnown !== false ? { price: getOptionPrice(pendingAdd) } : {}),
+      source_option_id: pendingAdd.id,
+      ...(pendingAdd.type === 'food' ? {
+        rating: pendingAdd.rating, cuisine: pendingAdd.cuisine,
+        walking_distance_m: pendingAdd.walkingDistanceM,
+        walking_duration_s: pendingAdd.walkingDurationS,
+        walking_origin: pendingAdd.walkingOrigin,
+      } : {}),
+      ...(time ? { time } : {}),
     };
-    setRoutePlan((prev) =>
-      prev
-        ? {
-            ...prev,
-            blocks: [...prev.blocks, block].sort(
-              (a, b) =>
-                Number(a.day) - Number(b.day) ||
-                (a.time || '').localeCompare(b.time || ''),
-            ),
-            legs: [],
-          }
-        : prev,
-    );
-    setPlanItemIds((prev) =>
-      prev.includes(pendingAdd.id) ? prev : [...prev, pendingAdd.id],
-    );
-    setPendingAdd(null);
-    addAssistantMessage(
-      `已把「${pendingAdd.title}」添加到第 ${day} 天${time ? ` ${time}` : ''}。`,
-    );
+    const candidate = pendingAdd;
+    addAssistantMessage(`正在把「${candidate.title}」安排到第${day}天…`);
+    const success = await mutatePlan({ action: 'add', day, item, block_ids: Array.from(selectedBlocks) },
+      `已把「${candidate.title}」安排到第${day}天，计划与地图已同步。`);
+    if (success) setPendingAdd(null);
   }
 
   function toggleBlock(blockId: string) {
     if (planning) return;
-    const block = routePlan?.blocks.find((b) => b.id === blockId);
-    if (!block || block.type === '天气') return;
+    const block = routePlan?.blocks.find((item) => item.id === blockId);
+    if (!block || block.type === '天气' || collectingTrip || tripConfirm) return;
     setPendingAdd(null);
     setPendingConfirm(null);
-    setQuestion(null);
-    setCollectStep(null);
     setSelectedBlocks((prev) => {
       const next = new Set(prev);
       if (next.has(blockId)) {
@@ -1511,30 +1417,25 @@ export function AgentPage() {
     });
   }
 
-  function toggleFoodOption(block: RouteBlock, option: NonNullable<RouteBlock['options']>[number]) {
-    setSelectedFoodPoints((prev) => {
-      const optionId = `food-${block.id}::${option.name}`;
-      const exists = prev.some((point) => point.id === optionId);
-      if (exists) {
-        return prev.filter((point) => point.id !== optionId);
-      }
-      return [
-        ...prev.filter((point) => !point.id.startsWith(`food-${block.id}::`)),
-        {
-          id: optionId,
-          plan_style: block.plan_style,
-          day: block.day,
-          date: block.date,
-          type: '美食',
-          time: block.time,
-          name: option.name,
-          price: option.price,
-          link: option.link,
-          lng: option.lng,
-          lat: option.lat,
-        },
-      ];
-    });
+  async function toggleFoodOption(block: RouteBlock, option: NonNullable<RouteBlock['options']>[number]) {
+    if (planning || block.selected_option === option.name) return;
+    addAssistantMessage(`正在将${block.meal || '这餐'}换成「${option.name}」…`);
+    const walking = formatWalkingInfo(option.walking_distance_m, option.walking_duration_s).replace(' / ', '/');
+    const straight = option.distance_m != null ? `距${block.anchor_name || '相邻景点'}约${option.distance_m}米（直线距离）` : '';
+    const note = straight ? `${block.meal || '用餐'} · ${straight}${walking ? `；${walking}` : ''}` : block.note;
+    await mutatePlan({
+      action: 'update', block_ids: [block.id],
+      item: { ...option, type: '美食', selected_option: option.name, options: block.options,
+        note },
+    }, `已选用「${option.name}」，餐费和地图路线已同步。`);
+  }
+
+  function chooseStyle(style: string) {
+    if (planning) return;
+    setActiveStyle(style);
+    setExpandedStyle(style);
+    setActiveDay('all');
+    setSelectedBlocks(new Set());
   }
 
   function nextBatch(tab: OptionType) {
@@ -1548,45 +1449,29 @@ export function AgentPage() {
     setSocialBatch((prev) => prev + 1);
   }
 
-  async function confirmPlan() {
+  function confirmPlan() {
     if (!expandedStyle || !routePlan || planning || selectedBlocks.size > 0) return;
-    setConfirmedStyle(expandedStyle);
-    const userId = localStorage.getItem('currentUser') || '';
-    if (userId) {
-      void api.reportBehavior(userId, 'confirm', expandedStyle, 'plan');
-    }
-    if (!userId) {
-      setSaveState('error');
-      return;
-    }
-    setSaveState('saving');
-    try {
-      await api.saveTripMemory({
-        user_id: userId,
-        destination: routePlan.destination,
-        start_date: routePlan.start_date,
-        end_date: routePlan.end_date,
-        chosen_plan_style: expandedStyle,
-        final_plan: routePlan,
-        conversation: messages,
-      });
-      setSaveState('idle');
-    } catch {
-      setSaveState('error');
-    }
+    setPlanRating(null);
+    setPlanFeedback('');
+    setSaveState('idle');
+    setConfirmModalOpen(true);
   }
 
-  async function submitPlanRating() {
-    if (!routePlan || !expandedStyle || planRating == null) return;
-    const rating = planRating;
-    setSaveState('saving');
+  function closeConfirmModal() {
+    setConfirmModalOpen(false);
+  }
+
+  async function acceptPlan() {
+    if (!expandedStyle || !routePlan) return;
     const userId = localStorage.getItem('currentUser') || '';
     if (!userId) {
       setSaveState('error');
+      setConfirmModalOpen(false);
       return;
     }
+    setSaveState('saving');
     try {
-      await api.saveTripMemory({
+      const payload: Parameters<typeof api.saveTripMemory>[0] = {
         user_id: userId,
         destination: routePlan.destination,
         start_date: routePlan.start_date,
@@ -1594,11 +1479,17 @@ export function AgentPage() {
         chosen_plan_style: expandedStyle,
         final_plan: routePlan,
         conversation: messages,
-        rating,
-        feedback: planFeedback,
-      });
+      };
+      if (planRating != null) payload.rating = planRating;
+      if (planFeedback.trim()) payload.feedback = planFeedback.trim();
+      await api.saveTripMemory(payload);
+      setConfirmedStyle(expandedStyle);
       setSaveState('saved');
-      void api.reportBehavior(userId, 'rate', expandedStyle, String(rating));
+      setConfirmModalOpen(false);
+      void api.reportBehavior(userId, 'confirm', expandedStyle, 'plan');
+      if (planRating != null) {
+        void api.reportBehavior(userId, 'rate', expandedStyle, String(planRating));
+      }
     } catch {
       setSaveState('error');
     }
@@ -1665,7 +1556,7 @@ export function AgentPage() {
         <>
           <span>{item.mode === 'train' ? '高铁' : '航班'} {item.scheduleLabel}</span>
           <span>{item.duration}</span>
-          <span>{formatPrice(item.price)}</span>
+          <span>{item.priceKnown === false ? '暂无报价' : formatPrice(item.price)}</span>
         </>
       );
     }
@@ -1675,7 +1566,7 @@ export function AgentPage() {
         <>
           <span>{item.scheduleLabel}</span>
           <span>{item.rating} ★</span>
-          <span>{formatPrice(item.totalPrice)}</span>
+          <span>{item.priceKnown === false ? '暂无报价' : formatPrice(item.totalPrice)}</span>
         </>
       );
     }
@@ -1693,6 +1584,9 @@ export function AgentPage() {
     if (item.type === 'food') {
       return (
         <>
+          {item.scheduleLabel && <span>{item.scheduleLabel}</span>}
+          {item.walkingDistanceM != null && <span>{formatWalkingInfo(item.walkingDistanceM, item.walkingDurationS)}</span>}
+          {item.distanceM != null && <span>距相邻景点约{Math.round(item.distanceM)}米（直线）</span>}
           <span>{item.cuisine}</span>
           <span>{item.rating > 0 ? `${item.rating} ★` : item.businessArea}</span>
           <span>{item.pricePerPerson > 0 ? `${formatPrice(item.pricePerPerson)}/人` : '美食'}</span>
@@ -1704,7 +1598,7 @@ export function AgentPage() {
       <>
         <span>{item.scheduleLabel}</span>
         <span>{item.recommendedDuration}</span>
-        <span>{formatPrice(item.ticketPrice)}</span>
+        <span>{item.priceKnown === false ? '暂无报价' : formatPrice(item.ticketPrice)}</span>
       </>
     );
   }
@@ -1735,89 +1629,55 @@ export function AgentPage() {
             ))}
           </div>
 
-          {clarify && (
+          {tripConfirm && (
             <div className="ta-clarify-card">
-              <div className="ta-clarify-title">您准备从哪里出发？</div>
+              <div className="ta-clarify-title">信息确认</div>
+              <p className="ta-confirm-summary" style={{ whiteSpace: 'pre-line' }}>
+                {formatTripConfirm(tripConfirm)}
+              </p>
               <div className="ta-clarify-row">
-                <input
-                  value={originInput}
-                  onChange={(event) => setOriginInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === 'Enter') {
-                      event.preventDefault();
-                      void submitClarify();
-                    }
-                  }}
-                  placeholder="例如：上海"
-                />
                 <button
                   type="button"
                   className="ta-clarify-submit"
-                  onClick={() => void submitClarify()}
-                  disabled={!originInput.trim() || planning}
+                  onClick={() => void confirmTrip()}
+                  disabled={planning}
                 >
-                  确定
+                  确认，开始规划
+                </button>
+                <button
+                  type="button"
+                  className="ta-clarify-option"
+                  onClick={() => setTripConfirm(null)}
+                >
+                  再补充/修改
                 </button>
               </div>
             </div>
           )}
 
           {question && (
+            <TripQuestions key={JSON.stringify(question.questions)} questions={question.questions} busy={planning}
+              onSubmit={(reply) => void submitQuestion(reply)} />
+          )}
+
+          {pendingAdd && routePlan && (
             <div className="ta-clarify-card">
-              <div className="ta-clarify-title">{question.question}</div>
-              {question.options.length > 0 ? (
-                <div className="ta-clarify-options">
-                  {question.options.map((option) => (
-                    <button
-                      key={option}
-                      type="button"
-                      className={`ta-clarify-option${
-                        selectedOptions.includes(option) ? ' active' : ''
-                      }`}
-                      onClick={() =>
-                        setSelectedOptions((prev) =>
-                          prev.includes(option)
-                            ? prev.filter((item) => item !== option)
-                            : [...prev, option],
-                        )
-                      }
-                    >
-                      {option}
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="ta-clarify-row">
-                  <input
-                    type={
-                      question.field.includes('date') ||
-                      question.field === 'start_date' ||
-                      question.field === 'end_date'
-                        ? 'date'
-                        : 'text'
-                    }
-                    value={answer}
-                    onChange={(event) => setAnswer(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault();
-                        void submitQuestion();
-                      }
-                    }}
-                    placeholder="请输入"
-                  />
-                </div>
-              )}
-              <button
-                type="button"
-                className="ta-clarify-submit"
-                onClick={() => void submitQuestion()}
-                disabled={
-                  !question.options.length && !answer.trim() ? true : false
-                }
-              >
-                确定
-              </button>
+              <div className="ta-clarify-title">安排「{pendingAdd.title}」</div>
+              <div className="ta-clarify-row">
+                <label>日期
+                  <select value={addDay} onChange={(event) => setAddDay(Number(event.target.value))} disabled={planning}>
+                    {Array.from({ length: getPlanDayCount(routePlan) }, (_, index) => index + 1)
+                      .map((day) => <option key={day} value={day}>第{day}天</option>)}
+                  </select>
+                </label>
+                <label>时间（可选）
+                  <input type="time" value={addTime} onChange={(event) => setAddTime(event.target.value)} disabled={planning} />
+                </label>
+              </div>
+              <p className="ta-question-hint">不填时间时，系统会安排空档；餐厅和酒店优先替换当天已有推荐。</p>
+              <button type="button" className="ta-clarify-submit" disabled={planning}
+                onClick={() => void handleAddReply(`第${addDay}天 ${addTime}`)}>加入当天计划</button>
+              <button type="button" className="ta-clarify-option" disabled={planning} onClick={() => setPendingAdd(null)}>取消</button>
             </div>
           )}
 
@@ -1846,11 +1706,17 @@ export function AgentPage() {
           )}
 
           <div className="ta-chat-composer">
+            {selectedBlocks.size > 0 && (
+              <div className="ta-selection-hint">
+                已选{selectedBlocks.size}项，输入需求将调整这些项目。
+                <button type="button" disabled={planning} onClick={() => setSelectedBlocks(new Set())}>取消选择</button>
+              </div>
+            )}
             <textarea
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={handleComposerKeyDown}
-              placeholder={selectedBlocks.size > 0 ? '重新规划的原因...' : '继续补充需求…'}
+              placeholder={selectedBlocks.size > 0 ? '重新规划的原因...' : '描述你的旅行想法，或继续补充信息…'}
               disabled={replanning}
               rows={1}
             />
@@ -1858,10 +1724,7 @@ export function AgentPage() {
               <button
                 type="button"
                 className="ta-stop-button"
-                onClick={() => {
-                  if (replanning) replanControllerRef.current?.abort();
-                  else stopPlanStream();
-                }}
+                onClick={stopPlanning}
               >
                 停止
               </button>
@@ -1890,14 +1753,17 @@ export function AgentPage() {
                 <p>{routePlan.summaries[expandedStyle] ?? ''}</p>
               </div>
               <div className="ta-plan-detail-total">
-                总消费 ¥{' '}
-                {routePlan.blocks
+                已知费用估算 ¥{' '}
+                {(routePlan.cost_by_style?.[expandedStyle] ?? routePlan.blocks
                   .filter((block) => block.plan_style === expandedStyle)
-                  .reduce((sum, block) => sum + (block.price ?? 0), 0)
+                  .reduce((sum, block) => sum + (block.price ?? 0), 0))
                   .toLocaleString()}
               </div>
-              {routePlan.budget_status === 'over' && (
-                <div className="ta-plan-budget-warning">⚠ 已超出总预算</div>
+              {(routePlan.budget_by_style?.[expandedStyle] ?? (expandedStyle === routePlan.styles[0] ? routePlan.budget_status : undefined)) === 'over' && (
+                <div className="ta-plan-budget-warning">已知费用已超出总预算</div>
+              )}
+              {!!routePlan.unpriced_items?.[expandedStyle]?.length && (
+                <p className="ta-question-hint">另有{routePlan.unpriced_items[expandedStyle].length}项暂无报价，未计入估算。</p>
               )}
               {routePlan.budget_status === 'unknown' && (
                 <div className="ta-plan-budget-warning">部分项目价格未知，总消费仅包含已知金额。</div>
@@ -1943,7 +1809,9 @@ export function AgentPage() {
                             className={`ta-plan-block ta-plan-block-${block.type}${
                               selectedBlocks.has(block.id) ? ' selected' : ''
                             }`}
-                            onClick={() => toggleBlock(block.id)}
+                            onClick={(event) => {
+                              if (!(event.target as Element).closest('button, a, input')) toggleBlock(block.id);
+                            }}
                             onKeyDown={(event) => {
                               if (event.target === event.currentTarget && (event.key === 'Enter' || event.key === ' ')) {
                                 event.preventDefault();
@@ -1954,10 +1822,14 @@ export function AgentPage() {
                             aria-pressed={selectedBlocks.has(block.id)}
                             aria-disabled={planning}
                             tabIndex={0}
+                            aria-label={`选择计划项 ${block.name}`}
                           >
                             <div className="ta-plan-block-left">
                               <span>{block.time}</span>
-                              <span>{block.type}</span>
+                              <span>{block.meal || block.type}</span>
+                              <button type="button" className="ta-plan-select-button" disabled={planning}
+                                aria-pressed={selectedBlocks.has(block.id)} aria-label={`选择${block.name}进行修改`}
+                                onClick={() => toggleBlock(block.id)}>{selectedBlocks.has(block.id) ? '已选中' : '选择修改'}</button>
                             </div>
                             <div className="ta-plan-block-body">
                               {block.link ? (
@@ -1973,9 +1845,12 @@ export function AgentPage() {
                                 <strong>{block.name}</strong>
                               )}
                               {block.note && <p>{block.note}</p>}
+                              {block.type === '景点' && block.match_score != null && (
+                                <span className="ta-plan-block-match">匹配度 {block.match_score}</span>
+                              )}
                               {block.price != null && (
                                 <span className="ta-plan-block-price">
-                                  ¥ {block.price.toLocaleString()}
+                                  {block.price_known === false ? '暂无报价' : `¥ ${block.price.toLocaleString()}`}
                                 </span>
                               )}
                               {block.price === null && (
@@ -1984,22 +1859,39 @@ export function AgentPage() {
                               {block.options && block.options.length > 0 && (
                                 <div className="ta-plan-block-options">
                                   {block.options.map((option) => {
-                                    const active = selectedFoodPoints.some(
-                                      (point) => point.id === `food-${block.id}::${option.name}`,
-                                    );
+                                    const active = block.selected_option === option.name || block.name === option.name;
                                     return (
-                                      <button
-                                        key={option.name}
-                                        type="button"
-                                        className={`ta-food-option${active ? ' active' : ''}`}
-                                        onClick={(event) => { event.stopPropagation(); toggleFoodOption(block, option); }}
-                                        disabled={planning}
-                                      >
-                                        {option.name}
-                                        {option.price != null && option.price > 0
-                                          ? ` · ¥${option.price}`
-                                          : ''}
-                                      </button>
+                                      <span className="ta-food-option-wrap" key={option.name}>
+                                        <button
+                                          type="button"
+                                          className={`ta-food-option${active ? ' active' : ''}`}
+                                          disabled={planning}
+                                          onClick={() => void toggleFoodOption(block, option)}
+                                        >
+                                          {option.name}
+                                          {option.price != null && option.price > 0
+                                            ? ` · ¥${option.price}`
+                                            : ''}
+                                          {formatWalkingInfo(option.walking_distance_m, option.walking_duration_s)
+                                            ? ` · ${formatWalkingInfo(option.walking_distance_m, option.walking_duration_s)}`
+                                            : ''}
+                                          {option.distance_m != null
+                                            ? ` · 直线约${Math.round(option.distance_m)}米`
+                                            : option.distance_km != null ? ` · 直线约${option.distance_km}km` : ''}
+                                          {option.rating != null ? ` · ${option.rating}分` : ''}
+                                        </button>
+                                        {option.link && (
+                                          <a
+                                            className="ta-food-option-link"
+                                            href={option.link}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            aria-label={`打开${option.name}地图链接`}
+                                          >
+                                            地图
+                                          </a>
+                                        )}
+                                      </span>
                                     );
                                   })}
                                 </div>
@@ -2011,56 +1903,17 @@ export function AgentPage() {
                     );
                   })}
               </div>
-              {confirmedStyle === expandedStyle && selectedBlocks.size === 0 && !replanning ? (
-                <div className="ta-plan-rating">
-                  <div className="ta-plan-rating-label">本次计划满意吗？</div>
-                  <div className="ta-plan-rating-buttons">
-                    {[
-                      { label: '很满意', value: 5 },
-                      { label: '满意', value: 4 },
-                      { label: '一般', value: 3 },
-                      { label: '不满意', value: 1 },
-                    ].map((option) => (
-                      <button
-                        key={option.value}
-                        type="button"
-                        className={`ta-plan-rating-button${
-                          planRating === option.value ? ' active' : ''
-                        }`}
-                        disabled={saveState === 'saving' || saveState === 'saved'}
-                        onClick={() => setPlanRating(option.value)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                  <button
-                    type="button"
-                    className="ta-plan-rating-submit"
-                    disabled={planRating == null || saveState === 'saving' || saveState === 'saved'}
-                    onClick={() => void submitPlanRating()}
-                  >
-                    提交评价
-                  </button>
-                  <textarea
-                    className="ta-plan-rating-feedback"
-                    value={planFeedback}
-                    onChange={(event) => setPlanFeedback(event.target.value)}
-                    placeholder="补充一点评价（可选）"
-                    rows={2}
-                  />
-                  <div className="ta-plan-rating-status">
-                    {saveState === 'saving' && <span>保存中…</span>}
-                    {saveState === 'saved' && <span>已保存</span>}
-                    {saveState === 'error' && <span>保存失败，请确认已登录</span>}
-                  </div>
+              {confirmedStyle === expandedStyle ? (
+                <div className="ta-plan-rating-status">
+                  {saveState === 'saved' && <span>已保存</span>}
+                  {saveState === 'error' && <span>保存失败，请确认已登录</span>}
                 </div>
               ) : (
                 <button
                   type="button"
                   className="ta-plan-confirm-button"
-                  onClick={confirmPlan}
                   disabled={planning || selectedBlocks.size > 0}
+                  onClick={confirmPlan}
                 >
                   确认计划
                 </button>
@@ -2082,7 +1935,7 @@ export function AgentPage() {
             )}
           </div>
 
-          {travelPlan.length > 0 ? (
+          {travelPlan.length > 0 && !routePlan ? (
             <div className="ta-plan-timeline">
               {travelPlan.map((item) => (
                 <div
@@ -2115,6 +1968,7 @@ export function AgentPage() {
                   <button
                     type="button"
                     className="ta-plan-remove"
+                    disabled={planning}
                     onClick={(event) => {
                       event.stopPropagation();
                       removeFromPlan(item.id);
@@ -2139,7 +1993,7 @@ export function AgentPage() {
                         expandedStyle === style ? ' active' : ''
                       }`}
                       disabled={planning}
-                      onClick={() => { setExpandedStyle(style); setActiveStyle(style); setSelectedBlocks(new Set()); }}
+                      onClick={() => chooseStyle(style)}
                     >
                       <span className="ta-plan-style-name">{style}</span>
                       <p className="ta-plan-style-summary">
@@ -2150,19 +2004,19 @@ export function AgentPage() {
                 </div>
               ) : (
                 <>
-                  <div>从右侧待选行程中添加机票、酒店或景点。</div>
+                  <div>先在左侧描述旅行需求，生成后可把右侧候选加入行程。</div>
                   <p className="ta-plan-helper">
-                    在左侧描述你的行程，例如「宁波 10月1日到10月3日」
+                    例如「从上海去杭州玩3天，2人，预算5000元」
                   </p>
                 </>
               )}
-              <button
+              {import.meta.env.DEV && <button
                 type="button"
                 className="ta-plan-mock-button"
                 onClick={loadMockData}
               >
-                加载测试数据
-              </button>
+                加载演示行程
+              </button>}
             </div>
           )}
             </>
@@ -2215,7 +2069,7 @@ export function AgentPage() {
               </button>
             </div>
 
-            {(activeTab === 'hotel' || activeTab === 'spot' || activeTab === 'food') && (
+            {(activeTab === 'hotel' || activeTab === 'spot' || activeTab === 'event' || activeTab === 'food') && (
               <button
                 type="button"
                 className="ta-batch-button"
@@ -2316,6 +2170,7 @@ export function AgentPage() {
                     <button
                       className={added ? 'ta-remove-button' : 'ta-primary-button'}
                       type="button"
+                      disabled={planning}
                       onClick={() => startAdd(item)}
                     >
                       添加到计划
@@ -2394,10 +2249,8 @@ export function AgentPage() {
                 key={style}
                 type="button"
                 className={style === activeStyle ? 'active' : ''}
-                onClick={() => {
-                  setActiveStyle(style);
-                  setActiveDay('all');
-                }}
+                disabled={planning}
+                onClick={() => chooseStyle(style)}
               >
                 {style}
               </button>
@@ -2427,7 +2280,7 @@ export function AgentPage() {
               ))}
             </div>
             <TripMap
-              blocks={[...styleBlocks, ...selectedFoodPoints]}
+              blocks={styleBlocks}
               legs={styleLegs}
               day={activeDay}
             />
@@ -2499,7 +2352,7 @@ export function AgentPage() {
 
                   <div className="ta-detail-foot">
                     <span>位置：{detailItem.location}</span>
-                    <strong>{formatPrice(detailItem.price)}</strong>
+                    <strong>{detailItem.priceKnown === false ? '暂无报价' : formatPrice(detailItem.price)}</strong>
                   </div>
                 </>
               )}
@@ -2529,13 +2382,13 @@ export function AgentPage() {
                     </div>
                     <div>
                       <span>每晚均价</span>
-                      <strong>{formatPrice(detailItem.nightlyPrice)}</strong>
+                      <strong>{detailItem.priceKnown === false ? '暂无报价' : formatPrice(detailItem.nightlyPrice)}</strong>
                     </div>
                   </div>
 
                   <div className="ta-detail-foot">
                     <span>位置：{detailItem.location}</span>
-                    <strong>{formatPrice(detailItem.totalPrice)}</strong>
+                    <strong>{detailItem.priceKnown === false ? '暂无报价' : formatPrice(detailItem.totalPrice)}</strong>
                   </div>
                 </>
               )}
@@ -2557,7 +2410,7 @@ export function AgentPage() {
                     </div>
                     <div>
                       <span>门票</span>
-                      <strong>{formatPrice(detailItem.ticketPrice)}</strong>
+                      <strong>{detailItem.priceKnown === false ? '暂无报价' : formatPrice(detailItem.ticketPrice)}</strong>
                     </div>
                   </div>
 
@@ -2587,6 +2440,18 @@ export function AgentPage() {
                       <span>商圈</span>
                       <strong>{detailItem.businessArea || '—'}</strong>
                     </div>
+                    {detailItem.walkingDistanceM != null && (
+                      <div>
+                        <span>相邻景点步行路线</span>
+                        <strong>{formatWalkingInfo(detailItem.walkingDistanceM, detailItem.walkingDurationS)}</strong>
+                      </div>
+                    )}
+                    {detailItem.distanceM != null && (
+                      <div>
+                        <span>距相邻景点（直线）</span>
+                        <strong>约{Math.round(detailItem.distanceM)}米</strong>
+                      </div>
+                    )}
                   </div>
 
                   <div className="ta-detail-foot">
@@ -2628,11 +2493,94 @@ export function AgentPage() {
                       ? 'ta-remove-button'
                       : 'ta-primary-button'
                   }
+                  disabled={planning}
                   onClick={() => togglePlan(detailItem)}
                 >
                   {isInPlan(detailItem) ? '从计划移除' : '添加到计划'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {confirmModalOpen && (
+        <div className="ta-modal-backdrop" onClick={closeConfirmModal}>
+          <div
+            className="ta-detail-modal ta-confirm-plan-modal"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="ta-detail-header">
+              <div>
+                <span className="ta-section-kicker">CONFIRM PLAN</span>
+                <h3>确认接受该计划？</h3>
+                <p>请对本次计划打分并提出建议，确认后即保存为历史行程。</p>
+              </div>
+              <button
+                type="button"
+                className="ta-close-button"
+                onClick={closeConfirmModal}
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="ta-confirm-plan-body">
+              <div className="ta-confirm-plan-section">
+                <span className="ta-confirm-plan-label">打分</span>
+                <div className="ta-plan-rating-buttons">
+                  {[
+                    { label: '很满意', value: 5 },
+                    { label: '满意', value: 4 },
+                    { label: '一般', value: 3 },
+                    { label: '不满意', value: 1 },
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`ta-plan-rating-button${
+                        planRating === option.value ? ' active' : ''
+                      }`}
+                      disabled={saveState === 'saving'}
+                      onClick={() => setPlanRating(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="ta-confirm-plan-section">
+                <span className="ta-confirm-plan-label">建议</span>
+                <textarea
+                  className="ta-plan-rating-feedback"
+                  value={planFeedback}
+                  onChange={(event) => setPlanFeedback(event.target.value)}
+                  placeholder="对本次计划有什么建议？（可选）"
+                  rows={3}
+                />
+              </div>
+
+              {saveState === 'error' && (
+                <div className="ta-plan-rating-status">保存失败，请确认已登录</div>
+              )}
+            </div>
+
+            <div className="ta-modal-actions">
+              <button
+                type="button"
+                className="ta-ghost-button"
+                onClick={closeConfirmModal}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="ta-primary-button"
+                disabled={saveState === 'saving'}
+                onClick={() => void acceptPlan()}
+              >
+                {saveState === 'saving' ? '保存中…' : '确认接受'}
+              </button>
             </div>
           </div>
         </div>

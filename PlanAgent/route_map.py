@@ -27,20 +27,22 @@ TRANSIT_MAX_KM = 25
 MAX_WORKERS = 1
 REQUEST_GAP = 0.25  # 每次请求间隔（秒），控制到约 4 QPS 以内
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 _cache: dict | None = None
 
 
 def _load_cache() -> dict:
     global _cache
-    if _cache is None:
-        try:
-            _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            _cache = {}
-        _cache.setdefault("geo", {})
-        _cache.setdefault("leg", {})
-    return _cache
+    with _lock:
+        if _cache is None:
+            try:
+                _cache = json.loads(CACHE_PATH.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                _cache = {}
+            _cache.setdefault("geo", {})
+            _cache.setdefault("leg", {})
+            _cache.setdefault("walking", {})
+        return _cache
 
 
 def _save_cache() -> None:
@@ -150,16 +152,41 @@ def _transit(origin: str, dest: str, citycode: str) -> dict | None:
     }
 
 
+def walking_route(origin: str, dest: str, cached_only: bool = False) -> dict | None:
+    """独立查询步行路线，供餐厅排序使用；不把驾车距离当作步行距离。"""
+    cache = _load_cache()
+    origin = ",".join(f"{float(value):.6f}" for value in origin.split(","))
+    dest = ",".join(f"{float(value):.6f}" for value in dest.split(","))
+    key = f"{origin}>{dest}"
+    hit = cache["walking"].get(key) or cache["leg"].get(key)
+    if hit and hit.get("mode") == "walk":
+        return hit
+    if cached_only or not os.getenv("AMAP_KEY"):
+        return None
+    try:
+        leg = _walk_or_drive("/v5/direction/walking", origin, dest, "walk")
+    except Exception:  # noqa: BLE001
+        return None
+    if leg.get("distance_m", 0) <= 0 or leg.get("duration_s", 0) <= 0:
+        return None
+    with _lock:
+        cache["walking"][key] = leg
+    return leg
+
+
 def route_leg(a: dict, b: dict) -> dict | None:
     cache = _load_cache()["leg"]
-    key = f"{a['location']}>{b['location']}"
-    if key in cache:
-        return cache[key]
+    origin = ",".join(f"{float(value):.6f}" for value in a["location"].split(","))
+    dest = ",".join(f"{float(value):.6f}" for value in b["location"].split(","))
+    key = f"{origin}>{dest}"
+    cached = cache.get(key) or cache.get(f"{a['location']}>{b['location']}")
+    if cached and not (cached.get("mode") == "walk" and cached.get("distance_m", 0) > 2500):
+        return cached
     km = _km(a["location"], b["location"])
     try:
-        if km < WALK_MAX_KM:
-            leg = _walk_or_drive("/v5/direction/walking", a["location"], b["location"], "walk")
-        else:
+        leg = walking_route(a["location"], b["location"]) if km < WALK_MAX_KM else None
+        # 湖泊/围墙可能让很短的直线距离绕行数公里，不能一直选择步行。
+        if leg is None or leg.get("distance_m", 0) > 2500:
             leg = None
             if km < TRANSIT_MAX_KM and a.get("citycode"):
                 try:
@@ -185,14 +212,40 @@ def geocode_blocks(blocks: list[dict], city: str) -> None:
     if not os.getenv("AMAP_KEY") or not city:
         return
     stops = [b for b in blocks if _is_stop(b)]
+    citycode = ""
+    unresolved = []
+    for block in stops:
+        # 餐厅由高德周边搜索给出可靠坐标，不能再用“午餐”标题重新定位。
+        if block.get("options") and (block.get("lng") is None or block.get("lat") is None):
+            selected = block.get("selected_option")
+            options = block["options"]
+            chosen = options[selected] if isinstance(selected, int) and 0 <= selected < len(options) else next((option for option in options if option.get("name") == selected), options[0])
+            if chosen.get("lng") is not None and chosen.get("lat") is not None:
+                block.update({"lng": chosen["lng"], "lat": chosen["lat"], "selected_option": chosen.get("name")})
+        try:
+            lng, lat = float(block.get("lng")), float(block.get("lat"))
+            located = math.isfinite(lng) and math.isfinite(lat) and -180 <= lng <= 180 and -90 <= lat <= 90
+        except (TypeError, ValueError):
+            located = False
+        if located:
+            if not citycode:
+                citycode = (geocode(city, city) or {}).get("citycode") or ""
+            block["_geo"] = {"location": f"{lng},{lat}", "poi_id": block.get("poi_id") or "", "citycode": citycode}
+        elif not block.get("options"):
+            unresolved.append(block)
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
-        hits = list(ex.map(lambda b: geocode(b["name"], city), stops))
-    for b, hit in zip(stops, hits):
+        hits = list(ex.map(lambda b: geocode(b["name"], city), unresolved))
+    for b, hit in zip(unresolved, hits):
         if hit:
             lng, lat = hit["location"].split(",")
             b["lng"], b["lat"] = float(lng), float(lat)
             b["poi_id"] = hit["poi_id"]
             b["_geo"] = hit
+    for block in stops:
+        if block.get("_geo") and not block.get("link"):
+            block["link"] = f"https://www.amap.com/place/{block['poi_id']}" if block.get("poi_id") else (
+                f"https://uri.amap.com/marker?position={block['_geo']['location']}&name={urllib.parse.quote(block['name'])}"
+            )
     _save_cache()
 
 

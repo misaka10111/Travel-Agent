@@ -1,16 +1,16 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api';
 
 export type PlanStreamEvent =
   | { type: 'node'; data: Record<string, unknown> }
-  | { type: 'clarify'; missing: string[]; data: Record<string, unknown> }
   | { type: 'final'; data: Record<string, unknown> }
   | { type: 'error'; error: string };
 
 export function usePlanStream() {
   const controllerRef = useRef<AbortController | null>(null);
   const [streaming, setStreaming] = useState(false);
+  useEffect(() => () => controllerRef.current?.abort(), []);
 
   const start = useCallback(
     async (
@@ -35,6 +35,11 @@ export function usePlanStream() {
           onEvent({ type: 'error', error: text });
           return;
         }
+        if (!(response.headers.get('content-type') || '').includes('text/event-stream')) {
+          const body = await response.json() as { error?: string; detail?: string };
+          onEvent({ type: 'error', error: body.error || body.detail || '规划服务没有返回有效结果，请重试。' });
+          return;
+        }
 
         const reader = response.body?.getReader();
         if (!reader) {
@@ -44,6 +49,7 @@ export function usePlanStream() {
 
         const decoder = new TextDecoder();
         let buffer = '';
+        let completed = false;
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
@@ -58,31 +64,24 @@ export function usePlanStream() {
             if (!raw.startsWith('data: ')) continue;
             const dataText = raw.slice(6).trim();
             if (dataText === '[DONE]') continue;
+            let parsed: { type?: string; data?: Record<string, unknown>; error?: string };
             try {
-              const parsed = JSON.parse(dataText) as {
-                type?: string;
-                data?: Record<string, unknown>;
-                error?: string;
-                missing?: unknown;
-              };
-              if (parsed.type === 'final') {
-                onEvent({ type: 'final', data: parsed.data ?? {} });
-              } else if (parsed.type === 'clarify') {
-                onEvent({
-                  type: 'clarify',
-                  missing: Array.isArray(parsed.missing) ? parsed.missing : [],
-                  data: parsed,
-                });
-              } else if (parsed.type === 'error') {
-                onEvent({ type: 'error', error: parsed.error ?? '未知错误' });
-              } else {
-                onEvent({ type: 'node', data: parsed });
-              }
+              parsed = JSON.parse(dataText);
             } catch {
-              // 忽略无法解析的行
+              continue;
+            }
+            if (parsed.type === 'final') {
+              completed = true;
+              onEvent({ type: 'final', data: parsed.data ?? {} });
+            } else if (parsed.type === 'error') {
+              completed = true;
+              onEvent({ type: 'error', error: parsed.error ?? '未知错误' });
+            } else {
+              onEvent({ type: 'node', data: parsed });
             }
           }
         }
+        if (!completed && !controller.signal.aborted) onEvent({ type: 'error', error: '规划连接中断，请重试。' });
       } catch (error) {
         if ((error as Error).name !== 'AbortError') {
           onEvent({ type: 'error', error: (error as Error).message });

@@ -4,6 +4,7 @@ import type {
   Destination,
   Trip,
   TripCreatePayload,
+  TripMemory,
   UserProfile,
 } from './types';
 
@@ -71,12 +72,14 @@ export const api = {
     end_date?: string;
     profile?: unknown;
     basic?: unknown;
-    answers?: unknown[];
     modify?: unknown;
-  }) =>
+    plan?: unknown;
+    search?: unknown;
+  }, signal?: AbortSignal) =>
     request<Record<string, unknown>>('/plan', {
       method: 'POST',
       body: JSON.stringify(payload),
+      signal,
     }),
   replan: (payload: {
     plan: unknown;
@@ -125,9 +128,13 @@ export const api = {
     rating?: number;
     feedback?: string;
   }) =>
-    request('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
+    request<TripMemory>('/trip-memory', { method: 'POST', body: JSON.stringify(payload) }),
   listTripMemory: (userId: string) =>
-    request<Array<Record<string, unknown>>>(`/trip-memory/${encodeURIComponent(userId)}`),
+    request<TripMemory[]>(`/trip-memory/${encodeURIComponent(userId)}`),
+  getTripMemory: (id: number, userId?: string) =>
+    request<TripMemory>(
+      `/trip-memory/item/${id}${userId ? `?user_id=${encodeURIComponent(userId)}` : ''}`,
+    ),
   search: (payload: {
     query?: string;
     destination?: string;
@@ -139,9 +146,14 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(payload),
     }),
-  question: (payload: { messages: ChatMessage[]; has_plan?: boolean }) =>
+  question: (payload: {
+    messages: ChatMessage[];
+    has_plan?: boolean;
+    trip_data?: Record<string, unknown>;
+  }, signal?: AbortSignal) =>
     request<Record<string, unknown>>('/question', {
       method: 'POST',
       body: JSON.stringify(payload),
+      signal,
     }),
 };

@@ -5,6 +5,8 @@ logic can be exercised independently of plan.py's external SDK imports.
 """
 import ast
 import json
+import math
+import re
 from pathlib import Path
 import sys
 import unittest
@@ -18,9 +20,11 @@ from PlanAgent.replan import amount, replacement
 def planning_functions():
     path = ROOT / "PlanAgent" / "plan.py"
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    names = {"_pick_hotel", "_pick_restaurant", "_pick_restaurants", "_attach_prices"}
+    names = {"_pick_hotel", "_pick_restaurant", "_pick_restaurants", "_attach_prices", "_valid_food_coord", "_positive_food_number", "_verified_walking_distance", "_coord_key"}
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-    namespace = {"item_price": item_price, "parse_price": parse_price, "price_sort_key": price_sort_key}
+    route_tree = ast.parse((ROOT / "PlanAgent" / "route_map.py").read_text(encoding="utf-8"))
+    nodes += [node for node in route_tree.body if isinstance(node, ast.FunctionDef) and node.name == "_km"]
+    namespace = {"item_price": item_price, "parse_price": parse_price, "price_sort_key": price_sort_key, "math": math, "re": re}
     exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), namespace)
     return namespace
 
@@ -81,19 +85,28 @@ class PlanningPriceRegressionTests(unittest.TestCase):
         food = [{"name": "未知", "price_per_person": None}, {"name": "甲", "price_per_person": "¥120"}, {"name": "乙", "price_per_person": "￥80"}]
         self.assertEqual(self.functions["_pick_restaurant"](food, "", set(), None, "经济")["name"], "乙")
 
-    def test_restaurant_tiers_accept_currency_strings(self):
-        food = [{"name": "经济", "price_per_person": "¥120"}, {"name": "舒适", "price_per_person": "￥350"}, {"name": "豪华", "price_per_person": "CNY 600"}, {"name": "未知", "price_per_person": "暂无"}]
+    def test_weighted_restaurants_accept_currency_strings_without_old_tier_filter(self):
+        food = [{"name": "经济", "price_per_person": "¥120"}, {"name": "舒适", "price_per_person": "￥350"}, {"name": "豪华", "price_per_person": "CNY 600"}]
+        for item in food:
+            item.update(longitude=120.001, latitude=30, rating=4.5)
         for tier in ("经济", "舒适", "豪华"):
             with self.subTest(tier=tier):
-                rows = self.functions["_pick_restaurants"](food, "", set(), None, tier)
-                self.assertEqual(rows[0]["name"], tier)
+                rows = self.functions["_pick_restaurants"](food, "", set(), [120, 30], tier)
+                self.assertEqual(rows[0]["name"], "经济")
+                self.assertEqual({row["name"] for row in rows}, {"经济", "舒适", "豪华"})
+                self.assertTrue(next(row for row in rows if row["name"] == "豪华")["over_meal_budget"])
 
-    def test_restaurant_fallback_puts_unknown_last(self):
+    def test_restaurant_unknown_quote_is_not_treated_as_free(self):
         food = [{"name": "未知", "price_per_person": "暂无"}, {"name": "甲", "price_per_person": "¥900"}]
-        self.assertEqual(self.functions["_pick_restaurants"](food, "", set(), None, "经济")[0]["name"], "甲")
+        for item in food:
+            item.update(longitude=120.001, latitude=30, rating=4.5)
+        rows = self.functions["_pick_restaurants"](food, "", set(), [120, 30], "经济")
+        unknown = next(row for row in rows if row["name"] == "未知")
+        self.assertIsNone(item_price(unknown))
+        self.assertTrue(next(row for row in rows if row["name"] == "甲")["over_meal_budget"])
 
     def test_total_cost_and_budget_include_symbol_prices(self):
-        plan = {"blocks": [{"id": "h", "name": "酒店"}, {"id": "f", "name": "餐厅"}, {"id": "p", "name": "免费景点"}]}
+        plan = {"blocks": [{"id": "h", "type": "酒店", "name": "酒店"}, {"id": "f", "type": "美食", "name": "餐厅"}, {"id": "p", "type": "景点", "name": "免费景点"}]}
         search = {"hotels": [{"name": "酒店", "price": "¥1,125"}], "food": [{"name": "餐厅", "price_per_person": "￥80.50"}], "poi": [{"name": "免费景点", "free": True}]}
         result = self.functions["_attach_prices"](plan, search, "¥1,000")
         self.assertEqual(result["total_cost"], 1205.5)
@@ -101,21 +114,23 @@ class PlanningPriceRegressionTests(unittest.TestCase):
         self.assertEqual(result["blocks"][2]["price"], 0)
 
     def test_unknown_is_not_zero_or_budget_ok(self):
-        result = self.functions["_attach_prices"]({"blocks": [{"id": "h", "name": "酒店"}]}, {"hotels": [{"name": "酒店", "price": "¥1**"}]}, 1000)
-        self.assertIsNone(result["blocks"][0]["price"])
-        self.assertEqual(result["unknown_price_block_ids"], ["h"])
+        result = self.functions["_attach_prices"]({"blocks": [{"id": "h", "type": "酒店", "name": "酒店"}]}, {"hotels": [{"name": "酒店", "price": "¥1**"}]}, 1000)
+        self.assertIsNone(result["blocks"][0]["unit_price"])
+        self.assertFalse(result["blocks"][0]["price_known"])
+        self.assertEqual(result["unpriced_items"], {"推荐方案": ["酒店"]})
         self.assertEqual(result["budget_status"], "unknown")
 
     def test_exact_unknown_price_does_not_borrow_another_branch_price(self):
         result = self.functions["_attach_prices"](
-            {"blocks": [{"id": "h", "name": "酒店"}]},
+            {"blocks": [{"id": "h", "type": "酒店", "name": "酒店"}]},
             {"hotels": [{"name": "酒店", "price": "未知"}, {"name": "酒店分店", "price": "¥500"}]},
         )
-        self.assertIsNone(result["blocks"][0]["price"])
+        self.assertIsNone(result["blocks"][0]["unit_price"])
+        self.assertFalse(result["blocks"][0]["price_known"])
 
     def test_flight_and_train_prices(self):
         search = {"flights": {"outbound": [{"airline": "东航", "flight_no": "MU1", "price": "¥420"}]}, "trains": [{"transport": "火车", "train_no": "G1", "price": "￥200"}]}
-        result = self.functions["_attach_prices"]({"blocks": [{"id": "f", "name": "东航MU1"}, {"id": "t", "name": "火车G1"}]}, search)
+        result = self.functions["_attach_prices"]({"blocks": [{"id": "f", "type": "交通", "name": "东航MU1"}, {"id": "t", "type": "交通", "name": "火车G1"}]}, search)
         self.assertEqual(result["total_cost"], 620)
 
     def test_no_stay_is_free(self):

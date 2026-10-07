@@ -113,12 +113,18 @@ def catalog(search, target):
 
 def replacement(block, candidate):
     new = deepcopy(block)
-    for field in ("lng", "lat", "poi_id", "_geo", "options", "price", "link", "note", "opening_hours"):
+    for field in ("lng", "lat", "poi_id", "_geo", "options", "price", "unit_price", "price_basis", "price_known", "price_source", "link", "note", "opening_hours", "selected_option", "source_option_id", "anchor_name", "distance_m", "distance_km", "walking_distance_m", "walking_duration_s", "walking_origin", "rating"):
         new.pop(field, None)
     new["name"] = candidate["name"]
     new["link"] = candidate.get("url") or candidate.get("link") or candidate.get("poi_detail_url") or candidate.get("detail_url") or candidate.get("map_url") or ""
     new["note"] = "根据你的要求重新选择"
     new["price"] = item_price(candidate)
+    new["unit_price"] = new["price"]
+    new["price_known"] = new["price"] is not None
+    new["price_source"] = "search" if new["price_known"] else "unknown"
+    new["price_basis"] = candidate.get("price_basis") if candidate.get("price_basis") in ("group", "per_person") else ("group" if block.get("type") == "酒店" else "per_person")
+    if block.get("type") == "美食":
+        new["selected_option"] = candidate["name"]
     new["opening_hours"] = candidate.get("opening_hours") or candidate.get("open_hours") or candidate.get("openHours") or ""
     if candidate.get("_travel"):
         new["time"] = f"{clock(minutes(candidate['dep_time']))}-{clock(minutes(candidate['arr_time']))}"
@@ -256,7 +262,10 @@ def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_i
             # departure would be required.
             if cursor is None and previous_hotel and previous is previous_hotel:
                 required = max(required, 8 * 60 + travel)
-            new_start = max(start, required)
+            window = block.get("activity_window") or {}
+            window_start = window.get("start_min") if block.get("type") != "酒店" else None
+            window_end = window.get("end_min") if block.get("type") != "酒店" else None
+            new_start = max(start, required, window_start if isinstance(window_start, (int, float)) else start)
             if block["id"] in locked_ids or block.get("fixed_time") or not may_shift:
                 if new_start > start:
                     raise ReplanError(f"调整会影响固定项目「{block['name']}」，请换一个替代项。")
@@ -266,6 +275,8 @@ def repair_timeline(plan, old_blocks, style, affected_days, target_ids, locked_i
                 block["time"] = f"{clock(new_start)}-{clock(end)}"
                 start = new_start
             cursor = end if end is not None else start + 30
+            if isinstance(window_end, (int, float)) and cursor > window_end:
+                raise ReplanError(f"「{block['name']}」超出当天可活动时间，无法赶上后续安排。")
             if cursor > 23 * 60 + 30:
                 raise ReplanError("调整后的行程超过23:30，请选择更近的地点或减少当天活动。")
             hours = str(block.get("opening_hours") or "")
@@ -294,13 +305,13 @@ def rebuild_itinerary(plan):
         for day in days:
             rows = [b for b in plan["blocks"] if b.get("plan_style", "") == style and b["day"] == day]
             prior_day = next((d for d in previous.get("itinerary", []) if d.get("day") == day), {})
-            itinerary.append({"day": day, "date": rows[0].get("date", ""), "theme": prior_day.get("theme", ""), "hotel": next((b["name"] for b in rows if b.get("type") == "酒店"), ""), "schedule": deepcopy(rows)})
+            itinerary.append({**{key: value for key, value in prior_day.items() if key not in ("schedule", "hotel", "hotel_link", "meals")}, "day": day, "date": rows[0].get("date", ""), "theme": prior_day.get("theme", ""), "hotel": next((b["name"] for b in rows if b.get("type") == "酒店"), ""), "schedule": deepcopy(rows)})
         plans.append({**previous, "style": style, "summary": previous.get("summary") or plan.get("summaries", {}).get(style, ""), "itinerary": itinerary})
     plan["plans"] = plans
     return plan
 
 
-def replan_plan(payload, search, choose, attach_routes):
+def replan_plan(payload, search, choose, attach_routes, refresh_meals=None):
     original = deepcopy(payload["plan"])
     attach_travel_metadata(original.get("blocks") or [], search)
     blocks = original.get("blocks") or []
@@ -332,6 +343,7 @@ def replan_plan(payload, search, choose, attach_routes):
     feedback = ""
     for attempt in range(3):
         updated = deepcopy(original)
+        affected_days = {b["day"] for b in targets}
         changed_ids = set(target_ids)
         try:
             decisions = choose({"plan": original, "targets": targets, "candidates": candidate_map, "instruction": payload["instruction"], "profile": payload.get("profile"), "basic": payload.get("basic"), "feedback": feedback})
@@ -356,6 +368,12 @@ def replan_plan(payload, search, choose, attach_routes):
                         affected_days.add(block["day"])
                         if old["type"] == "酒店":
                             affected_days.add(block["day"] + 1)
+            match = re.search(r"\d+", str((payload.get("basic") or {}).get("travelers") or "1"))
+            travelers = max(1, int(match[0])) if match else 1
+            for block in updated["blocks"]:
+                if block["id"] in changed_ids:
+                    unit = amount(block.get("unit_price"))
+                    block["price"] = round(unit * (travelers if block.get("price_basis") == "per_person" else 1), 2) if unit is not None else None
             names = [b["name"] for b in updated["blocks"] if b.get("plan_style") == style and b.get("type") == "景点"]
             if len(names) != len(set(names)):
                 raise ReplanError("替换后出现重复景点。")
@@ -375,15 +393,21 @@ def replan_plan(payload, search, choose, attach_routes):
             updated["legs"] = [leg for leg in original.get("legs", []) if leg.get("plan_style") != style or leg.get("day") not in affected_days] + [leg for leg in new_legs if leg.get("day") in affected_days]
             directions = {b["id"]: travel_metadata(b, search).get("direction") for b in updated["blocks"] if b.get("type") == "交通"}
             repair_timeline(updated, blocks, style, affected_days, changed_ids, locked_ids, directions)
+            if refresh_meals:
+                refresh_meals({"blocks": [b for b in updated["blocks"] if b.get("plan_style") == style and b["day"] in affected_days]})
             old_by_id = {b["id"]: b for b in blocks}
             if any(b != old_by_id[b["id"]] for b in updated["blocks"] if b["id"] in locked_ids):
                 raise ReplanError("固定项目不能被更改。")
             costs = {}
             unknown_prices = []
+            unpriced_items = {}
             for b in updated["blocks"]:
-                if amount(b.get("price")) is None:
+                block_style = b.get("plan_style", "")
+                unknown = amount(b.get("price")) is None or b.get("price_known") is False or b.get("price_source") == "unknown"
+                if unknown:
                     unknown_prices.append(b["id"])
-                costs[b.get("plan_style", "")] = round(costs.get(b.get("plan_style", ""), 0) + (amount(b.get("price")) or 0), 2)
+                    unpriced_items.setdefault(block_style, []).append(b["name"])
+                costs[block_style] = round(costs.get(block_style, 0) + (0 if unknown else amount(b.get("price")) or 0), 2)
             budget = amount((payload.get("basic") or {}).get("total_budget"))
             if budget and costs[style] > budget:
                 raise ReplanError("替换后超出总预算，请选择更便宜的替代项。")
@@ -392,7 +416,9 @@ def replan_plan(payload, search, choose, attach_routes):
             updated["cost_by_style"] = costs
             updated["total_cost"] = costs[style]
             updated["unknown_price_block_ids"] = unknown_prices
-            updated["budget_status"] = "unknown" if unknown_prices else "ok"
+            updated["budget_by_style"] = {s: "over" if budget and cost > budget else "unknown" if unpriced_items.get(s) else "ok" for s, cost in costs.items()}
+            updated["budget_status"] = updated["budget_by_style"][style]
+            updated["unpriced_items"] = unpriced_items
             updated["revision"] = payload["revision"] + 1
             rebuild_itinerary(updated)
             changed = [b["id"] for b in updated["blocks"] if b != old_by_id[b["id"]]]
@@ -420,6 +446,7 @@ def main():
     from dotenv import load_dotenv
     from openai import OpenAI
     from route_map import attach_routes
+    from plan import _refresh_selected_meal_distances
 
     load_dotenv(Path(__file__).resolve().parent / ".env")
     try:
@@ -450,7 +477,7 @@ def main():
             choice = response.choices[0]
             return parse_selection(choice.message.content, choice.finish_reason)
 
-        output = replan_plan(data, data["search"], choose, attach_routes)
+        output = replan_plan(data, data["search"], choose, attach_routes, _refresh_selected_meal_distances)
     except Exception as exc:
         output = {"error": str(exc)}
     print(json.dumps(output, ensure_ascii=False))

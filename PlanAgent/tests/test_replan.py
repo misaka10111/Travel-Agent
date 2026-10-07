@@ -308,5 +308,56 @@ class ReplanTests(unittest.TestCase):
         self.assertEqual(result["plan"]["blocks"][2], self.original["blocks"][2])
 
 
+    def test_replacement_clears_stale_price_basis_and_counts_travelers(self):
+        self.original["blocks"][0].update(unit_price=999, price=999, price_basis="group", price_known=True, price_source="manual")
+        self.payload["basic"] = {"travelers": "2人", "total_budget": 1000}
+        result = self.run_plan()["plan"]
+        target = next(b for b in result["blocks"] if b["id"] == "a")
+        self.assertEqual(target["unit_price"], 30)
+        self.assertEqual(target["price"], 60)
+        self.assertEqual(target["price_basis"], "per_person")
+        self.assertEqual(target["price_source"], "search")
+        self.assertTrue(target["price_known"])
+        self.assertEqual(result["cost_by_style"]["推荐方案"], 120)
+
+    def test_hotel_quote_is_group_cost_even_with_multiple_travelers(self):
+        self.payload["target_block_ids"] = ["h"]
+        self.payload["basic"] = {"travelers": "3人"}
+        target = next(b for b in self.run_plan()["plan"]["blocks"] if b["id"] == "h")
+        self.assertEqual(target["price"], 50)
+        self.assertEqual(target["unit_price"], 50)
+        self.assertEqual(target["price_basis"], "group")
+
+    def test_known_zero_placeholder_does_not_hide_unknown_price(self):
+        self.original["blocks"][1].update(price=0, unit_price=None, price_known=False, price_source="unknown")
+        result = self.run_plan()["plan"]
+        self.assertEqual(result["budget_by_style"]["推荐方案"], "unknown")
+        self.assertEqual(result["unpriced_items"]["推荐方案"], ["午餐店"])
+        self.assertIn("b", result["unknown_price_block_ids"])
+
+    def test_unpriced_other_style_does_not_change_current_budget_status(self):
+        self.original["blocks"][-1].update(price=0, price_known=False)
+        result = self.run_plan()["plan"]
+        self.assertEqual(result["budget_status"], "ok")
+        self.assertEqual(result["budget_by_style"]["其他方案"], "unknown")
+        self.assertEqual(result["blocks"][-1], self.original["blocks"][-1])
+
+    def test_activity_window_rejects_replacement_before_fixed_departure(self):
+        self.original["blocks"][0]["activity_window"] = {"start_min": 9 * 60, "end_min": 10 * 60}
+        before = deepcopy(self.payload)
+        with self.assertRaisesRegex(ReplanError, "可活动时间"):
+            self.run_plan()
+        self.assertEqual(self.payload, before)
+
+    def test_meal_refresh_is_limited_to_affected_style_and_days(self):
+        calls = []
+        result = replan_plan(self.payload, self.search, self.choose, self.routes,
+                             lambda plan: calls.append(deepcopy(plan["blocks"])))
+        self.assertEqual(len(calls), 1)
+        self.assertEqual({b["day"] for b in calls[0]}, {1})
+        self.assertEqual({b["plan_style"] for b in calls[0]}, {"推荐方案"})
+        self.assertEqual(result["revision"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import ssl
 import time
@@ -44,8 +45,25 @@ BAD_FOOD_KEYWORDS = (
     "休闲场所",
     "美容美发",
     "茶艺馆",
-    "咖啡厅",
-    "星巴克咖啡",
+    "茶馆",
+    "茶室",
+    "茶饮",
+    "咖啡",
+    "饮品",
+    "奶茶",
+    "果汁",
+    "冷饮",
+    "甜品",
+    "甜点",
+    "冰淇淋",
+    "冰激凌",
+    "雪糕",
+    "糕饼",
+    "糕点",
+    "蛋糕",
+    "面包店",
+    "面包房",
+    "烘焙",
 )
 
 
@@ -144,13 +162,17 @@ def search_restaurants(
     city: str,
     keyword: str | None = None,
     limit: int = 20,
+    location: str | None = None,
+    radius: int = 3000,
 ) -> list[RestaurantInfo]:
-    """搜索城市内的餐厅 POI。
+    """搜索城市或指定坐标周边的餐厅 POI。
 
     Args:
         city: 城市名，如 "杭州"
         keyword: 可选关键词，如 "火锅"、"日料"
         limit: 返回数量上限（高德单页最多 25）
+        location: 可选中心坐标，格式为 "经度,纬度"；提供时执行周边搜索
+        radius: 周边搜索半径，单位米
 
     Returns:
         标准化餐厅列表，优先返回评分高且有价格信息的餐厅。
@@ -161,19 +183,27 @@ def search_restaurants(
     page_size = min(25, max(1, limit))
     first_error: Exception | None = None
 
-    while len(results) < limit:
+    # 过滤咖啡/茶馆或上游重复页时，避免无限翻页拖住餐点搜索。
+    max_pages = min(8, max(2, math.ceil(max(1, limit) / 25) + 2))
+    while len(results) < limit and page_num <= max_pages:
         params: dict[str, Any] = {
             "types": FOOD_TYPES,
-            "region": city,
-            "city_limit": "true",
             "page_size": page_size,
             "page_num": page_num,
             "show_fields": "business",
         }
+        if location:
+            params.update({
+                "location": location,
+                "radius": max(500, min(radius, 5000)),
+                "sortrule": "distance",
+            })
+        else:
+            params.update({"region": city, "city_limit": "true"})
         if keyword:
             params["keywords"] = keyword
         try:
-            data = _get("/v5/place/text", **params)
+            data = _get("/v5/place/around" if location else "/v5/place/text", **params)
         except Exception as exc:  # noqa: BLE001
             if first_error is None:
                 first_error = exc
@@ -184,14 +214,16 @@ def search_restaurants(
         raw_count = len(pois)
 
         for poi in pois:
-            location = poi.get("location") or ""
-            if not location or "," not in location:
+            poi_location = poi.get("location") or ""
+            if not poi_location or "," not in poi_location:
                 continue
-            lng_s, lat_s = location.split(",")
+            lng_s, lat_s = poi_location.split(",")
             try:
                 lng = float(lng_s)
                 lat = float(lat_s)
             except ValueError:
+                continue
+            if not (-180 <= lng <= 180 and -90 <= lat <= 90) or (lng == 0 and lat == 0):
                 continue
 
             name = poi.get("name") or ""
@@ -207,8 +239,17 @@ def search_restaurants(
             business = poi.get("business") or {}
             rating_raw = business.get("rating")
             cost_raw = business.get("cost")
-            rating = float(rating_raw) if rating_raw else None
+            def positive_number(value: Any) -> float | None:
+                try:
+                    number = float(value)
+                    return number if math.isfinite(number) and number > 0 else None
+                except (TypeError, ValueError):
+                    return None
+
+            rating = positive_number(rating_raw)
             price_per_person = parse_price(cost_raw)
+            if price_per_person == 0:
+                price_per_person = None  # AMap cost=0 means unavailable, not a free meal.
             business_area = business.get("business_area") or poi.get("business_area") or ""
 
             poi_id = poi.get("id") or ""
@@ -250,6 +291,10 @@ def search_restaurants(
 
 if __name__ == "__main__":
     import sys
+
+    from dotenv import load_dotenv
+
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 
     if len(sys.argv) < 2:
         print("用法: python amap_service.py <城市> [关键词]")

@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field
 
 
 class Settings(BaseSettings):
@@ -14,7 +15,7 @@ class Settings(BaseSettings):
 
     app_name: str = "TravelAgent API"
     app_version: str = "0.1.0"
-    debug: bool = False
+    debug: bool = Field(default=False, validation_alias="TRAVEL_AGENT_DEBUG")
     api_prefix: str = "/api"
     database_url: str = "sqlite:///./travelagent.db"
     cors_origins: list[str] = [
@@ -26,4 +27,3 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
-
