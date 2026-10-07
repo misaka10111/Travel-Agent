@@ -439,7 +439,7 @@ def _assign_days_by_score(
     poi_map: dict[str, list[float]] | None = None,
     radius_km: float = 10.0,
 ) -> tuple[list[dict], dict[str, int]]:
-    """热门度前二 + 匹配风格 + 其余，按匹配度排序并按 10km 聚类后分配到每天。"""
+    """热门度前 max(天数-1, 2) + 匹配风格 + 其余，按匹配度排序并按 10km 聚类后分配到每天。"""
     pois = [p for p in (search.get("poi") or []) if p.get("name")]
     if not pois:
         return [
@@ -461,7 +461,7 @@ def _assign_days_by_score(
     def is_match(p: dict) -> bool:
         return bool(travel_categories and p.get("category_label") in travel_categories)
 
-    top2 = sorted(pois, key=hot_key)[:2]
+    top_n = sorted(pois, key=hot_key)[:max(2, days - 1)]
     matching = sorted(
         [p for p in pois if is_match(p)],
         key=lambda p: -int(p.get("match_score") or 0),
@@ -477,8 +477,8 @@ def _assign_days_by_score(
             seen.add(name)
             ordered.append(p)
 
-    # 1. 热门度前二
-    for p in top2:
+    # 1. 热门度前 max(天数-1, 2)
+    for p in top_n:
         add(p)
     # 2. 每天至少 1 个匹配风格的景点（不足则尽可能多；不满足路程会在后续舍弃）
     min_matching = days
