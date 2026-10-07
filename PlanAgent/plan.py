@@ -33,6 +33,9 @@ from trip_changes import resolve_trip_changes
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 ROOT = BASE_DIR.parent
+sys.path.insert(0, str(ROOT))
+from shared.pricing import item_price, parse_price, price_sort_key
+from shared.travel import attach_travel_metadata
 SEARCH_PY = ROOT / "SearchAgent" / "search.py"
 SEARCH_PYTHON = ROOT / "SearchAgent" / ".venv" / "bin" / "python"
 
@@ -1334,14 +1337,11 @@ def _pick_restaurant(
         if district_match:
             candidates = district_match
     if budget_tier in ("豪华", "舒适", "经济"):
-        def price_score(f: dict) -> float:
-            price = f.get("price_per_person")
-            return float(price) if price is not None else 0.0
-
-        if budget_tier == "经济":
-            candidates.sort(key=lambda f: (price_score(f), f.get("rating") is None, -(f.get("rating") or 0)))
-        else:
-            candidates.sort(key=lambda f: (-price_score(f), f.get("rating") is None, -(f.get("rating") or 0)))
+        candidates.sort(key=lambda f: (
+            *price_sort_key(f.get("price_per_person"), descending=budget_tier != "经济"),
+            f.get("rating") is None,
+            -(f.get("rating") or 0),
+        ))
     elif center:
         def distance(f: dict) -> float:
             lng = f.get("longitude")
@@ -1397,7 +1397,7 @@ def _pick_restaurants(
             continue
         seen.add(name)
         rating = _positive_food_number(restaurant.get("rating"))
-        price = _positive_food_number(restaurant.get("price_per_person"))
+        price = parse_price(restaurant.get("price_per_person"))
         distance_score = math.exp(-((effective_distance / 1.5) ** 2))
         rating_score = min(rating, 5.0) / 5.0 if rating else 0.5
         # 便宜且符合总预算的近邻餐厅，不因“舒适档”被排除。
@@ -1611,7 +1611,7 @@ def _add_food_to_day(
                 options.append(
                     {
                         "name": r.get("name"),
-                        "price": _positive_food_number(r.get("price_per_person")),
+                        "price": parse_price(r.get("price_per_person")),
                         "link": r.get("poi_detail_url") or r.get("map_url") or r.get("url") or "",
                         "lng": r.get("longitude"),
                         "lat": r.get("latitude"),
@@ -1857,14 +1857,7 @@ def _pick_hotel(
     if not candidates:
         return None
     if budget_tier in ("豪华", "舒适", "经济"):
-        def price_score(h: dict) -> float:
-            price = h.get("price")
-            return float(price) if price is not None else 0.0
-
-        if budget_tier == "经济":
-            candidates.sort(key=price_score)
-        else:
-            candidates.sort(key=lambda h: -price_score(h))
+        candidates.sort(key=lambda h: price_sort_key(h.get("price"), descending=budget_tier != "经济"))
     elif center:
         def distance(h: dict) -> float:
             lng = h.get("longitude")
@@ -1955,6 +1948,7 @@ def _ensure_hotels(plan: dict, search_result: dict) -> dict:
             else:
                 _add_hotel_to_day(it, hotels, None, poi_map, used)
     plan["blocks"] = blockify(plan)
+    attach_travel_metadata(plan["blocks"], search_result)
     return plan
 
 
@@ -2703,6 +2697,7 @@ def blockify(plan: dict) -> list[dict]:
                         "link": item.get("link") or "",
                         "options": item.get("options") or [],
                         **({"activity_window": dict(it["activity_window"])} if it.get("activity_window") else {}),
+                        **{key: item[key] for key in ("dep_station", "arr_station", "dep_time", "arr_time", "flight_no", "train_no", "direction", "fixed_time", "transport_scope") if key in item},
                     }
                 )
             for meal in it.get("meals") or []:
@@ -2741,13 +2736,7 @@ def blockify(plan: dict) -> list[dict]:
 def _attach_prices(plan: dict, search_result: dict, total_budget=None, basic: dict | None = None) -> dict:
     """Estimate costs per alternative, retaining actual selected prices and traveler counts."""
     def number(value):
-        if isinstance(value, bool):
-            return None
-        try:
-            parsed = float(value.strip().lstrip("¥￥").replace(",", "")) if isinstance(value, str) else float(value)
-            return parsed if math.isfinite(parsed) and parsed >= 0 else None
-        except (TypeError, ValueError):
-            return None
+        return parse_price(value)
 
     def name_key(value):
         # 保留分馆/分店信息，只统一括号的排版；不同馆区不能共用票价。
@@ -2945,6 +2934,7 @@ def finalize_plan(plan: dict, search_result: dict | None = None, basic: dict | N
         options = block.get("options") or []
         if isinstance(selected, int) and 0 <= selected < len(options):
             block["selected_option"] = options[selected].get("name")
+    attach_travel_metadata(result.get("blocks") or [], search_result)
     _attach_prices(result, search_result, (basic or {}).get("total_budget"), basic)
     attach_routes(result, result.get("destination") or search_result.get("destination") or "")
     _align_route_times(result)
@@ -3067,6 +3057,7 @@ def main() -> None:
                 result = _attach_prices(
                     result, search_result, (basic or {}).get("total_budget"), basic
                 )
+                attach_travel_metadata(result["blocks"], search_result)
                 attach_routes(result, result.get("destination") or "")
                 _align_route_times(result, adjust=True)
                 _refresh_selected_meal_distances(result)
