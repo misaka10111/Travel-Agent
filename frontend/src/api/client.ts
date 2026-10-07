@@ -21,7 +21,15 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`请求失败 (${response.status}): ${body}`);
+    let detail = body;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      if (parsed && typeof parsed === 'object' && 'detail' in parsed) {
+        const value = (parsed as { detail: unknown }).detail;
+        if (typeof value === 'string') detail = value;
+      }
+    } catch { /* 非JSON错误保留原始文本 */ }
+    throw new Error(`请求失败 (${response.status}): ${detail}`);
   }
 
   if (response.status === 204) {
@@ -69,6 +77,27 @@ export const api = {
     search?: unknown;
   }, signal?: AbortSignal) =>
     request<Record<string, unknown>>('/plan', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      signal,
+    }),
+  replan: (payload: {
+    plan: unknown;
+    revision: number;
+    plan_style: string;
+    target_block_ids: string[];
+    instruction: string;
+    profile?: unknown;
+    basic?: unknown;
+    locked_block_ids?: string[];
+  }, signal?: AbortSignal) =>
+    request<{
+      revision: number;
+      plan: Record<string, unknown>;
+      changed_block_ids: string[];
+      affected_days: number[];
+      changes: string[];
+    }>('/plan/replan', {
       method: 'POST',
       body: JSON.stringify(payload),
       signal,
