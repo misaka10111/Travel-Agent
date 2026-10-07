@@ -12,21 +12,41 @@ BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(BASE_DIR / ".env")
 
 VALIDATE_SYSTEM_PROMPT = (
-    "你是一名严格的旅行方案审核员。审核输入中的旅行计划（plan 字段），"
-    "结合用户画像（user_profile）、长期偏好（preferences）、历史行程（recent_trips）、"
-    "基础信息（basic）、搜索数据（search）和问卷作答（answers，均可选），"
-    "检查是否存在以下问题："
-    "1) 预算：酒店/活动是否明显超出用户预算；"
-    "2) 交通：景点之间是否往返折返、单日车程过长、交通方式与用户偏好不符；"
-    "3) 用户喜好：节奏/兴趣/忌口/同行人/住宿是否不符；"
-    "4) 天气：雨天是否安排大量户外活动、是否给带伞/穿衣建议；"
-    "5) 时间：时间点是否冲突、行程过满或过松；"
-    "6) 完整性：是否缺天数/活动/酒店/餐食。"
-    "输出必须是 JSON："
-    '{"passed":true或false,"issues":[{"severity":"high或medium或low","type":"预算或交通或偏好或天气或时间或完整性","detail":"问题描述","suggestion":"修改建议"}],"feedback":"给 PlanAgent 的总体修改建议"}。'
-    "无问题则 passed=true、issues=[]；有问题则 passed=false 并列出 issues 和 feedback。"
-    "只输出 JSON，不要任何多余文字。"
+    "你是一名旅行方案审核员。根据 plan、用户明确要求 basic/answers、用户画像 user_profile、"
+    "长期偏好 preferences、历史行程 recent_trips 和来源 search，审核计划是否可以执行。"
+    "只依据输入中的证据，不凭空推断价格、营业时间、交通或用户要求。"
+    "预算以用户明确的总预算或专项硬上限为准：plan.cost_by_style 是每个独立方案的已知费用估算，"
+    "不同方案不能相加。block.price 已按 price_basis 和人数计入总费用，不得再次乘人数；"
+    "unit_price 或来源 price_per_person 才是人均费用。"
+    "meal_budget、over_meal_budget、餐饮占总预算25%、平均每天/每餐分摊等均为系统排序的软建议，"
+    "除非 basic/answers 明确规定对应餐饮上限，否则超出这种分摊不等于违反用户预算。"
+    "休闲、轻松、度假只代表节奏偏好，不能推断为必须低消费或禁止某个价位的餐厅。"
+    "price_known=false、unit_price=null、unpriced_items 中的项目是报价未知，显示price=0也不代表免费。"
+    "已知小计超过用户硬总预算才可据此认定超预算；如果已知小计低于预算但酒店/交通等报价未知，"
+    "应说明预算状态unknown、预订前核实，不得断言整体超预算，也不得断言总费用一定满足预算。"
+    "重复餐厅、价位分布或性价比可以作为low/medium优化建议，不能仅据此阻止计划通过。"
+    "交通与时间：结合真实legs的distance_m/duration_s、行程日期和前后活动核对能否赶到；"
+    "跨日交通不能当成同一天的时间冲突。休闲需求允许自由活动、休息、候车与留白，"
+    "有几小时空档本身不是冲突，也不应为了填满而增加活动。"
+    "景点关闭、预约不可用、活动重叠或无法赶上已选返程班次等有证据的执行冲突属于high；"
+    "仅营业信息不明、夜市最佳游览时段、缺少穿衣建议等通常是待核实或优化建议。"
+    "同时检查用户明确的必去地点、忌口、同行人需求、完整天数、必要交通和住宿，"
+    "天气仅依据search已有天气证据，不把预报缺失等同恶劣天气。"
+    "severity=high仅用于有证据、影响实际执行或违反用户明确硬约束的严重问题；"
+    "medium/low用于不会使计划无法执行的风险提示与改进。actionable=true表示PlanAgent可以通过"
+    "调整已有行程或已有真实候选修复；仅等待第三方报价/核实信息时actionable=false。"
+    "passed=false用于存在影响执行的high问题；没有这种严重问题时passed=true，"
+    "仍保留真实的medium/low建议和未知报价说明，不要求issues为空。"
+    "输出JSON："
+    '{"passed":true或false,"issues":[{"severity":"high或medium或low","type":"预算或交通或偏好或天气或时间或完整性",'
+    '"detail":"有证据的问题描述","suggestion":"具体修正或核实建议","actionable":true或false}],'
+    '"feedback":"给PlanAgent的总体修改建议；没有严重问题时说明优化建议不影响执行"}。'
+    "只有真的无问题时issues=[]。只输出JSON，不要额外文字。"
 )
+
+
+def _failed_audit(error: str, feedback: str) -> dict:
+    return {"passed": False, "issues": [], "feedback": feedback, "error": error}
 
 
 def validate_plan(
@@ -41,7 +61,10 @@ def validate_plan(
     kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
     if os.getenv("OPENAI_BASE_URL"):
         kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
-    client = OpenAI(**kwargs)
+    try:
+        client = OpenAI(**kwargs, max_retries=0)
+    except Exception:
+        return _failed_audit("审核服务不可用", "审核初始化失败，请检查模型配置后重试")
 
     context: dict = {"plan": plan}
     if profile:
@@ -58,18 +81,24 @@ def validate_plan(
         context["answers"] = answers
 
     for _ in range(2):
-        resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
-            messages=[
-                {"role": "system", "content": VALIDATE_SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-            ],
-            response_format={"type": "json_object"},
-            reasoning_effort="low",
-            max_tokens=12000,
-            timeout=120,
-        )
-        content = (resp.choices[0].message.content or "{}").strip()
+        try:
+            resp = client.chat.completions.create(
+                model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
+                messages=[
+                    {"role": "system", "content": VALIDATE_SYSTEM_PROMPT},
+                    {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                ],
+                response_format={"type": "json_object"},
+                **({"extra_body": {"enable_thinking": False}} if os.getenv("OPENAI_MODEL", "qwen3.8-27b").lower().startswith("qwen") else {}),
+                max_tokens=2400,
+                timeout=45,
+            )
+        except Exception:
+            return _failed_audit("审核服务不可用", "审核调用失败，请稍后重试")
+        try:
+            content = (resp.choices[0].message.content or "{}").strip()
+        except (AttributeError, IndexError, TypeError):
+            continue
         if content.startswith("```"):
             content = content.strip("`")
             if content.startswith("json"):
@@ -78,10 +107,10 @@ def validate_plan(
             result = json.loads(content)
         except json.JSONDecodeError:
             result = {}
-        if isinstance(result.get("passed"), bool):
+        if (isinstance(result, dict) and isinstance(result.get("passed"), bool)
+                and isinstance(result.get("issues", []), list) and not result.get("error")):
             return result
-    # 兜底：重试仍无有效结果时默认通过，避免编排卡死
-    return {"passed": True, "issues": [], "feedback": "（审核重试失败，默认通过）"}
+    return _failed_audit("审核结果不可用", "审核未返回有效结论")
 
 
 def main() -> None:
@@ -109,8 +138,8 @@ def main() -> None:
             data.get("basic"),
             data.get("answers"),
         )
-    except Exception as exc:  # noqa: BLE001
-        result = {"error": str(exc)}
+    except Exception:  # noqa: BLE001
+        result = _failed_audit("审核失败", "审核未能完成，请稍后重试")
 
     print(json.dumps(result, ensure_ascii=False, indent=2))
 

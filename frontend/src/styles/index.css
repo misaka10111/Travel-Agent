@@ -2267,6 +2267,146 @@ button:disabled {
   color: #697386;
 }
 
+.ta-plan-block-link {
+  display: inline-block;
+  color: #4356e8;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.ta-plan-block-link:hover {
+  text-decoration: underline;
+}
+
+.ta-plan-block-price {
+  display: inline-block;
+  margin-top: 3px;
+  color: #d97706;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.ta-plan-block-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.ta-food-option-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.ta-food-option {
+  padding: 5px 8px;
+  border: 1px solid #e5e9f2;
+  border-radius: 999px;
+  background: #fff;
+  color: #59657a;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ta-food-option-link {
+  color: #4356e8;
+  font-size: 11px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.ta-food-option-link:hover {
+  text-decoration: underline;
+}
+
+.ta-food-option.active {
+  border-color: #4f6df5;
+  background: #eef2ff;
+  color: #4356e8;
+}
+
+.ta-trip-question {
+  padding: 0;
+  margin: 12px 0;
+  border: 0;
+  min-width: 0;
+}
+
+.ta-trip-question legend {
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 7px;
+}
+
+.ta-trip-question input,
+.ta-clarify-row select {
+  width: 100%;
+  border: 1px solid #dce3f0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: inherit;
+  margin-top: 6px;
+  background: #fff;
+}
+
+.ta-question-hint {
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ta-plan-select-button {
+  border: 1px solid #cdd5f5;
+  border-radius: 8px;
+  background: white;
+  color: #4555cf;
+  padding: 5px 7px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.ta-plan-select-button[aria-pressed="true"] { background: #4d63ee; color: white; }
+.ta-plan-select-button:disabled { opacity: .55; cursor: default; }
+.ta-selection-hint {
+  grid-column: 1 / -1;
+  flex: 0 0 100%;
+  color: #4356e8;
+  font-size: 12px;
+  padding-bottom: 8px;
+}
+
+.ta-trip-questions {
+  max-height: 48vh;
+  overflow-y: auto;
+}
+
+.ta-selection-hint button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+  margin-left: 8px;
+}
+
+.ta-plan-detail-total {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+  color: #25314b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.ta-plan-budget-warning {
+  flex: 0 0 auto;
+  margin-bottom: 8px;
+  color: #c2410c;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 .ta-plan-timeline {
   flex: 1;
   min-height: 0;

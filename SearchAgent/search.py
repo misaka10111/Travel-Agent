@@ -5,6 +5,8 @@
 
 用法（自然语言输入，会先用 LLM 解析成 JSON）：
   python search.py "宁波 10月1日到10月5日"
+
+餐厅第二阶段：以 JSON 输入已排定的餐点景点锚点，运行 search.py --food-nearby。
 """
 
 import json
@@ -40,18 +42,20 @@ PARSE_SYSTEM_PROMPT = (
 
 def parse_nl(query: str) -> dict:
     """用 LLM 把自然语言解析成结构化 JSON。"""
+    if not (query or "").strip():
+        raise ValueError("查询内容为空")
     kwargs: dict = {"api_key": os.getenv("OPENAI_API_KEY")}
     if os.getenv("OPENAI_BASE_URL"):
         kwargs["base_url"] = os.getenv("OPENAI_BASE_URL")
     client = OpenAI(**kwargs)
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+        model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
         messages=[
             {"role": "system", "content": PARSE_SYSTEM_PROMPT},
             {"role": "user", "content": query},
         ],
         response_format={"type": "json_object"},
-        reasoning_effort="low",
+        extra_body={"enable_thinking": False},  # qwen3.8-max 思考模式下偶发漏字段，解析任务无需思考
         timeout=60,
     )
     content = (resp.choices[0].message.content or "{}").strip()
@@ -95,6 +99,15 @@ def parse_nl(query: str) -> dict:
 
 
 def main() -> None:
+    if "--food-nearby" in sys.argv:
+        try:
+            payload = json.loads(sys.stdin.read() or "{}")
+            result = tools.run_food_search(payload)
+        except Exception as exc:  # noqa: BLE001
+            result = {"error": str(exc), "food_by_anchor": []}
+        print(json.dumps(result, ensure_ascii=False))
+        return
+
     if "--web" in sys.argv:
         idx = sys.argv.index("--web")
         query = " ".join(sys.argv[idx + 1:]).strip()

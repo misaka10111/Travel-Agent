@@ -9,6 +9,7 @@
 
 import json
 import hashlib
+import math
 import os
 import re
 import ssl
@@ -35,7 +36,8 @@ load_dotenv(BASE_DIR / ".env")
 
 CACHE_DIR = BASE_DIR / "cache"
 CACHE_TTL = 3600  # 缓存有效期（秒），1 小时
-SEARCH_VERSION = "hotel30-v8"  # 搜索逻辑版本，变更后自动让旧缓存失效
+SEARCH_VERSION = "hotel30-v10-parallel-profile-food"  # 搜索逻辑版本，变更后自动让旧缓存失效
+FLYAI_TIMEOUT = 30  # 单个来源超时后继续使用其他候选，避免整条规划等待数分钟
 
 server = FastMCP(
     "search-tools",
@@ -143,7 +145,7 @@ def _http_get_json(url: str) -> dict:
 
 def _run_flyai(args: list[str]) -> dict:
     cmd = [str(FLYAI_BIN), *args]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=FLYAI_TIMEOUT)
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
         raise RuntimeError(f"flyai 调用失败：{detail}")
@@ -322,9 +324,9 @@ def _fetch_hotels(
         {"sort": "price_asc", "hotel_stars": "3"},
         {"sort": "no_rank", "key_words": "如家 汉庭 全季 亚朵 维也纳"},
     ]
-    for params in rounds:
+    def fetch_round(params: dict) -> list[dict]:
         try:
-            items = _fetch_hotels_once(
+            return _fetch_hotels_once(
                 destination,
                 check_in_date,
                 check_out_date,
@@ -335,7 +337,12 @@ def _fetch_hotels(
                 params.get("sort") or sort,
             )
         except Exception:
-            items = []
+            return []
+
+    # 各排序互不依赖；并行取回后按原排序顺序合并，仍优先高评分酒店。
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        batches = list(executor.map(fetch_round, rounds))
+    for items in batches:
         for item in items:
             name = item.get("name") or ""
             if not name or name in seen:
@@ -454,15 +461,30 @@ def _fetch_round_trip(
     end: str,
 ) -> list[dict]:
     """查去程（origin→destination，start 出发）+ 回程（反向，end 出发），每条带 direction。"""
-    outbound = fetcher(origin, destination, start, journey_type="1")
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        outbound_future = executor.submit(fetcher, origin, destination, start, journey_type="1")
+        inbound_future = executor.submit(fetcher, destination, origin, end, journey_type="1")
+        # 一个方向不可用不应该丢掉另一方向已找到的车次/航班。
+        try:
+            outbound = outbound_future.result()
+        except Exception:
+            outbound = []
+        try:
+            inbound = inbound_future.result()
+        except Exception:
+            inbound = []
     for x in outbound:
         x["direction"] = "去"
-    inbound = []
-    if end != start:
-        inbound = fetcher(destination, origin, end, journey_type="1")
-        for x in inbound:
-            x["direction"] = "回"
+    for x in inbound:
+        x["direction"] = "回"
     return outbound + inbound
+
+
+def _feature_model_options() -> dict:
+    """特征摘要不需要长思考；失败立即用来源文本，交给规划模型继续。"""
+    if "qwen" in os.getenv("OPENAI_MODEL", "").lower():
+        return {"extra_body": {"enable_thinking": False}}
+    return {}
 
 
 def _extract_poi_features(pois: list[dict]) -> list[dict]:
@@ -473,6 +495,7 @@ def _extract_poi_features(pois: list[dict]) -> list[dict]:
         client = OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
+            max_retries=0,
         )
         brief = [
             {
@@ -483,14 +506,15 @@ def _extract_poi_features(pois: list[dict]) -> list[dict]:
             for p in pois
         ]
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
             messages=[
                 {"role": "system", "content": POI_FEATURE_PROMPT},
                 {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            max_tokens=12000,
-            timeout=60,
+            max_tokens=3500,
+            timeout=20,
+            **_feature_model_options(),
         )
         content = (resp.choices[0].message.content or "{}").strip()
         if content.startswith("```"):
@@ -521,6 +545,7 @@ def _extract_item_features(items: list[dict], prompt: str) -> list[dict]:
         client = OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
+            max_retries=0,
         )
         brief = [
             {
@@ -530,14 +555,15 @@ def _extract_item_features(items: list[dict], prompt: str) -> list[dict]:
             for x in items
         ]
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
             messages=[
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps(brief, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            max_tokens=6000,
-            timeout=60,
+            max_tokens=2000,
+            timeout=20,
+            **_feature_model_options(),
         )
         content = (resp.choices[0].message.content or "{}").strip()
         if content.startswith("```"):
@@ -693,63 +719,38 @@ def _fetch_poi_distributed(
     target: int = 50,
     extra_keywords: list[str] | None = None,
 ) -> list[dict]:
-    """按 4 个主题分散搜索景点，合并去重后均匀取 target 条。"""
+    """按主题并行搜索景点，按稳定顺序去重后均匀取 target 条。"""
     by_category: dict[str, list[dict]] = {}
     seen: set[str] = set()
+    queries: list[tuple[str, dict, int | None]] = []
     for theme, categories in POI_THEMES.items():
         for category in categories:
-            try:
-                items = _search_poi_items(city_name, category=category)
-            except Exception:
-                items = []
-            for item in items:
-                name = (item.get("name") or "").strip()
-                if not name or name in seen:
-                    continue
-                seen.add(name)
-                item["query_category"] = theme
-                by_category.setdefault(theme, []).append(item)
-
-    # 补上飞猪默认热门榜（西湖、雷峰塔、灵隐寺这类经典景点）
-    try:
-        default_items = _search_poi_items(city_name)
-    except Exception:
-        default_items = []
-    for item in default_items:
-        name = (item.get("name") or "").strip()
-        if not name or name in seen:
-            continue
-        seen.add(name)
-        item["query_category"] = "经典必去"
-        by_category.setdefault("经典必去", []).append(item)
-
-    # 再用关键词补搜地标/必去，避免漏掉西湖这类超经典景点
+            queries.append((theme, {"category": category}, None))
+    # 默认热门榜和明确偏好都保留；不让某个慢分类串行拖住其他分类。
+    queries.append(("经典必去", {}, None))
     for keyword in ("必去", "地标"):
-        try:
-            extra_items = _search_poi_items(city_name, keyword=keyword)
-        except Exception:
-            extra_items = []
-        for item in extra_items:
-            name = (item.get("name") or "").strip()
-            if not name or name in seen:
-                continue
-            seen.add(name)
-            item["query_category"] = "经典必去"
-            by_category.setdefault("经典必去", []).append(item)
+        queries.append(("经典必去", {"keyword": keyword}, None))
+    for keyword in dict.fromkeys(extra_keywords or []):
+        queries.append(("用户偏好", {"keyword": keyword}, 10))
 
-    # 根据用户画像关键词，各多检索 10 条
-    for keyword in extra_keywords or []:
+    def fetch_query(query: tuple[str, dict, int | None]) -> list[dict]:
+        _, params, limit = query
         try:
-            extra_items = _search_poi_items(city_name, keyword=keyword)
+            items = _search_poi_items(city_name, **params)
+            return items[:limit] if limit is not None else items
         except Exception:
-            extra_items = []
-        for item in extra_items[:10]:
+            return []
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        batches = list(executor.map(fetch_query, queries))
+    for (theme, _, _), items in zip(queries, batches):
+        for item in items:
             name = (item.get("name") or "").strip()
             if not name or name in seen:
                 continue
             seen.add(name)
-            item["query_category"] = "用户偏好"
-            by_category.setdefault("用户偏好", []).append(item)
+            item["query_category"] = theme
+            by_category.setdefault(theme, []).append(item)
 
     themes = [
         t for t in list(POI_THEMES) + ["经典必去", "用户偏好"]
@@ -826,6 +827,7 @@ def _fetch_web_search(
         query=query,
         max_results=max_results,
         search_depth=search_depth,
+        timeout=20,
     )
     return [
         {
@@ -846,20 +848,22 @@ def _extract_events(items: list[dict]) -> list[dict]:
         client = OpenAI(
             api_key=os.getenv("OPENAI_API_KEY"),
             base_url=os.getenv("OPENAI_BASE_URL"),
+            max_retries=0,
         )
         brief = [
             {"title": x.get("title") or "", "url": x.get("url") or "", "content": (x.get("content") or "")[:300]}
             for x in items
         ]
         resp = client.chat.completions.create(
-            model=os.getenv("OPENAI_MODEL", "deepseek-flash"),
+            model=os.getenv("OPENAI_MODEL", "qwen3.8-27b"),
             messages=[
                 {"role": "system", "content": EVENT_EXTRACT_PROMPT},
                 {"role": "user", "content": json.dumps({"results": brief}, ensure_ascii=False)},
             ],
             response_format={"type": "json_object"},
-            max_tokens=6000,
-            timeout=60,
+            max_tokens=1800,
+            timeout=20,
+            **_feature_model_options(),
         )
         content = (resp.choices[0].message.content or "{}").strip()
         if content.startswith("```"):
@@ -918,6 +922,9 @@ def _fetch_food(
     keyword: str | None = None,
     max_price: float | None = None,
     max_results: int = 50,
+    location: str | None = None,
+    radius: int = 1500,
+    allow_web_fallback: bool = True,
 ) -> list[dict]:
     """用高德地图 POI 搜索当地餐厅，返回结构化数据。
 
@@ -932,11 +939,13 @@ def _fetch_food(
             destination,
             keyword=keyword,
             limit=max_results,
+            location=location,
+            radius=radius,
         )
         if restaurants:
             items = [r.to_dict() for r in restaurants]
             # 按人均预算过滤（如果有）
-            if max_price is not None and max_price > 0:
+            if not location and max_price is not None and max_price > 0:
                 items = [
                     it for it in items
                     if it.get("price_per_person") is None or it["price_per_person"] <= max_price
@@ -948,6 +957,10 @@ def _fetch_food(
         raise RuntimeError("高德返回 0 条餐厅结果")
     except Exception as exc:  # noqa: BLE001
         amap_error = str(exc)
+        # 网页结果没有可信的坐标，不能作为周边餐厅塞进地图路线。
+        if location or not allow_web_fallback:
+            print(f"[food] 周边餐厅暂不可用：{type(exc).__name__}", file=sys.stderr)
+            return []
         print(f"[food] 高德搜索失败，回退 Tavily：{amap_error}", file=sys.stderr)
 
     # 2. 回退：Tavily 网页搜索
@@ -959,6 +972,78 @@ def _fetch_food(
     for it in items:
         it["_source"] = "tavily"
     return items
+
+
+def run_food_search(input_data: dict) -> dict:
+    """第二阶段：按已规划的午/晚餐位置查询，缺少有效锚点时不搜全城。
+
+    输入 anchors 每项含 day/meal/time/anchor_name/longitude/latitude。
+    每个锚点先找 1.5km 内餐厅，候选不足 6 家时扩大到 3km、最多 5km。
+    预算透传作排序参考，不在搜索阶段硬筛掉更近的餐厅。
+    """
+    destination = str(input_data.get("destination") or "").strip()
+    if not destination:
+        raise ValueError("缺少 destination")
+    basic = input_data.get("basic") or {}
+    keyword = str(input_data.get("food_keyword") or basic.get("food_keyword") or "").strip() or None
+    anchors = input_data.get("anchors") or []
+    if not isinstance(anchors, list):
+        raise ValueError("anchors 必须是数组")
+    budget = _estimate_food_budget(basic)
+    valid_anchors: list[tuple[dict, str]] = []
+    for anchor in anchors:
+        if not isinstance(anchor, dict):
+            continue
+        try:
+            lng, lat = float(anchor["longitude"]), float(anchor["latitude"])
+            if not (-180 <= lng <= 180 and -90 <= lat <= 90) or (lng == 0 and lat == 0):
+                continue
+        except (KeyError, ValueError, TypeError):
+            continue
+        location = f"{round(lng, 6)},{round(lat, 6)}"
+        valid_anchors.append((anchor, location))
+
+    def fetch_location(location: str) -> list[dict]:
+        # 正餐分类规则升级后不能复用含奶茶/糕饼店的旧餐饮缓存。
+        cache_key = _cache_key(destination, "food-nearby-v2-meals", location, keyword or "")
+        cached = _read_cache(cache_key)
+        if cached is not None and isinstance(cached.get("restaurants"), list):
+            return cached["restaurants"]
+        restaurants: list[dict] = []
+        seen: set[str] = set()
+        def add_items(items: list[dict]) -> None:
+            for item in items:
+                identity = str(item.get("poi_id") or f"{item.get('name')}|{item.get('longitude')}|{item.get('latitude')}")
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                restaurants.append(item)
+
+        for radius in (1500, 3000, 5000):
+            items = _fetch_food(
+                destination, keyword, budget, max_results=25,
+                location=location, radius=radius, allow_web_fallback=False,
+            )
+            add_items(items)
+            # 高德 keywords 主要匹配名称，“杭帮菜”等偏好可能漏掉本地餐厅。
+            # 先补充同一锚点1.5km内的真实餐饮，再考虑把路线扩展到更远处。
+            if radius == 1500 and keyword and len(restaurants) < 6:
+                add_items(_fetch_food(
+                    destination, None, budget, max_results=25,
+                    location=location, radius=1500, allow_web_fallback=False,
+                ))
+            if len(restaurants) >= 6:
+                break
+        if restaurants:
+            _write_cache(cache_key, {"restaurants": restaurants})
+        return restaurants
+
+    locations = list(dict.fromkeys(location for _, location in valid_anchors))
+    # 两套方案常共享同一景点锚点；只查一次，再按输入顺序返还每个餐点。
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        found = dict(zip(locations, executor.map(fetch_location, locations)))
+    result = [{**anchor, "restaurants": found[location]} for anchor, location in valid_anchors]
+    return {"destination": destination, "food_by_anchor": result}
 
 
 def _fetch_social_food(destination: str, max_results: int = 20) -> list[dict]:
@@ -1246,7 +1331,7 @@ def search_events(destination: str, start_date: str, end_date: str, max_results:
 
 @server.tool(description="搜索目的地餐厅（高德地图），返回名称、菜系、评分、人均、地址、商圈和地图/详情链接。destination 必填。")
 def search_food(destination: str, max_results: int = 10) -> str:
-    return _format_food(_fetch_food(destination, max_results), destination)
+    return _format_food(_fetch_food(destination, max_results=max_results), destination)
 
 
 # ================= 确定性综合编排（JSON in / JSON out） =================
@@ -1288,11 +1373,10 @@ def _write_cache(key: str, result: dict) -> None:
 
 def run_search(input_data: dict) -> dict:
     """输入 {destination, start_date, end_date?, origin?, basic?, food_keyword?}，
-    并行调用 6~8 个工具，返回结构化 JSON。
+    并行搜索天气、酒店、景点、活动和交通，返回结构化 JSON。
 
     basic 可含 total_budget（总预算）、travelers（出行人数）、purposes（旅行目的），
-    用于推算餐饮搜索的人均预算上限。
-    food_keyword 为用户明确提到的菜系/关键词（如 "川菜"、"火锅"），会透传给高德搜索。
+    餐厅在景点行程确定后通过 run_food_search 查询；此阶段不做全城推荐。
     """
     destination = (input_data.get("destination") or "").strip()
     if not destination:
@@ -1305,14 +1389,24 @@ def run_search(input_data: dict) -> dict:
     origin = (input_data.get("origin") or "").strip()
 
     # 从 basic 中提取餐饮搜索参数
-    basic = input_data.get("basic") or {}
-    food_keyword = (input_data.get("food_keyword") or "").strip() or None
+    basic = {**(input_data.get("basic") or {}), "start_date": start, "end_date": end}
+    food_keyword = str(input_data.get("food_keyword") or basic.get("food_keyword") or "").strip() or None
     max_price = _estimate_food_budget(basic)
+    profile_keywords = _profile_keywords(input_data.get("profile"))
+    purposes = basic.get("purposes") or []
+    if isinstance(purposes, str):
+        purposes = [purposes]
+    profile_keywords.extend(_profile_keywords({"travel_style": purposes}))
+    requested_pois = basic.get("requested_pois") or []
+    if isinstance(requested_pois, str):
+        requested_pois = [requested_pois]
+    profile_keywords.extend(str(name).strip() for name in requested_pois if str(name).strip())
+    profile_keywords = list(dict.fromkeys(profile_keywords))
 
-    # 缓存：把餐饮搜索参数纳入 key，不同菜系/预算不串缓存
+    # 缓存同时隔离画像和必去景点，不将前一位用户的候选复用给另一位。
     cache_key = _cache_key(
         destination, start, end, origin,
-        extra=f"{food_keyword or ''}|{max_price or ''}",
+        extra=json.dumps({"food": food_keyword, "budget": max_price, "poi_keywords": sorted(profile_keywords)}, ensure_ascii=False, sort_keys=True),
     )
     cached = _read_cache(cache_key)
     if cached is not None:
@@ -1323,26 +1417,23 @@ def run_search(input_data: dict) -> dict:
         "start_date": start,
         "end_date": end,
     }
+    if food_keyword:
+        result["food_keyword"] = food_keyword
     if origin:
         result["origin"] = origin
 
     tasks = {
         "weather": lambda: _fetch_weather(destination, start, end),
-        "hotels": lambda: _fetch_hotels(destination, start, end),
+        "hotels": lambda: _fetch_hotels(destination, start, end) if start != end else [],
         "poi": lambda: _fetch_poi_distributed(
             destination,
             target=50,
-            extra_keywords=_profile_keywords(input_data.get("profile")),
+            extra_keywords=profile_keywords,
         ),
         "events": lambda: _fetch_events(destination, start, end),
-        "food": lambda: _fetch_food(
-            destination,
-            keyword=food_keyword,
-            max_price=max_price,
-        ),
         "social_food": lambda: _fetch_social_food(destination),
     }
-    if origin:
+    if origin and origin != destination:
         tasks["flights"] = lambda: _fetch_round_trip(_fetch_flights, origin, destination, start, end)
         tasks["trains"] = lambda: _fetch_round_trip(_fetch_trains, origin, destination, start, end)
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
@@ -1351,16 +1442,16 @@ def run_search(input_data: dict) -> dict:
             result_key, value = future.result()
             result[result_key] = value
 
+    # 景点日程确定后，由 PlanAgent 用实际餐点位置调用 --food-nearby。
+    result["food"] = []
+    result["food_search_pending"] = True
+
     _write_cache(cache_key, result)
     return result
 
 
 def _estimate_food_budget(basic: dict) -> float | None:
-    """根据总预算和出行人数估算人均餐饮预算上限。
-
-    简单策略：总预算 ÷ 人数 ÷ 行程天数 ÷ 3（三餐），取整；
-    拿不到时返回 None（不过滤）。
-    """
+    """按实际人数、天数，将总预算的 25% 分摊到每人每天 3 餐。"""
     total_budget = basic.get("total_budget")
     if not total_budget:
         return None
@@ -1368,7 +1459,7 @@ def _estimate_food_budget(basic: dict) -> float | None:
         total = float(total_budget)
     except (TypeError, ValueError):
         return None
-    if total <= 0:
+    if not math.isfinite(total) or total <= 0:
         return None
 
     travelers = 1
@@ -1377,12 +1468,20 @@ def _estimate_food_budget(basic: dict) -> float | None:
     if m:
         travelers = max(1, int(m.group(1)))
 
-    # 经验值：餐饮占总预算约 25%，人均每餐上限 = 总预算×0.25 ÷ 人数 ÷ 6（按2天×3餐估算）
-    per_meal = total * 0.25 / travelers / 6
+    try:
+        days = max(1, int(basic.get("days") or basic.get("duration_days") or 0))
+    except (TypeError, ValueError):
+        days = 1
+    if basic.get("start_date") and basic.get("end_date"):
+        try:
+            days = max(1, (date.fromisoformat(basic["end_date"]) - date.fromisoformat(basic["start_date"])).days + 1)
+        except (ValueError, TypeError):
+            pass
+    per_meal = total * 0.25 / travelers / (days * 3)
     return round(per_meal, 0)
 
 
-@server.tool(description="综合搜索某目的地（天气+酒店+景点+餐厅+促销+活动），返回结构化 JSON。")
+@server.tool(description="综合搜索目的地天气、酒店、景点、活动和交通；餐厅在行程确定后按景点周边搜索。")
 def search_trip(destination: str, start_date: str, end_date: str | None = None) -> str:
     return json.dumps(
         run_search({"destination": destination, "start_date": start_date, "end_date": end_date}),
